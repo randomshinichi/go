@@ -1264,13 +1264,17 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		// only generate a loop if there is more
 		// than 1 iteration.
 		if ctr > 1 {
-			// Set up VS32 (V0) to hold 0s
-			p := s.Prog(ppc64.AXXLXOR)
+			// Set up V0 to hold 0s. Use VMX vxor rather than VSX xxlxor:
+			// the 970/POWER-VSX-free path. V0 aliases VS32's low 128 bits
+			// (see obj/ppc64 register tables: VS32..VS63 overlap V0..V31),
+			// and the STVX below stores exactly those 16 bytes, so the
+			// zeroed memory is byte-identical to the VSX version.
+			p := s.Prog(ppc64.AVXOR)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = ppc64.REG_V0
 			p.To.Type = obj.TYPE_REG
-			p.To.Reg = ppc64.REG_VS32
-			p.Reg = ppc64.REG_VS32
+			p.To.Reg = ppc64.REG_V0
+			p.Reg = ppc64.REG_V0
 
 			// Set up CTR loop counter
 			p = s.Prog(ppc64.AMOVD)
@@ -1300,14 +1304,16 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 				p.From.Offset = 16
 			}
 
-			// generate 2 STXVD2Xs to store 16 bytes
+			// generate 2 STVXs to store 16 bytes (VMX, ISA 2.03; avoids
+			// the VSX STXVD2X that is illegal on the PPC970). Same 16-byte
+			// width, same base+index operand layout, value is all zeros.
 			// when this is a loop then the top must be saved
 			var top *obj.Prog
 			// This is the top of loop
 
-			p = s.Prog(ppc64.ASTXVD2X)
+			p = s.Prog(ppc64.ASTVX)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = ppc64.REG_V0
 			p.To.Type = obj.TYPE_MEM
 			p.To.Reg = v.Args[0].Reg()
 			p.To.Index = ppc64.REGZERO
@@ -1315,9 +1321,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 			if top == nil {
 				top = p
 			}
-			p = s.Prog(ppc64.ASTXVD2X)
+			p = s.Prog(ppc64.ASTVX)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = ppc64.REG_V0
 			p.To.Type = obj.TYPE_MEM
 			p.To.Reg = v.Args[0].Reg()
 			p.To.Index = ppc64.REGTMP
@@ -1461,24 +1467,28 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 			}
 
 			// Generate 16 byte loads and stores.
+			// Use VMX LVX (ISA 2.03) instead of VSX LXVD2X so the PPC970
+			// can execute large copies. V0/V1 alias VS32/VS33's low 128
+			// bits and each value is loaded then stored through the same
+			// register, so the moved bytes are identical.
 			// Use temp register for index (16)
 			// on the second one.
 
-			p = s.Prog(ppc64.ALXVD2X)
+			p = s.Prog(ppc64.ALVX)
 			p.From.Type = obj.TYPE_MEM
 			p.From.Reg = srcReg
 			p.From.Index = ppc64.REGZERO
 			p.To.Type = obj.TYPE_REG
-			p.To.Reg = ppc64.REG_VS32
+			p.To.Reg = ppc64.REG_V0
 			if top == nil {
 				top = p
 			}
-			p = s.Prog(ppc64.ALXVD2X)
+			p = s.Prog(ppc64.ALVX)
 			p.From.Type = obj.TYPE_MEM
 			p.From.Reg = srcReg
 			p.From.Index = ppc64.REGTMP
 			p.To.Type = obj.TYPE_REG
-			p.To.Reg = ppc64.REG_VS33
+			p.To.Reg = ppc64.REG_V1
 
 			// increment the src reg for next iteration
 			p = s.Prog(ppc64.AADD)
@@ -1489,16 +1499,16 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 			p.To.Reg = srcReg
 
 			// generate 16 byte stores
-			p = s.Prog(ppc64.ASTXVD2X)
+			p = s.Prog(ppc64.ASTVX)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = ppc64.REG_V0
 			p.To.Type = obj.TYPE_MEM
 			p.To.Reg = dstReg
 			p.To.Index = ppc64.REGZERO
 
-			p = s.Prog(ppc64.ASTXVD2X)
+			p = s.Prog(ppc64.ASTVX)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS33
+			p.From.Reg = ppc64.REG_V1
 			p.To.Type = obj.TYPE_MEM
 			p.To.Reg = dstReg
 			p.To.Index = ppc64.REGTMP
@@ -1532,19 +1542,22 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 
 		if rem >= 16 {
-			// Generate 16 byte loads and stores.
+			// Generate 16 byte loads and stores (VMX LVX/STVX, ISA 2.03)
+			// instead of VSX LXVD2X/STXVD2X so the PPC970 can execute the
+			// move; V0 aliases VS32's low 128 bits and the value round-trips
+			// through the same register, so the moved bytes are identical.
 			// Use temp register for index (value 16)
 			// on the second one.
-			p := s.Prog(ppc64.ALXVD2X)
+			p := s.Prog(ppc64.ALVX)
 			p.From.Type = obj.TYPE_MEM
 			p.From.Reg = srcReg
 			p.From.Index = ppc64.REGZERO
 			p.To.Type = obj.TYPE_REG
-			p.To.Reg = ppc64.REG_VS32
+			p.To.Reg = ppc64.REG_V0
 
-			p = s.Prog(ppc64.ASTXVD2X)
+			p = s.Prog(ppc64.ASTVX)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = ppc64.REG_V0
 			p.To.Type = obj.TYPE_MEM
 			p.To.Reg = dstReg
 			p.To.Index = ppc64.REGZERO
@@ -1560,16 +1573,16 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 				p.To.Type = obj.TYPE_REG
 				p.To.Reg = ppc64.REGTMP
 
-				p = s.Prog(ppc64.ALXVD2X)
+				p = s.Prog(ppc64.ALVX)
 				p.From.Type = obj.TYPE_MEM
 				p.From.Reg = srcReg
 				p.From.Index = ppc64.REGTMP
 				p.To.Type = obj.TYPE_REG
-				p.To.Reg = ppc64.REG_VS32
+				p.To.Reg = ppc64.REG_V0
 
-				p = s.Prog(ppc64.ASTXVD2X)
+				p = s.Prog(ppc64.ASTVX)
 				p.From.Type = obj.TYPE_REG
-				p.From.Reg = ppc64.REG_VS32
+				p.From.Reg = ppc64.REG_V0
 				p.To.Type = obj.TYPE_MEM
 				p.To.Reg = dstReg
 				p.To.Index = ppc64.REGTMP
