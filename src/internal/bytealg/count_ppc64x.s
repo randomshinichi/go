@@ -7,6 +7,46 @@
 #include "go_asm.h"
 #include "textflag.h"
 
+#ifndef GOPPC64_vsx
+	// Conservative GPR-only path unless VSX is explicitly enabled.
+TEXT ·Count<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-40
+	MOVD	R3, R7
+	MOVD	R4, R8
+	MOVBZ	R6, R9
+	MOVD	$0, R3
+count_ppc970_loop:
+	CMP	R8, $0
+	BEQ	count_ppc970_done
+	MOVBZ	0(R7), R10
+	CMPU	R10, R9
+	BNE	count_ppc970_skip
+	ADD	$1, R3
+count_ppc970_skip:
+	ADD	$1, R7
+	ADD	$-1, R8
+	BR	count_ppc970_loop
+count_ppc970_done:
+	RET
+
+TEXT ·CountString<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-32
+	MOVD	R3, R7
+	MOVD	R4, R8
+	MOVBZ	R5, R9
+	MOVD	$0, R3
+countstring_ppc970_loop:
+	CMP	R8, $0
+	BEQ	countstring_ppc970_done
+	MOVBZ	0(R7), R10
+	CMPU	R10, R9
+	BNE	countstring_ppc970_skip
+	ADD	$1, R3
+countstring_ppc970_skip:
+	ADD	$1, R7
+	ADD	$-1, R8
+	BR	countstring_ppc970_loop
+countstring_ppc970_done:
+	RET
+#else
 TEXT ·Count<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-40
 	// R3 = byte array pointer
 	// R4 = length
@@ -152,3 +192,4 @@ tail_1:	// Count the remaining 0 - 1 bytes.
 tail_0:	// No remaining tail to count.
 	SRD	$3, R18, R3	// Fixup count, it is off by 8x.
 	RET
+#endif

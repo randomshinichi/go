@@ -922,7 +922,7 @@ func runInstall(pkg string, ch chan struct{}) {
 		// We treat each powerpc version as a superset of functionality.
 		switch goppc64 {
 		case "ppc970":
-			asmArgs = append(asmArgs, "-D", "GOPPC64_power8", "-D", "GOPPC64_ppc970")
+			asmArgs = append(asmArgs, "-D", "GOPPC64_ppc970")
 		case "power10":
 			asmArgs = append(asmArgs, "-D", "GOPPC64_power10")
 			fallthrough
@@ -931,6 +931,9 @@ func runInstall(pkg string, ch chan struct{}) {
 			fallthrough
 		default: // This should always be power8.
 			asmArgs = append(asmArgs, "-D", "GOPPC64_power8")
+		}
+		if goppc64 != "ppc970" {
+			asmArgs = append(asmArgs, "-D", "GOPPC64_vsx")
 		}
 	}
 	if goarch == "riscv64" {

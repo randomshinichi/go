@@ -36,6 +36,37 @@ TEXT runtime·memmove<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-24
 	// R4 = SRC = from
 	// R5 = LEN = n
 
+#ifndef GOPPC64_vsx
+	// Conservative GPR-only path unless the assembler has an explicit VSX
+	// capability define. Keep the optimized body unchanged for POWER8 and newer.
+	CMP	LEN, $0
+	BEQ	memmove_ppc970_done
+	SUB	SRC, TGT, TMP
+	CMPU	TMP, LEN, CR0
+	BLT	CR0, memmove_ppc970_backward
+memmove_ppc970_forward:
+	MOVBZ	0(SRC), TMP
+	MOVB	TMP, 0(TGT)
+	ADD	$1, SRC
+	ADD	$1, TGT
+	ADD	$-1, LEN
+	CMP	LEN, $0
+	BGT	memmove_ppc970_forward
+	RET
+memmove_ppc970_backward:
+	ADD	LEN, SRC, SRC
+	ADD	TGT, LEN, TGT
+memmove_ppc970_backward_loop:
+	MOVBZ	-1(SRC), TMP
+	SUB	$1, SRC
+	MOVB	TMP, -1(TGT)
+	SUB	$1, TGT
+	ADD	$-1, LEN
+	CMP	LEN, $0
+	BGT	memmove_ppc970_backward_loop
+memmove_ppc970_done:
+	RET
+#else
 	// Determine if there are doublewords to
 	// copy so a more efficient move can be done
 check:
@@ -218,3 +249,4 @@ backward32loop:
 	BDNZ	backward32loop
 	BEQ	CR0, LR                 // return if DWORDS == 0
 	BR	backward24
+#endif

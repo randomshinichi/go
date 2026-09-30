@@ -7,6 +7,47 @@
 #include "go_asm.h"
 #include "textflag.h"
 
+#ifndef GOPPC64_vsx
+	// Conservative GPR-only path unless VSX is explicitly enabled.
+TEXT ·Compare<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-56
+	BR	cmpbody_ppc970<>(SB)
+
+TEXT runtime·cmpstring<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-40
+	MOVD	R6, R8
+	MOVD	R5, R6
+	MOVD	R8, R7
+	BR	cmpbody_ppc970<>(SB)
+
+TEXT cmpbody_ppc970<>(SB), NOSPLIT|NOFRAME, $0-0
+cmpbody_ppc970_loop:
+	CMP	R4, $0
+	BEQ	cmpbody_ppc970_lengths
+	CMP	R7, $0
+	BEQ	cmpbody_ppc970_lengths
+	MOVBZ	0(R3), R8
+	MOVBZ	0(R6), R9
+	CMPU	R8, R9, CR0
+	BLT	CR0, cmpbody_ppc970_less
+	BGT	CR0, cmpbody_ppc970_greater
+	ADD	$1, R3
+	ADD	$1, R6
+	ADD	$-1, R4
+	ADD	$-1, R7
+	BR	cmpbody_ppc970_loop
+cmpbody_ppc970_lengths:
+	CMPU	R4, R7, CR0
+	BEQ	cmpbody_ppc970_equal
+	BLT	CR0, cmpbody_ppc970_less
+cmpbody_ppc970_greater:
+	MOVD	$1, R3
+	RET
+cmpbody_ppc970_less:
+	MOVD	$-1, R3
+	RET
+cmpbody_ppc970_equal:
+	MOVD	$0, R3
+	RET
+#else
 // Helper names for x-form loads in BE ordering.
 #ifdef  GOARCH_ppc64le
 #define _LDBEX	MOVDBR
@@ -339,4 +380,5 @@ cmp0:
 	SETB_CR0(R6)
 	ISEL	CR0EQ,R3,R6,R3
 	RET
+#endif
 #endif

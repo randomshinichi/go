@@ -361,11 +361,11 @@ func asmArgs(a *Action, p *load.Package) []any {
 	if cfg.Goarch == "ppc64" || cfg.Goarch == "ppc64le" {
 		// Define GOPPC64_power8..N from cfg.PPC64.
 		// We treat each powerpc version as a superset of functionality.
+		// GOPPC64_vsx is an explicit capability guard: absent it, assembly
+		// must use the conservative GPR-only path.
 		switch cfg.GOPPC64 {
 		case "ppc970":
-			// Keep the legacy power8 define for sources that rely on it, and
-			// add a distinct define for PPC970-safe assembly alternatives.
-			args = append(args, "-D", "GOPPC64_power8", "-D", "GOPPC64_ppc970")
+			args = append(args, "-D", "GOPPC64_ppc970")
 		case "power10":
 			args = append(args, "-D", "GOPPC64_power10")
 			fallthrough
@@ -374,6 +374,9 @@ func asmArgs(a *Action, p *load.Package) []any {
 			fallthrough
 		default: // This should always be power8.
 			args = append(args, "-D", "GOPPC64_power8")
+		}
+		if cfg.GOPPC64 != "ppc970" {
+			args = append(args, "-D", "GOPPC64_vsx")
 		}
 	}
 

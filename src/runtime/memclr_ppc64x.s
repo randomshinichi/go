@@ -13,6 +13,20 @@ TEXT runtime·memclrNoHeapPointers<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-16
 	// R3 = ptr
 	// R4 = n
 
+#ifndef GOPPC64_vsx
+	// Conservative GPR-only path unless the assembler has an explicit VSX
+	// capability define. Keep the optimized body unchanged for POWER8 and newer.
+	MOVD	$0, R5
+memclr_ppc970_loop:
+	CMP	R4, $0
+	BEQ	memclr_ppc970_done
+	MOVB	R5, 0(R3)
+	ADD	$1, R3
+	ADD	$-1, R4
+	BR	memclr_ppc970_loop
+memclr_ppc970_done:
+	RET
+#else
 	// Determine if there are doublewords to clear
 check:
 	ANDCC $7, R4, R5  // R5: leftover bytes to clear
@@ -188,3 +202,4 @@ smaller:
 
 done:
 	RET
+#endif

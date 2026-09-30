@@ -27,6 +27,47 @@
 #include "go_asm.h"
 #include "textflag.h"
 
+#ifndef GOPPC64_vsx
+	// Conservative GPR-only path unless VSX is explicitly enabled.
+TEXT ·Index<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-56
+	BR	indexbody_ppc970<>(SB)
+
+TEXT ·IndexString<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-40
+	MOVD	R6, R8
+	MOVD	R5, R6
+	MOVD	R8, R7
+	BR	indexbody_ppc970<>(SB)
+
+TEXT indexbody_ppc970<>(SB), NOSPLIT|NOFRAME, $0-0
+	MOVD	R3, R8
+	MOVD	$0, R9
+	CMP	R7, $0
+	BEQ	index_ppc970_found
+index_ppc970_outer:
+	CMPU	R4, R7, CR0
+	BLT	CR0, index_ppc970_notfound
+	MOVD	$0, R10
+index_ppc970_inner:
+	CMPU	R10, R7, CR0
+	BEQ	index_ppc970_found
+	MOVBZ	(R8)(R10), R11
+	MOVBZ	(R6)(R10), R12
+	CMPU	R11, R12, CR0
+	BNE	index_ppc970_next
+	ADD	$1, R10
+	BR	index_ppc970_inner
+index_ppc970_next:
+	ADD	$1, R8
+	ADD	$1, R9
+	ADD	$-1, R4
+	BR	index_ppc970_outer
+index_ppc970_found:
+	MOVD	R9, R3
+	RET
+index_ppc970_notfound:
+	MOVD	$-1, R3
+	RET
+#else
 // Needed to swap LXVD2X loads to the correct
 // byte order to work on POWER8.
 
@@ -839,3 +880,4 @@ found:                 // found at index 0
 	SUB  R3, R7    // Return byte where found
 	MOVD R7, R3
 	RET
+#endif

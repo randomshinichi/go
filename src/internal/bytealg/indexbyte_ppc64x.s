@@ -7,6 +7,35 @@
 #include "go_asm.h"
 #include "textflag.h"
 
+#ifndef GOPPC64_vsx
+	// Conservative GPR-only path unless VSX is explicitly enabled.
+TEXT ·IndexByte<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-40
+	MOVD	R6, R5
+	BR	indexbytebody_ppc970<>(SB)
+
+TEXT ·IndexByteString<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-32
+	BR	indexbytebody_ppc970<>(SB)
+
+TEXT indexbytebody_ppc970<>(SB), NOSPLIT|NOFRAME, $0-0
+	MOVD	R3, R6
+	MOVBZ	R5, R7
+	MOVD	$0, R3
+indexbyte_ppc970_loop:
+	CMP	R4, $0
+	BEQ	indexbyte_ppc970_notfound
+	MOVBZ	0(R6), R8
+	CMPU	R8, R7
+	BEQ	indexbyte_ppc970_found
+	ADD	$1, R6
+	ADD	$1, R3
+	ADD	$-1, R4
+	BR	indexbyte_ppc970_loop
+indexbyte_ppc970_found:
+	RET
+indexbyte_ppc970_notfound:
+	MOVD	$-1, R3
+	RET
+#else
 TEXT ·IndexByte<ABIInternal>(SB),NOSPLIT|NOFRAME,$0-40
 	// R3 = byte array pointer
 	// R4 = length
@@ -311,4 +340,5 @@ found:
 notfound:
 	MOVD $-1,R3
 	RET
+#endif
 
