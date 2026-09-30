@@ -1056,16 +1056,55 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		// Remainder bytes
 		rem := v.AuxInt % 64
 
+		// Keep the upstream VSX sequence for power8 and newer. PPC970 has
+		// only 16-byte VMX vectors, so emit one indexed STVX per 16 bytes.
+		zeroVectorOp := ppc64.AXXLXOR
+		zeroVectorReg := int16(ppc64.REG_VS32)
+		zeroStoreOp := ppc64.ASTXV
+		ppc970 := buildcfg.GOPPC64 == 5
+		if ppc970 {
+			zeroVectorOp = ppc64.AVXOR
+			zeroVectorReg = ppc64.REG_V0
+			zeroStoreOp = ppc64.ASTVX
+		}
+		emitZeroStore := func(off int64) *obj.Prog {
+			var first *obj.Prog
+			index := int16(ppc64.REGZERO)
+			if ppc970 && off != 0 {
+				// STVX is indexed, unlike the VSX displacement form.
+				first = s.Prog(ppc64.AMOVD)
+				first.From.Type = obj.TYPE_CONST
+				first.From.Offset = off
+				first.To.Type = obj.TYPE_REG
+				first.To.Reg = ppc64.REGTMP
+				index = ppc64.REGTMP
+			}
+			p := s.Prog(zeroStoreOp)
+			p.From.Type = obj.TYPE_REG
+			p.From.Reg = zeroVectorReg
+			p.To.Type = obj.TYPE_MEM
+			p.To.Reg = v.Args[0].Reg()
+			if ppc970 {
+				p.To.Index = index
+			} else {
+				p.To.Offset = off
+			}
+			if first == nil {
+				first = p
+			}
+			return first
+		}
+
 		// Only generate a loop if there is more
 		// than 1 iteration.
 		if ctr > 1 {
-			// Set up VS32 (V0) to hold 0s
-			p := s.Prog(ppc64.AXXLXOR)
+			// Set up the zero vector (VS32 aliases V0 on PPC970).
+			p := s.Prog(zeroVectorOp)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = zeroVectorReg
 			p.To.Type = obj.TYPE_REG
-			p.To.Reg = ppc64.REG_VS32
-			p.Reg = ppc64.REG_VS32
+			p.To.Reg = zeroVectorReg
+			p.Reg = zeroVectorReg
 
 			// Set up CTR loop counter
 			p = s.Prog(ppc64.AMOVD)
@@ -1091,36 +1130,14 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 			// generate 4 STXVs to zero 64 bytes
 			var top *obj.Prog
 
-			p = s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-
-			//  Save the top of loop
+			p = emitZeroStore(0)
+			// Save the first instruction in the loop.
 			if top == nil {
 				top = p
 			}
-			p = s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-			p.To.Offset = 16
-
-			p = s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-			p.To.Offset = 32
-
-			p = s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-			p.To.Offset = 48
+			p = emitZeroStore(16)
+			p = emitZeroStore(32)
+			p = emitZeroStore(48)
 
 			// Increment address for the
 			// 64 bytes just zeroed.
@@ -1153,43 +1170,24 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		offset := int64(0)
 
 		if rem >= 16 && ctr <= 1 {
-			// If the XXLXOR hasn't already been
-			// generated, do it here to initialize
-			// VS32 (V0) to 0.
-			p := s.Prog(ppc64.AXXLXOR)
+			// If the vector clear hasn't already been generated, do it here.
+			p := s.Prog(zeroVectorOp)
 			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
+			p.From.Reg = zeroVectorReg
 			p.To.Type = obj.TYPE_REG
-			p.To.Reg = ppc64.REG_VS32
-			p.Reg = ppc64.REG_VS32
+			p.To.Reg = zeroVectorReg
+			p.Reg = zeroVectorReg
 		}
-		// Generate STXV for 32 or 64
-		// bytes.
+		// Generate 32 bytes per iteration (one STXV or two 16-byte STVX).
 		for rem >= 32 {
-			p := s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-			p.To.Offset = offset
-
-			p = s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-			p.To.Offset = offset + 16
+			_ = emitZeroStore(offset)
+			_ = emitZeroStore(offset + 16)
 			offset += 32
 			rem -= 32
 		}
-		// Generate 16 bytes
+		// Generate 16 bytes.
 		if rem >= 16 {
-			p := s.Prog(ppc64.ASTXV)
-			p.From.Type = obj.TYPE_REG
-			p.From.Reg = ppc64.REG_VS32
-			p.To.Type = obj.TYPE_MEM
-			p.To.Reg = v.Args[0].Reg()
-			p.To.Offset = offset
+			_ = emitZeroStore(offset)
 			offset += 16
 			rem -= 16
 		}

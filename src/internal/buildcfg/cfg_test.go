@@ -112,7 +112,7 @@ func TestGOPPC64(t *testing.T) {
 		t.Errorf("GOPPC64 from empty setting = %d, error %v; want default 8, nil", GOPPC64, Error)
 	}
 
-	for _, invalid := range []string{"power5", "power6"} {
+	for _, invalid := range []string{"power6"} {
 		t.Setenv("GOPPC64", invalid)
 		Error = nil
 		GOPPC64 = goppc64()
