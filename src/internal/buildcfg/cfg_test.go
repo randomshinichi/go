@@ -78,6 +78,49 @@ func TestConfigFlags(t *testing.T) {
 	}
 }
 
+func TestGOPPC64(t *testing.T) {
+	oldGOPPC64, oldError := GOPPC64, Error
+	defer func() {
+		GOPPC64, Error = oldGOPPC64, oldError
+	}()
+
+	if DefaultGOPPC64 != "power8" {
+		t.Fatalf("DefaultGOPPC64 = %q, want power8", DefaultGOPPC64)
+	}
+
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{
+		{"power5", 5},
+		{"power8", 8},
+		{"power9", 9},
+		{"power10", 10},
+	} {
+		t.Setenv("GOPPC64", tc.value)
+		Error = nil
+		GOPPC64 = goppc64()
+		if GOPPC64 != tc.want || Error != nil {
+			t.Errorf("GOPPC64 from %q = %d, error %v; want %d, nil", tc.value, GOPPC64, Error, tc.want)
+		}
+	}
+
+	t.Setenv("GOPPC64", "")
+	Error = nil
+	GOPPC64 = goppc64()
+	if GOPPC64 != 8 || Error != nil {
+		t.Errorf("GOPPC64 from empty setting = %d, error %v; want default 8, nil", GOPPC64, Error)
+	}
+
+	t.Setenv("GOPPC64", "power6")
+	Error = nil
+	GOPPC64 = goppc64()
+	if GOPPC64 != 8 || Error == nil {
+		t.Errorf("GOPPC64 from invalid power6 = %d, error %v; want default 8 and validation error", GOPPC64, Error)
+	}
+	Error = nil
+}
+
 func TestGoarm64FeaturesSupports(t *testing.T) {
 	g, _ := ParseGoarm64("v9.3")
 
