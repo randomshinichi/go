@@ -362,6 +362,10 @@ func asmArgs(a *Action, p *load.Package) []any {
 		// Define GOPPC64_power8..N from cfg.PPC64.
 		// We treat each powerpc version as a superset of functionality.
 		switch cfg.GOPPC64 {
+		case "ppc970":
+			// Keep the legacy power8 define for sources that rely on it, and
+			// add a distinct define for PPC970-safe assembly alternatives.
+			args = append(args, "-D", "GOPPC64_power8", "-D", "GOPPC64_ppc970")
 		case "power10":
 			args = append(args, "-D", "GOPPC64_power10")
 			fallthrough
