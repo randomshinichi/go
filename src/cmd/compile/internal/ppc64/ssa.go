@@ -1261,7 +1261,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		// remainder bytes
 		rem := v.AuxInt % 32
 
-		// Keep the upstream VSX sequence for power8 and newer. The power5
+		// Keep the upstream VSX sequence for power8 and newer. The ppc970
 		// floor uses same-width VMX instructions, legal on the PPC970.
 		zeroVectorReg := int16(ppc64.REG_VS32)
 		zeroVectorOp := ppc64.AXXLXOR
@@ -1275,7 +1275,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		// only generate a loop if there is more
 		// than 1 iteration.
 		if ctr > 1 {
-			// Clear the vector register. On power5, V0 aliases VS32's low
+			// Clear the vector register. On ppc970, V0 aliases VS32's low
 			// 128 bits; the 16-byte VMX stores below are byte-identical.
 			p := s.Prog(zeroVectorOp)
 			p.From.Type = obj.TYPE_REG
@@ -1312,7 +1312,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 				p.From.Offset = 16
 			}
 
-			// Generate same-width vector stores; power5 selects VMX STVX,
+			// Generate same-width vector stores; ppc970 selects VMX STVX,
 			// while power8+ retains the upstream VSX STXVD2X sequence.
 			// when this is a loop then the top must be saved
 			var top *obj.Prog
@@ -1436,7 +1436,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		dstReg := v.Args[0].Reg()
 		srcReg := v.Args[1].Reg()
 
-		// Keep the upstream VSX sequence for power8 and newer. The power5
+		// Keep the upstream VSX sequence for power8 and newer. The ppc970
 		// floor uses same-width VMX loads and stores through the aliased registers.
 		moveLoadOp := ppc64.ALXVD2X
 		moveStoreOp := ppc64.ASTXVD2X
@@ -1486,7 +1486,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 				p.From.Offset = 16
 			}
 
-			// Generate 16-byte loads and stores. power5 uses VMX LVX/STVX;
+			// Generate 16-byte loads and stores. ppc970 uses VMX LVX/STVX;
 			// power8+ retains VSX LXVD2X/STXVD2X. V0/V1 alias VS32/VS33's
 			// low 128 bits, so each loaded value is stored unchanged.
 			// Use temp register for index (16)
@@ -1560,7 +1560,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 
 		if rem >= 16 {
-			// Generate 16-byte loads and stores. power5 uses VMX LVX/STVX;
+			// Generate 16-byte loads and stores. ppc970 uses VMX LVX/STVX;
 			// power8+ retains VSX LXVD2X/STXVD2X. V0 aliases VS32's low 128
 			// bits, so the value round-trips unchanged on either path.
 			// Use temp register for index (value 16)

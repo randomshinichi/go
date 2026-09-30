@@ -79,9 +79,9 @@ func TestConfigFlags(t *testing.T) {
 }
 
 func TestGOPPC64(t *testing.T) {
-	oldGOPPC64, oldError := GOPPC64, Error
+	oldGOPPC64, oldGOARCH, oldError := GOPPC64, GOARCH, Error
 	defer func() {
-		GOPPC64, Error = oldGOPPC64, oldError
+		GOPPC64, GOARCH, Error = oldGOPPC64, oldGOARCH, oldError
 	}()
 
 	if DefaultGOPPC64 != "power8" {
@@ -92,7 +92,7 @@ func TestGOPPC64(t *testing.T) {
 		value string
 		want  int
 	}{
-		{"power5", 5},
+		{"ppc970", 5},
 		{"power8", 8},
 		{"power9", 9},
 		{"power10", 10},
@@ -112,11 +112,29 @@ func TestGOPPC64(t *testing.T) {
 		t.Errorf("GOPPC64 from empty setting = %d, error %v; want default 8, nil", GOPPC64, Error)
 	}
 
-	t.Setenv("GOPPC64", "power6")
+	for _, invalid := range []string{"power5", "power6"} {
+		t.Setenv("GOPPC64", invalid)
+		Error = nil
+		GOPPC64 = goppc64()
+		if GOPPC64 != 8 || Error == nil {
+			t.Errorf("GOPPC64 from invalid %s = %d, error %v; want default 8 and validation error", invalid, GOPPC64, Error)
+		} else if got, want := Error.Error(), "invalid GOPPC64: must be ppc970, power8, power9, power10"; got != want {
+			t.Errorf("GOPPC64 error = %q, want %q", got, want)
+		}
+	}
 	Error = nil
-	GOPPC64 = goppc64()
-	if GOPPC64 != 8 || Error == nil {
-		t.Errorf("GOPPC64 from invalid power6 = %d, error %v; want default 8 and validation error", GOPPC64, Error)
+
+	GOARCH = "ppc64"
+	GOPPC64 = 5
+	if name, value := GOGOARCH(); name != "GOPPC64" || value != "ppc970" {
+		t.Errorf("GOGOARCH() for GOPPC64=5 = (%q, %q), want (GOPPC64, ppc970)", name, value)
+	}
+	if tags := gogoarchTags(); len(tags) != 0 {
+		t.Errorf("ppc64 build tags at GOPPC64=5 = %v, want none", tags)
+	}
+	GOPPC64 = 8
+	if name, value := GOGOARCH(); name != "GOPPC64" || value != "power8" {
+		t.Errorf("GOGOARCH() for GOPPC64=8 = (%q, %q), want (GOPPC64, power8)", name, value)
 	}
 	Error = nil
 }

@@ -301,9 +301,8 @@ func gomips64() string {
 
 func goppc64() int {
 	switch v := envOr("GOPPC64", DefaultGOPPC64); v {
-	// power5 is a fork-only name for the PPC970/VMX floor, not a claim that
-	// the 970 implements POWER5 ISA features.
-	case "power5":
+	// ppc970 is a fork-only name for the PPC970/G5 VMX floor.
+	case "ppc970":
 		return 5
 	case "power8":
 		return 8
@@ -312,7 +311,7 @@ func goppc64() int {
 	case "power10":
 		return 10
 	}
-	Error = fmt.Errorf("invalid GOPPC64: must be power5, power8, power9, power10")
+	Error = fmt.Errorf("invalid GOPPC64: must be ppc970, power8, power9, power10")
 	return int(DefaultGOPPC64[len("power")] - '0')
 }
 
@@ -401,6 +400,9 @@ func GOGOARCH() (name, value string) {
 	case "mips64", "mips64le":
 		return "GOMIPS64", GOMIPS64
 	case "ppc64", "ppc64le":
+		if GOPPC64 == 5 {
+			return "GOPPC64", "ppc970"
+		}
 		return "GOPPC64", fmt.Sprintf("power%d", GOPPC64)
 	case "riscv64":
 		return "GORISCV64", fmt.Sprintf("rva%du64", GORISCV64)
