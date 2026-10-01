@@ -1067,7 +1067,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 	case ssa.OpPPC64NEG, ssa.OpPPC64FNEG, ssa.OpPPC64FSQRT, ssa.OpPPC64FSQRTS, ssa.OpPPC64FFLOOR, ssa.OpPPC64FTRUNC, ssa.OpPPC64FCEIL,
 		ssa.OpPPC64FCTIDZ, ssa.OpPPC64FCTIWZ, ssa.OpPPC64FCFID, ssa.OpPPC64FCFIDS, ssa.OpPPC64FRSP, ssa.OpPPC64CNTLZD, ssa.OpPPC64CNTLZW,
-		ssa.OpPPC64POPCNTD, ssa.OpPPC64POPCNTW, ssa.OpPPC64POPCNTB, ssa.OpPPC64MFVSRD, ssa.OpPPC64MTVSRD, ssa.OpPPC64FABS, ssa.OpPPC64FNABS,
+		ssa.OpPPC64POPCNTD, ssa.OpPPC64POPCNTW, ssa.OpPPC64POPCNTB, ssa.OpPPC64FABS, ssa.OpPPC64FNABS,
 		ssa.OpPPC64FROUND, ssa.OpPPC64CNTTZW, ssa.OpPPC64CNTTZD, ssa.OpPPC64BRH, ssa.OpPPC64BRW, ssa.OpPPC64BRD:
 		r := v.Reg()
 		p := s.Prog(v.Op.Asm())
@@ -1075,6 +1075,31 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Reg = r
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = v.Args[0].Reg()
+
+	case ssa.OpPPC64MTVSRD, ssa.OpPPC64MFVSRD:
+		if buildcfg.GOPPC64 == 5 {
+			// The 970 has no VSX register moves. The old PPC64 backend used
+			// a memory bitcast: FCFID then interprets the integer *bits* in
+			// the FPR (and FCTIDZ produces integer bits in the FPR). Reserve
+			// a private frame slot for the pair, never an outgoing-call
+			// argument slot: those may already hold live call arguments.
+			// There is no call or safepoint between the store and load.
+			slot := s.ScratchAddr(ppc64.REGSP)
+			from, to := ppc64.AMOVD, ppc64.AFMOVD
+			if v.Op == ssa.OpPPC64MFVSRD {
+				from, to = to, from
+			}
+			p := s.Prog(from)
+			p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+			p.To = slot
+			p = s.Prog(to)
+			p.From = slot
+			p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+			break
+		}
+		p := s.Prog(v.Op.Asm())
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
 
 	case ssa.OpPPC64ADDconst, ssa.OpPPC64ORconst, ssa.OpPPC64XORconst,
 		ssa.OpPPC64SRADconst, ssa.OpPPC64SRAWconst, ssa.OpPPC64SRDconst, ssa.OpPPC64SRWconst,
