@@ -81,6 +81,7 @@
 (Ceil ...) => (FCEIL ...)
 (Trunc ...) => (FTRUNC ...)
 (Round ...) => (FROUND ...)
+(Copysign x y) && buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64" => { ppc64CopySign(v, x, y) }
 (Copysign x y) => (FCPSGN y x)
 (Abs ...) => (FABS ...)
 (FMA ...) => (FMADD ...)

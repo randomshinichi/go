@@ -1538,6 +1538,18 @@ func rewriteValuePPC64_OpCopysign(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (Copysign x y)
+	// cond: buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64"
+	// result: { ppc64CopySign(v, x, y) }
+	for {
+		x := v_0
+		y := v_1
+		if !(buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64") {
+			break
+		}
+		v.copyOf(ppc64CopySign(v, x, y))
+		return true
+	}
+	// match: (Copysign x y)
 	// result: (FCPSGN y x)
 	for {
 		x := v_0

@@ -1056,6 +1056,21 @@ func resetCopy(v *Value, arg *Value) bool {
 	return true
 }
 
+// ppc64CopySign replaces the PPC970's unavailable FCPSGN with sign-bit
+// surgery. The GPR/FPR moves are lowered through the private scratch slot.
+func ppc64CopySign(v, x, y *Value) *Value {
+	b, pos := v.Block, v.Pos
+	t := &b.Func.Config.Types
+	magBits := b.NewValue1(pos, OpPPC64MFVSRD, t.Int64, x)
+	signBits := b.NewValue1(pos, OpPPC64MFVSRD, t.Int64, y)
+	magMask := b.NewValue0I(pos, OpPPC64MOVDconst, t.Int64, 0x7fffffffffffffff)
+	signMask := b.NewValue0I(pos, OpPPC64MOVDconst, t.Int64, -1<<63)
+	mag := b.NewValue2(pos, OpPPC64AND, t.Int64, magBits, magMask)
+	sign := b.NewValue2(pos, OpPPC64AND, t.Int64, signBits, signMask)
+	bits := b.NewValue2(pos, OpPPC64OR, t.Int64, mag, sign)
+	return b.NewValue1(pos, OpPPC64MTVSRD, v.Type, bits)
+}
+
 // ppc64PopCount computes a 64-bit population count with the portable SWAR
 // sequence used by math/bits.OnesCount64. The PPC970 lacks POPCNTD, so keep
 // this lowering to shifts, masks, adds, and subtracts available on that CPU.
