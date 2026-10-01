@@ -447,6 +447,9 @@ func gogoarchTags() []string {
 	case "mips64", "mips64le":
 		return []string{GOARCH + "." + GOMIPS64}
 	case "ppc64", "ppc64le":
+		if GOARCH == "ppc64" && GOPPC64 == 5 {
+			return []string{"ppc64.ppc970"}
+		}
 		var list []string
 		for i := 8; i <= GOPPC64; i++ {
 			list = append(list, fmt.Sprintf("%s.power%d", GOARCH, i))
