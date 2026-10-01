@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"internal/buildcfg"
+
 	"cmd/internal/sys"
 )
 
@@ -1459,5 +1461,39 @@ func TestIntrinsicBuilders(t *testing.T) {
 
 	if intrinsics.lookup(sys.ArchPPC64, "internal/runtime/sys", "Bswap64") == nil {
 		t.Errorf("No intrinsic for internal/runtime/sys.Bswap64 on arch %v", sys.ArchPPC64)
+	}
+}
+
+func TestPPC64RoundingIntrinsicsFollowBuildConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cfg        *intrinsicBuildConfig
+		global     int
+		wantEnable bool
+	}{
+		{"explicit-floor-global-power8", &intrinsicBuildConfig{goppc64: 5}, 8, false},
+		{"explicit-power8-global-floor", &intrinsicBuildConfig{goppc64: 8}, 5, true},
+		{"nil-global-floor", nil, 5, false},
+		{"nil-global-power8", nil, 8, true},
+		{"missing-level-defaults-unsafe", &intrinsicBuildConfig{}, 8, false},
+		{"unknown-high-level-defaults-unsafe", &intrinsicBuildConfig{goppc64: 11}, 8, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldArch, oldLevel, oldIntrinsics := buildcfg.GOARCH, buildcfg.GOPPC64, intrinsics
+			defer func() {
+				buildcfg.GOARCH, buildcfg.GOPPC64, intrinsics = oldArch, oldLevel, oldIntrinsics
+			}()
+
+			buildcfg.GOARCH = "ppc64"
+			buildcfg.GOPPC64 = tc.global
+			initIntrinsics(tc.cfg)
+
+			for _, fn := range []string{"Trunc", "Ceil", "Floor", "Round"} {
+				got := intrinsics.lookup(sys.ArchPPC64, "math", fn) != nil
+				if got != tc.wantEnable {
+					t.Errorf("math.%s intrinsic present = %t, want %t (cfg=%v, global=%d)", fn, got, tc.wantEnable, tc.cfg, tc.global)
+				}
+			}
+		})
 	}
 }

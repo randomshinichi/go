@@ -754,26 +754,31 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			return s.newValue1(ssa.OpSqrt, types.Types[types.TFLOAT64], args[0])
 		},
 		sys.I386, sys.AMD64, sys.ARM, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
+	roundArchs := []sys.ArchFamily{sys.ARM64, sys.S390X}
+	if cfg.goppc64 >= 8 && cfg.goppc64 <= 10 {
+		roundArchs = append(roundArchs, sys.PPC64)
+	}
+	roundArchsWithWasm := append(roundArchs, sys.Wasm)
 	addF("math", "Trunc",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			return s.newValue1(ssa.OpTrunc, types.Types[types.TFLOAT64], args[0])
 		},
-		sys.ARM64, sys.PPC64, sys.S390X, sys.Wasm)
+		roundArchsWithWasm...)
 	addF("math", "Ceil",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			return s.newValue1(ssa.OpCeil, types.Types[types.TFLOAT64], args[0])
 		},
-		sys.ARM64, sys.PPC64, sys.S390X, sys.Wasm)
+		roundArchsWithWasm...)
 	addF("math", "Floor",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			return s.newValue1(ssa.OpFloor, types.Types[types.TFLOAT64], args[0])
 		},
-		sys.ARM64, sys.PPC64, sys.S390X, sys.Wasm)
+		roundArchsWithWasm...)
 	addF("math", "Round",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			return s.newValue1(ssa.OpRound, types.Types[types.TFLOAT64], args[0])
 		},
-		sys.ARM64, sys.PPC64, sys.S390X)
+		roundArchs...)
 	addF("math", "RoundToEven",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			return s.newValue1(ssa.OpRoundToEven, types.Types[types.TFLOAT64], args[0])
