@@ -6,6 +6,7 @@ package buildcfg
 
 import (
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -129,10 +130,27 @@ func TestGOPPC64(t *testing.T) {
 	if name, value := GOGOARCH(); name != "GOPPC64" || value != "ppc970" {
 		t.Errorf("GOGOARCH() for GOPPC64=5 = (%q, %q), want (GOPPC64, ppc970)", name, value)
 	}
-	if tags := gogoarchTags(); len(tags) != 0 {
-		t.Errorf("ppc64 build tags at GOPPC64=5 = %v, want none", tags)
+	if tags := gogoarchTags(); !slices.Equal(tags, []string{"ppc64.ppc970"}) {
+		t.Errorf("ppc64 build tags at GOPPC64=5 = %v, want [ppc64.ppc970]", tags)
 	}
-	GOPPC64 = 8
+
+	for _, tc := range []struct {
+		arch  string
+		level int
+		want  []string
+	}{
+		{"ppc64", 8, []string{"ppc64.power8"}},
+		{"ppc64", 9, []string{"ppc64.power8", "ppc64.power9"}},
+		{"ppc64", 10, []string{"ppc64.power8", "ppc64.power9", "ppc64.power10"}},
+		{"ppc64le", 8, []string{"ppc64le.power8"}},
+		{"ppc64le", 5, nil},
+	} {
+		GOARCH, GOPPC64 = tc.arch, tc.level
+		if tags := gogoarchTags(); !slices.Equal(tags, tc.want) {
+			t.Errorf("%s build tags at GOPPC64=%d = %v, want %v", tc.arch, tc.level, tags, tc.want)
+		}
+	}
+	GOARCH, GOPPC64 = "ppc64", 8
 	if name, value := GOGOARCH(); name != "GOPPC64" || value != "power8" {
 		t.Errorf("GOGOARCH() for GOPPC64=8 = (%q, %q), want (GOPPC64, power8)", name, value)
 	}
