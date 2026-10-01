@@ -172,6 +172,13 @@ type Frontend interface {
 	Func() *ir.Func
 }
 
+// ppc64HaveBswapFusion reports whether byte-reversal loads and stores can be
+// fused for this target. The ppc970 lacks those memory operations, although it
+// supports the ordinary byte loads and stores used by the unfused sequence.
+func ppc64HaveBswapFusion(arch string, goppc64 int) bool {
+	return arch != "ppc64" || goppc64 != 5
+}
+
 // NewConfig returns a new configuration object for the given architecture.
 func NewConfig(arch string, types Types, ctxt *obj.Link, optimize, softfloat bool) *Config {
 	c := &Config{arch: arch, Types: types}
@@ -270,7 +277,7 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize, softfloat boo
 		// in contexts where they can be merged with a load or store.
 		// The PPC970 lacks those byte-reversed memory instructions, so keep
 		// little-endian byte assembly as ordinary byte loads and stores there.
-		if arch != "ppc64" || buildcfg.GOPPC64 != 5 {
+		if ppc64HaveBswapFusion(arch, buildcfg.GOPPC64) {
 			c.haveBswap64 = true
 			c.haveBswap32 = true
 			c.haveBswap16 = true
