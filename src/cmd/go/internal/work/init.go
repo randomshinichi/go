@@ -54,6 +54,9 @@ func BuildInit(loaderstate *modload.State) {
 	if buildInitStarted {
 		base.Fatalf("go: internal error: work.BuildInit called more than once")
 	}
+	if cfg.Goarch == "ppc64le" && cfg.GOPPC64 == "ppc970" {
+		base.Fatalf("GOPPC64=ppc970 is not supported for GOARCH=ppc64le; the ppc970 floor is big-endian only")
+	}
 	buildInitStarted = true
 	base.AtExit(closeBuilders)
 
