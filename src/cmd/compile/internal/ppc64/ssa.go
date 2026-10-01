@@ -349,6 +349,114 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	p.To.Type = obj.TYPE_NONE
 }
 
+// VMX LVX/STVX discard the low four address bits. Use word-granular GPR
+// accesses for ppc970: a Go object's address need only be 8-byte aligned.
+func ssaGenPPC970Zero(s *ssagen.State, v *ssa.Value) {
+	ptr := v.Args[0].Reg()
+	ctr, rem := v.AuxInt/32, v.AuxInt%32
+	if ctr > 1 { // Only the long form declares ptr clobberable.
+		p := s.Prog(ppc64.AMOVD)
+		p.From.SetConst(ctr)
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+		p = s.Prog(ppc64.AMOVD)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REG_CTR}
+		var top *obj.Prog
+		for off := int64(0); off < 32; off += 8 {
+			p = s.Prog(ppc64.AMOVD)
+			p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGZERO}
+			p.To = obj.Addr{Type: obj.TYPE_MEM, Reg: ptr, Offset: off}
+			if top == nil {
+				top = p
+			}
+		}
+		p = s.Prog(ppc64.AADD)
+		p.From.SetConst(32)
+		p.Reg = ptr
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ptr}
+		p = s.Prog(ppc64.ABC)
+		p.From.SetConst(ppc64.BO_BCTR)
+		p.Reg = ppc64.REG_CR0LT
+		p.To.Type = obj.TYPE_BRANCH
+		p.To.SetTarget(top)
+	} else if ctr == 1 {
+		rem += 32
+	}
+	for off := int64(0); rem > 0; {
+		op, size := ppc64.AMOVB, int64(1)
+		switch {
+		case rem >= 8:
+			op, size = ppc64.AMOVD, 8
+		case rem >= 4:
+			op, size = ppc64.AMOVW, 4
+		case rem >= 2:
+			op, size = ppc64.AMOVH, 2
+		}
+		p := s.Prog(op)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGZERO}
+		p.To = obj.Addr{Type: obj.TYPE_MEM, Reg: ptr, Offset: off}
+		off += size
+		rem -= size
+	}
+}
+
+func ssaGenPPC970Move(s *ssagen.State, v *ssa.Value) {
+	dst, src := v.Args[0].Reg(), v.Args[1].Reg()
+	ctr, rem := v.AuxInt/32, v.AuxInt%32
+	if ctr > 1 { // Only the long form declares both addresses clobberable.
+		p := s.Prog(ppc64.AMOVD)
+		p.From.SetConst(ctr)
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+		p = s.Prog(ppc64.AMOVD)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REG_CTR}
+		var top *obj.Prog
+		for off := int64(0); off < 32; off += 8 {
+			p = s.Prog(ppc64.AMOVD)
+			p.From = obj.Addr{Type: obj.TYPE_MEM, Reg: src, Offset: off}
+			p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+			if top == nil {
+				top = p
+			}
+			p = s.Prog(ppc64.AMOVD)
+			p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+			p.To = obj.Addr{Type: obj.TYPE_MEM, Reg: dst, Offset: off}
+		}
+		for _, reg := range []int16{src, dst} {
+			p = s.Prog(ppc64.AADD)
+			p.From.SetConst(32)
+			p.Reg = reg
+			p.To = obj.Addr{Type: obj.TYPE_REG, Reg: reg}
+		}
+		p = s.Prog(ppc64.ABC)
+		p.From.SetConst(ppc64.BO_BCTR)
+		p.Reg = ppc64.REG_CR0LT
+		p.To.Type = obj.TYPE_BRANCH
+		p.To.SetTarget(top)
+	} else if ctr == 1 {
+		rem += 32
+	}
+	for off := int64(0); rem > 0; {
+		op, size := ppc64.AMOVB, int64(1)
+		switch {
+		case rem >= 8:
+			op, size = ppc64.AMOVD, 8
+		case rem >= 4:
+			op, size = ppc64.AMOVWZ, 4
+		case rem >= 2:
+			op, size = ppc64.AMOVH, 2
+		}
+		p := s.Prog(op)
+		p.From = obj.Addr{Type: obj.TYPE_MEM, Reg: src, Offset: off}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+		p = s.Prog(op)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REGTMP}
+		p.To = obj.Addr{Type: obj.TYPE_MEM, Reg: dst, Offset: off}
+		off += size
+		rem -= size
+	}
+}
+
 func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	switch v.Op {
 	case ssa.OpCopy:
@@ -1284,6 +1392,11 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.From.Reg = int16(ppc64.REG_CR0LT + v.AuxInt)
 
 	case ssa.OpPPC64LoweredQuadZero, ssa.OpPPC64LoweredQuadZeroShort:
+		// PPC64.rules selects QuadZero only for GOPPC64 >= 9. A ppc970
+		// QuadZero would require a distinct word-granular lowering.
+		if buildcfg.GOPPC64 == 5 {
+			v.Fatalf("LoweredQuadZero is unavailable for ppc970")
+		}
 		// The LoweredQuad code generation
 		// generates STXV instructions on
 		// power9. The Short variation is used
@@ -1310,49 +1423,23 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		// Remainder bytes
 		rem := v.AuxInt % 64
 
-		// Keep the upstream VSX sequence for power8 and newer. PPC970 has
-		// only 16-byte VMX vectors, so emit one indexed STVX per 16 bytes.
 		zeroVectorOp := ppc64.AXXLXOR
 		zeroVectorReg := int16(ppc64.REG_VS32)
 		zeroStoreOp := ppc64.ASTXV
-		ppc970 := buildcfg.GOPPC64 == 5
-		if ppc970 {
-			zeroVectorOp = ppc64.AVXOR
-			zeroVectorReg = ppc64.REG_V0
-			zeroStoreOp = ppc64.ASTVX
-		}
 		emitZeroStore := func(off int64) *obj.Prog {
-			var first *obj.Prog
-			index := int16(ppc64.REGZERO)
-			if ppc970 && off != 0 {
-				// STVX is indexed, unlike the VSX displacement form.
-				first = s.Prog(ppc64.AMOVD)
-				first.From.Type = obj.TYPE_CONST
-				first.From.Offset = off
-				first.To.Type = obj.TYPE_REG
-				first.To.Reg = ppc64.REGTMP
-				index = ppc64.REGTMP
-			}
 			p := s.Prog(zeroStoreOp)
 			p.From.Type = obj.TYPE_REG
 			p.From.Reg = zeroVectorReg
 			p.To.Type = obj.TYPE_MEM
 			p.To.Reg = v.Args[0].Reg()
-			if ppc970 {
-				p.To.Index = index
-			} else {
-				p.To.Offset = off
-			}
-			if first == nil {
-				first = p
-			}
-			return first
+			p.To.Offset = off
+			return p
 		}
 
 		// Only generate a loop if there is more
 		// than 1 iteration.
 		if ctr > 1 {
-			// Set up the zero vector (VS32 aliases V0 on PPC970).
+			// Set up the zero vector.
 			p := s.Prog(zeroVectorOp)
 			p.From.Type = obj.TYPE_REG
 			p.From.Reg = zeroVectorReg
@@ -1469,6 +1556,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 
 	case ssa.OpPPC64LoweredZero, ssa.OpPPC64LoweredZeroShort:
+		if buildcfg.GOPPC64 == 5 {
+			ssaGenPPC970Zero(s, v)
+			break
+		}
 
 		// Unaligned data doesn't hurt performance
 		// for these instructions on power8.
@@ -1513,22 +1604,14 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		// remainder bytes
 		rem := v.AuxInt % 32
 
-		// Keep the upstream VSX sequence for power8 and newer. The ppc970
-		// floor uses same-width VMX instructions, legal on the PPC970.
 		zeroVectorReg := int16(ppc64.REG_VS32)
 		zeroVectorOp := ppc64.AXXLXOR
 		zeroStoreOp := ppc64.ASTXVD2X
-		if buildcfg.GOPPC64 == 5 {
-			zeroVectorReg = ppc64.REG_V0
-			zeroVectorOp = ppc64.AVXOR
-			zeroStoreOp = ppc64.ASTVX
-		}
 
 		// only generate a loop if there is more
 		// than 1 iteration.
 		if ctr > 1 {
-			// Clear the vector register. On ppc970, V0 aliases VS32's low
-			// 128 bits; the 16-byte VMX stores below are byte-identical.
+			// Clear the VSX vector register.
 			p := s.Prog(zeroVectorOp)
 			p.From.Type = obj.TYPE_REG
 			p.From.Reg = zeroVectorReg
@@ -1564,8 +1647,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 				p.From.Offset = 16
 			}
 
-			// Generate same-width vector stores; ppc970 selects VMX STVX,
-			// while power8+ retains the upstream VSX STXVD2X sequence.
+			// Generate the upstream VSX stores.
 			// when this is a loop then the top must be saved
 			var top *obj.Prog
 			// This is the top of loop
@@ -1641,6 +1723,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 
 	case ssa.OpPPC64LoweredMove, ssa.OpPPC64LoweredMoveShort:
+		if buildcfg.GOPPC64 == 5 {
+			ssaGenPPC970Move(s, v)
+			break
+		}
 
 		bytesPerLoop := int64(32)
 		// This will be used when moving more
@@ -1688,18 +1774,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		dstReg := v.Args[0].Reg()
 		srcReg := v.Args[1].Reg()
 
-		// Keep the upstream VSX sequence for power8 and newer. The ppc970
-		// floor uses same-width VMX loads and stores through the aliased registers.
 		moveLoadOp := ppc64.ALXVD2X
 		moveStoreOp := ppc64.ASTXVD2X
 		moveVectorReg0 := int16(ppc64.REG_VS32)
 		moveVectorReg1 := int16(ppc64.REG_VS33)
-		if buildcfg.GOPPC64 == 5 {
-			moveLoadOp = ppc64.ALVX
-			moveStoreOp = ppc64.ASTVX
-			moveVectorReg0 = ppc64.REG_V0
-			moveVectorReg1 = ppc64.REG_V1
-		}
 
 		// The set of registers used here, must match the clobbered reg list
 		// in PPC64Ops.go.
@@ -1738,9 +1816,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 				p.From.Offset = 16
 			}
 
-			// Generate 16-byte loads and stores. ppc970 uses VMX LVX/STVX;
-			// power8+ retains VSX LXVD2X/STXVD2X. V0/V1 alias VS32/VS33's
-			// low 128 bits, so each loaded value is stored unchanged.
+			// Generate the upstream VSX loads and stores.
 			// Use temp register for index (16)
 			// on the second one.
 
@@ -1812,9 +1888,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 
 		if rem >= 16 {
-			// Generate 16-byte loads and stores. ppc970 uses VMX LVX/STVX;
-			// power8+ retains VSX LXVD2X/STXVD2X. V0 aliases VS32's low 128
-			// bits, so the value round-trips unchanged on either path.
+			// Generate the upstream VSX loads and stores.
 			// Use temp register for index (value 16)
 			// on the second one.
 			p := s.Prog(moveLoadOp)
