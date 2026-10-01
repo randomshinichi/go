@@ -376,7 +376,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		ssa.OpPPC64LoweredAtomicAnd32,
 		ssa.OpPPC64LoweredAtomicOr8,
 		ssa.OpPPC64LoweredAtomicOr32:
-		if buildcfg.GOPPC64 == 5 && (v.Op == ssa.OpPPC64LoweredAtomicAnd8 || v.Op == ssa.OpPPC64LoweredAtomicOr8) {
+		if buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 && (v.Op == ssa.OpPPC64LoweredAtomicAnd8 || v.Op == ssa.OpPPC64LoweredAtomicOr8) {
 			ssaGenAtomicByteRMW(s, v)
 			return
 		}
@@ -488,7 +488,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPC64LoweredAtomicExchange8,
 		ssa.OpPPC64LoweredAtomicExchange32,
 		ssa.OpPPC64LoweredAtomicExchange64:
-		if buildcfg.GOPPC64 == 5 && v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
+		if buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 && v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
 			ssaGenAtomicByteRMW(s, v)
 			return
 		}
