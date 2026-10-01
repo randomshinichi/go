@@ -7,6 +7,38 @@
 #include "go_asm.h"
 #include "textflag.h"
 
+#ifndef GOPPC64_vsx
+// PPC970 cannot execute the VSX loads in the optimized equality body.
+// Byte loads are safe for every alignment and do not read beyond size.
+TEXT runtime·memequal<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-25
+	BR	memeqbody_ppc970<>(SB)
+
+TEXT runtime·memequal_varlen<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-17
+	MOVD	8(R11), R5
+	BR	memeqbody_ppc970<>(SB)
+
+TEXT memeqbody_ppc970<>(SB), NOSPLIT|NOFRAME, $0-0
+	CMP	R5, $0
+	BEQ	memeq_ppc970_equal
+	CMP	R3, R4
+	BEQ	memeq_ppc970_equal
+memeq_ppc970_loop:
+	MOVBZ	(R3), R8
+	MOVBZ	(R4), R9
+	CMPU	R8, R9, CR0
+	BNE	memeq_ppc970_unequal
+	ADD	$1, R3
+	ADD	$1, R4
+	ADD	$-1, R5
+	CMP	R5, $0
+	BNE	memeq_ppc970_loop
+memeq_ppc970_equal:
+	MOVD	$1, R3
+	RET
+memeq_ppc970_unequal:
+	MOVD	$0, R3
+	RET
+#else
 // 4K (smallest case) page size offset mask for PPC64.
 #define PAGE_OFFSET 4095
 
@@ -205,3 +237,5 @@ check0_7:
 	ISEL	CR0EQ, R11, R0, R3
 	RET
 #endif	// tail processing if !defined(GOPPC64_power10)
+
+#endif // GOPPC64_vsx
