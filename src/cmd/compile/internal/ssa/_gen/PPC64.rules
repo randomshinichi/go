@@ -259,10 +259,18 @@
 
 (Ctz(64|32|16|8)NonZero ...) => (Ctz64 ...)
 
-(Ctz64 x) && buildcfg.GOPPC64 <= 8 => (POPCNTD (ANDN <typ.Int64> (ADDconst <typ.Int64> [-1] x) x))
-(Ctz32 x) && buildcfg.GOPPC64 <= 8 => (POPCNTW (MOVWZreg (ANDN <typ.Int> (ADDconst <typ.Int> [-1] x) x)))
-(Ctz16 x) && buildcfg.GOPPC64 <= 8 => (POPCNTW (MOVHZreg (ANDN <typ.Int16> (ADDconst <typ.Int16> [-1] x) x)))
-(Ctz8  x) && buildcfg.GOPPC64 <= 8 => (POPCNTB (MOVBZreg (ANDN <typ.UInt8> (ADDconst <typ.UInt8> [-1] x) x)))
+// PPC970 lacks the population-count instructions. For trailing zero count,
+// (x-1)&^x produces a low-bit mask whose width is Ctz(x); counting leading
+// zeroes and subtracting from the word width also handles x == 0.
+(Ctz64 x) && buildcfg.GOPPC64 == 5 => (SUBFCconst [64] (CNTLZD <typ.Int> (ANDN <typ.Int64> (ADDconst <typ.Int64> [-1] x) x)))
+(Ctz32 x) && buildcfg.GOPPC64 == 5 => (SUBFCconst [32] (CNTLZW <typ.Int> (MOVWZreg (ANDN <typ.Int> (ADDconst <typ.Int> [-1] x) x))))
+(Ctz16 x) && buildcfg.GOPPC64 == 5 => (SUBFCconst [32] (CNTLZW <typ.Int> (MOVHZreg (ANDN <typ.Int16> (ADDconst <typ.Int16> [-1] x) x))))
+(Ctz8  x) && buildcfg.GOPPC64 == 5 => (SUBFCconst [32] (CNTLZW <typ.Int> (MOVBZreg (ANDN <typ.UInt8> (ADDconst <typ.UInt8> [-1] x) x))))
+
+(Ctz64 x) && buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5 => (POPCNTD (ANDN <typ.Int64> (ADDconst <typ.Int64> [-1] x) x))
+(Ctz32 x) && buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5 => (POPCNTW (MOVWZreg (ANDN <typ.Int> (ADDconst <typ.Int> [-1] x) x)))
+(Ctz16 x) && buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5 => (POPCNTW (MOVHZreg (ANDN <typ.Int16> (ADDconst <typ.Int16> [-1] x) x)))
+(Ctz8  x) && buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5 => (POPCNTB (MOVBZreg (ANDN <typ.UInt8> (ADDconst <typ.UInt8> [-1] x) x)))
 
 (Ctz64 x) && buildcfg.GOPPC64 >= 9 => (CNTTZD x)
 (Ctz32 x) && buildcfg.GOPPC64 >= 9 => (CNTTZW (MOVWZreg x))
@@ -273,7 +281,11 @@
 (BitLen32 x) => (SUBFCconst [32] (CNTLZW <typ.Int> x))
 (BitLen(16|8) x) => (BitLen64 (ZeroExt(16|8)to64 x))
 
-(PopCount64 ...) => (POPCNTD ...)
+// Use the portable SWAR population count on PPC970; power8 and newer retain
+// their original hardware popcount selection unchanged.
+(PopCount64 <t> x) && buildcfg.GOPPC64 == 5 => { ppc64PopCount(v, x) }
+(PopCount(32|16|8) <t> x) && buildcfg.GOPPC64 == 5 => (PopCount64 <t> (ZeroExt(32|16|8)to64 x))
+(PopCount64 x) => (POPCNTD x)
 (PopCount(32|16|8) x) => (POPCNT(W|W|B) (MOV(W|H|B)Zreg x))
 
 (And(64|32|16|8) ...) => (AND ...)

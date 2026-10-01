@@ -1056,6 +1056,31 @@ func resetCopy(v *Value, arg *Value) bool {
 	return true
 }
 
+// ppc64PopCount computes a 64-bit population count with the portable SWAR
+// sequence used by math/bits.OnesCount64. The PPC970 lacks POPCNTD, so keep
+// this lowering to shifts, masks, adds, and subtracts available on that CPU.
+func ppc64PopCount(v, x *Value) *Value {
+	b, pos, t := v.Block, v.Pos, v.Type
+	shift := func(x *Value, n int64) *Value {
+		return b.NewValue1I(pos, OpPPC64SRDconst, t, n, x)
+	}
+	and := func(x *Value, mask int64) *Value {
+		constant := b.NewValue0I(pos, OpPPC64MOVDconst, t, mask)
+		return b.NewValue2(pos, OpPPC64AND, t, x, constant)
+	}
+	add := func(x, y *Value) *Value {
+		return b.NewValue2(pos, OpPPC64ADD, t, x, y)
+	}
+
+	x = b.NewValue2(pos, OpPPC64SUB, t, x, and(shift(x, 1), 0x5555555555555555))
+	x = add(and(x, 0x3333333333333333), and(shift(x, 2), 0x3333333333333333))
+	x = and(add(x, shift(x, 4)), 0x0f0f0f0f0f0f0f0f)
+	x = add(x, shift(x, 8))
+	x = add(x, shift(x, 16))
+	x = add(x, shift(x, 32))
+	return and(x, 0x7f)
+}
+
 // clobberIfDead resets v when use count is 1. Returns true.
 // clobberIfDead is used by rewrite rules to decrement
 // use counts of v's args when v is dead and never used.

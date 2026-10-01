@@ -686,8 +686,7 @@ func rewriteValuePPC64(v *Value) bool {
 	case OpPopCount32:
 		return rewriteValuePPC64_OpPopCount32(v)
 	case OpPopCount64:
-		v.Op = OpPPC64POPCNTD
-		return true
+		return rewriteValuePPC64_OpPopCount64(v)
 	case OpPopCount8:
 		return rewriteValuePPC64_OpPopCount8(v)
 	case OpPrefetchCache:
@@ -1553,11 +1552,33 @@ func rewriteValuePPC64_OpCtz16(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (Ctz16 x)
-	// cond: buildcfg.GOPPC64 <= 8
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (SUBFCconst [32] (CNTLZW <typ.Int> (MOVHZreg (ANDN <typ.Int16> (ADDconst <typ.Int16> [-1] x) x))))
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64SUBFCconst)
+		v.AuxInt = int64ToAuxInt(32)
+		v0 := b.NewValue0(v.Pos, OpPPC64CNTLZW, typ.Int)
+		v1 := b.NewValue0(v.Pos, OpPPC64MOVHZreg, typ.Int64)
+		v2 := b.NewValue0(v.Pos, OpPPC64ANDN, typ.Int16)
+		v3 := b.NewValue0(v.Pos, OpPPC64ADDconst, typ.Int16)
+		v3.AuxInt = int64ToAuxInt(-1)
+		v3.AddArg(x)
+		v2.AddArg2(v3, x)
+		v1.AddArg(v2)
+		v0.AddArg(v1)
+		v.AddArg(v0)
+		return true
+	}
+	// match: (Ctz16 x)
+	// cond: buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5
 	// result: (POPCNTW (MOVHZreg (ANDN <typ.Int16> (ADDconst <typ.Int16> [-1] x) x)))
 	for {
 		x := v_0
-		if !(buildcfg.GOPPC64 <= 8) {
+		if !(buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5) {
 			break
 		}
 		v.reset(OpPPC64POPCNTW)
@@ -1594,11 +1615,33 @@ func rewriteValuePPC64_OpCtz32(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (Ctz32 x)
-	// cond: buildcfg.GOPPC64 <= 8
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (SUBFCconst [32] (CNTLZW <typ.Int> (MOVWZreg (ANDN <typ.Int> (ADDconst <typ.Int> [-1] x) x))))
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64SUBFCconst)
+		v.AuxInt = int64ToAuxInt(32)
+		v0 := b.NewValue0(v.Pos, OpPPC64CNTLZW, typ.Int)
+		v1 := b.NewValue0(v.Pos, OpPPC64MOVWZreg, typ.Int64)
+		v2 := b.NewValue0(v.Pos, OpPPC64ANDN, typ.Int)
+		v3 := b.NewValue0(v.Pos, OpPPC64ADDconst, typ.Int)
+		v3.AuxInt = int64ToAuxInt(-1)
+		v3.AddArg(x)
+		v2.AddArg2(v3, x)
+		v1.AddArg(v2)
+		v0.AddArg(v1)
+		v.AddArg(v0)
+		return true
+	}
+	// match: (Ctz32 x)
+	// cond: buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5
 	// result: (POPCNTW (MOVWZreg (ANDN <typ.Int> (ADDconst <typ.Int> [-1] x) x)))
 	for {
 		x := v_0
-		if !(buildcfg.GOPPC64 <= 8) {
+		if !(buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5) {
 			break
 		}
 		v.reset(OpPPC64POPCNTW)
@@ -1633,11 +1676,31 @@ func rewriteValuePPC64_OpCtz64(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (Ctz64 x)
-	// cond: buildcfg.GOPPC64 <= 8
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (SUBFCconst [64] (CNTLZD <typ.Int> (ANDN <typ.Int64> (ADDconst <typ.Int64> [-1] x) x)))
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64SUBFCconst)
+		v.AuxInt = int64ToAuxInt(64)
+		v0 := b.NewValue0(v.Pos, OpPPC64CNTLZD, typ.Int)
+		v1 := b.NewValue0(v.Pos, OpPPC64ANDN, typ.Int64)
+		v2 := b.NewValue0(v.Pos, OpPPC64ADDconst, typ.Int64)
+		v2.AuxInt = int64ToAuxInt(-1)
+		v2.AddArg(x)
+		v1.AddArg2(v2, x)
+		v0.AddArg(v1)
+		v.AddArg(v0)
+		return true
+	}
+	// match: (Ctz64 x)
+	// cond: buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5
 	// result: (POPCNTD (ANDN <typ.Int64> (ADDconst <typ.Int64> [-1] x) x))
 	for {
 		x := v_0
-		if !(buildcfg.GOPPC64 <= 8) {
+		if !(buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5) {
 			break
 		}
 		v.reset(OpPPC64POPCNTD)
@@ -1668,11 +1731,33 @@ func rewriteValuePPC64_OpCtz8(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (Ctz8 x)
-	// cond: buildcfg.GOPPC64 <= 8
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (SUBFCconst [32] (CNTLZW <typ.Int> (MOVBZreg (ANDN <typ.UInt8> (ADDconst <typ.UInt8> [-1] x) x))))
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64SUBFCconst)
+		v.AuxInt = int64ToAuxInt(32)
+		v0 := b.NewValue0(v.Pos, OpPPC64CNTLZW, typ.Int)
+		v1 := b.NewValue0(v.Pos, OpPPC64MOVBZreg, typ.Int64)
+		v2 := b.NewValue0(v.Pos, OpPPC64ANDN, typ.UInt8)
+		v3 := b.NewValue0(v.Pos, OpPPC64ADDconst, typ.UInt8)
+		v3.AuxInt = int64ToAuxInt(-1)
+		v3.AddArg(x)
+		v2.AddArg2(v3, x)
+		v1.AddArg(v2)
+		v0.AddArg(v1)
+		v.AddArg(v0)
+		return true
+	}
+	// match: (Ctz8 x)
+	// cond: buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5
 	// result: (POPCNTB (MOVBZreg (ANDN <typ.UInt8> (ADDconst <typ.UInt8> [-1] x) x)))
 	for {
 		x := v_0
-		if !(buildcfg.GOPPC64 <= 8) {
+		if !(buildcfg.GOPPC64 <= 8 && buildcfg.GOPPC64 != 5) {
 			break
 		}
 		v.reset(OpPPC64POPCNTB)
@@ -13209,6 +13294,22 @@ func rewriteValuePPC64_OpPopCount16(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	typ := &b.Func.Config.Types
+	// match: (PopCount16 <t> x)
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (PopCount64 <t> (ZeroExt16to64 x))
+	for {
+		t := v.Type
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPopCount64)
+		v.Type = t
+		v0 := b.NewValue0(v.Pos, OpZeroExt16to64, typ.UInt64)
+		v0.AddArg(x)
+		v.AddArg(v0)
+		return true
+	}
 	// match: (PopCount16 x)
 	// result: (POPCNTW (MOVHZreg x))
 	for {
@@ -13224,6 +13325,22 @@ func rewriteValuePPC64_OpPopCount32(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	typ := &b.Func.Config.Types
+	// match: (PopCount32 <t> x)
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (PopCount64 <t> (ZeroExt32to64 x))
+	for {
+		t := v.Type
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPopCount64)
+		v.Type = t
+		v0 := b.NewValue0(v.Pos, OpZeroExt32to64, typ.UInt64)
+		v0.AddArg(x)
+		v.AddArg(v0)
+		return true
+	}
 	// match: (PopCount32 x)
 	// result: (POPCNTW (MOVWZreg x))
 	for {
@@ -13235,10 +13352,48 @@ func rewriteValuePPC64_OpPopCount32(v *Value) bool {
 		return true
 	}
 }
+func rewriteValuePPC64_OpPopCount64(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (PopCount64 <t> x)
+	// cond: buildcfg.GOPPC64 == 5
+	// result: { ppc64PopCount(v, x) }
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.copyOf(ppc64PopCount(v, x))
+		return true
+	}
+	// match: (PopCount64 x)
+	// result: (POPCNTD x)
+	for {
+		x := v_0
+		v.reset(OpPPC64POPCNTD)
+		v.AddArg(x)
+		return true
+	}
+}
 func rewriteValuePPC64_OpPopCount8(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	typ := &b.Func.Config.Types
+	// match: (PopCount8 <t> x)
+	// cond: buildcfg.GOPPC64 == 5
+	// result: (PopCount64 <t> (ZeroExt8to64 x))
+	for {
+		t := v.Type
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPopCount64)
+		v.Type = t
+		v0 := b.NewValue0(v.Pos, OpZeroExt8to64, typ.UInt64)
+		v0.AddArg(x)
+		v.AddArg(v0)
+		return true
+	}
 	// match: (PopCount8 x)
 	// result: (POPCNTB (MOVBZreg x))
 	for {
