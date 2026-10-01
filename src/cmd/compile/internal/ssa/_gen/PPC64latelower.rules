@@ -18,6 +18,11 @@
 (SETBC [1] cmp) && buildcfg.GOPPC64 <= 9 => (ISELZ [1] (MOVDconst [1]) cmp)
 (SETBCR [1] cmp) && buildcfg.GOPPC64 <= 9 => (ISELZ [5] (MOVDconst [1]) cmp)
 
+// ISEL is absent on PPC970. Replace any remaining ISEL/ISELZ only after
+// the regular ISEL folds and SETBC lowering have had a chance to run.
+(ISEL [a] x y z) && buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 => (ISEL970 [a] x y z)
+(ISELZ [a] x z) && buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 => (ISELZ970 [a] x z)
+
 // The upper bits of the smaller than register values is undefined. Take advantage of that.
 (AND <t> x:(MOVDconst [m]) n) && t.Size() <= 2 => (ANDconst [int64(int16(m))] n)
 

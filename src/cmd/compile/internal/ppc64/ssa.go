@@ -459,6 +459,81 @@ func ssaGenPPC970Move(s *ssagen.State, v *ssa.Value) {
 	}
 }
 
+// ssaGenPPC970ISEL replaces the 970-illegal ISEL instruction with a
+// branchless mask select. MFCR reads the selected condition bit without
+// clobbering condition registers; the result and allocated temporary hold the
+// mask and the first partial result. The expansion never writes R0.
+func ssaGenPPC970ISEL(s *ssagen.State, v *ssa.Value, iselz bool) {
+	if buildcfg.GOARCH != "ppc64" || buildcfg.GOPPC64 != 5 {
+		v.Fatalf("ppc970 ISEL lowering used outside big-endian ppc970")
+	}
+	if v.AuxInt < 0 || v.AuxInt > 7 {
+		v.Fatalf("invalid ppc970 ISEL condition %d", v.AuxInt)
+	}
+
+	trueReg := v.Args[0].Reg()
+	falseReg := int16(ppc64.REGZERO)
+	if !iselz {
+		falseReg = v.Args[1].Reg()
+	}
+	if v.AuxInt&4 != 0 {
+		trueReg, falseReg = falseReg, trueReg
+	}
+
+	out, tmp := v.Reg(), v.RegTmp()
+	// ISEL's flags operand is an ordering dependency, not a register input:
+	// its condition bit is always in CR0. MFCR places CR0 in the most
+	// significant nibble of the low word. RLWINM rotates the chosen bit to
+	// bit 0 and masks away all others; its shift remains in the 0..31 range.
+	rotate := (int(v.AuxInt&3) + 1) & 31
+	p := s.Prog(ppc64.AMOVW)
+	p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc64.REG_CR}
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	p = s.Prog(ppc64.ARLWNM)
+	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(rotate)}
+	p.Reg = out
+	p.AddRestSourceConst(31)
+	p.AddRestSourceConst(31)
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	p = s.Prog(ppc64.ANEG)
+	p.From = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+
+	// A zero constant is allocated to the architectural R0 value. The
+	// assembler treats R0 specially in the RS operand of logical ops, so
+	// handle either zero arm without using R0 as an encoded source.
+	switch {
+	case trueReg == ppc64.REGZERO && falseReg == ppc64.REGZERO:
+		p = s.Prog(ppc64.AXOR)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+		p.Reg = out
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	case trueReg == ppc64.REGZERO:
+		p = s.Prog(ppc64.AANDN)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+		p.Reg = falseReg
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	case falseReg == ppc64.REGZERO:
+		p = s.Prog(ppc64.AAND)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+		p.Reg = trueReg
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	default:
+		p = s.Prog(ppc64.AAND)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+		p.Reg = trueReg
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: tmp}
+		p = s.Prog(ppc64.AANDN)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+		p.Reg = falseReg
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+		p = s.Prog(ppc64.AOR)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: tmp}
+		p.Reg = out
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: out}
+	}
+}
+
 func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	switch v.Op {
 	case ssa.OpCopy:
@@ -1392,6 +1467,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To.Index = v.Args[1].Reg()
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
+
+	case ssa.OpPPC64ISEL970, ssa.OpPPC64ISELZ970:
+		ssaGenPPC970ISEL(s, v, v.Op == ssa.OpPPC64ISELZ970)
+		return
 
 	case ssa.OpPPC64ISEL, ssa.OpPPC64ISELZ:
 		// ISEL  AuxInt ? arg0 : arg1

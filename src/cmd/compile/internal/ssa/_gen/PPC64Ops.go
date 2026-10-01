@@ -428,6 +428,10 @@ func init() {
 		// Note, auxInt^4 inverts the comparison condition. For example, LT^4 becomes GE, and "ISEL [a] x y z" is equivalent to ISEL [a^4] y x z".
 		{name: "ISEL", argLength: 3, reg: crgp21, asm: "ISEL", aux: "Int32", typ: "Int32"},
 		{name: "ISELZ", argLength: 2, reg: crgp11, asm: "ISEL", aux: "Int32"},
+		// PPC970 has no ISEL. The fallback expands these ops to an MFCR-based
+		// mask select, so the result must not overlap an input and needs a temp.
+		{name: "ISEL970", argLength: 3, reg: crgp21, aux: "Int32", typ: "Int32", resultNotInArgs: true, needIntTemp: true},
+		{name: "ISELZ970", argLength: 2, reg: crgp11, aux: "Int32", resultNotInArgs: true, needIntTemp: true},
 
 		// SETBC auxInt values 0=LT 1=GT 2=EQ     (CRbit=1)? 1 : 0
 		{name: "SETBC", argLength: 1, reg: crgp, asm: "SETBC", aux: "Int32", typ: "Int32"},

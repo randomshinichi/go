@@ -16,6 +16,8 @@ func rewriteValuePPC64latelower(v *Value) bool {
 		return rewriteValuePPC64latelower_OpPPC64CMPconst(v)
 	case OpPPC64ISEL:
 		return rewriteValuePPC64latelower_OpPPC64ISEL(v)
+	case OpPPC64ISELZ:
+		return rewriteValuePPC64latelower_OpPPC64ISELZ(v)
 	case OpPPC64RLDICL:
 		return rewriteValuePPC64latelower_OpPPC64RLDICL(v)
 	case OpPPC64RLDICLCC:
@@ -652,6 +654,42 @@ func rewriteValuePPC64latelower_OpPPC64ISEL(v *Value) bool {
 		v.reset(OpPPC64ISELZ)
 		v.AuxInt = int32ToAuxInt(a ^ 0x4)
 		v.AddArg2(y, z)
+		return true
+	}
+	// match: (ISEL [a] x y z)
+	// cond: buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5
+	// result: (ISEL970 [a] x y z)
+	for {
+		a := auxIntToInt32(v.AuxInt)
+		x := v_0
+		y := v_1
+		z := v_2
+		if !(buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64ISEL970)
+		v.AuxInt = int32ToAuxInt(a)
+		v.AddArg3(x, y, z)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC64latelower_OpPPC64ISELZ(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (ISELZ [a] x z)
+	// cond: buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5
+	// result: (ISELZ970 [a] x z)
+	for {
+		a := auxIntToInt32(v.AuxInt)
+		x := v_0
+		z := v_1
+		if !(buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64ISELZ970)
+		v.AuxInt = int32ToAuxInt(a)
+		v.AddArg2(x, z)
 		return true
 	}
 	return false

@@ -17,7 +17,17 @@ TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$0-80
 	MOVD	R9, R8
 	SYSCALL	R10
 	MOVD	$-1, R6
+#ifdef GOPPC64_ppc970
+	BVC	syscall6_ok
+	MOVD	R3, R5 // errno = R3 on error
+	MOVD	R6, R3 // r1 = -1 on error
+	BR	syscall6_done
+syscall6_ok:
+	MOVD	R0, R5 // errno = 0 on success
+syscall6_done:
+#else
 	ISEL	CR0SO, R3, R0, R5 // errno = (error) ? R3 : 0
 	ISEL	CR0SO, R6, R3, R3 // r1 = (error) ? -1 : 0
-	MOVD	$0, R4            // r2 is not used on linux/ppc64
+#endif
+	MOVD	$0, R4 // r2 is not used on linux/ppc64
 	RET
