@@ -1836,6 +1836,24 @@ func rewriteValuePPC64_OpCvt32to32F(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (Cvt32to32F x)
+	// cond: buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64"
+	// result: (FRSP (FCFID (MTVSRD (SignExt32to64 x))))
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64") {
+			break
+		}
+		v.reset(OpPPC64FRSP)
+		v0 := b.NewValue0(v.Pos, OpPPC64FCFID, typ.Float64)
+		v1 := b.NewValue0(v.Pos, OpPPC64MTVSRD, typ.Float64)
+		v2 := b.NewValue0(v.Pos, OpSignExt32to64, typ.Int64)
+		v2.AddArg(x)
+		v1.AddArg(v2)
+		v0.AddArg(v1)
+		v.AddArg(v0)
+		return true
+	}
+	// match: (Cvt32to32F x)
 	// result: (FCFIDS (MTVSRD (SignExt32to64 x)))
 	for {
 		x := v_0
@@ -1899,6 +1917,17 @@ func rewriteValuePPC64_OpCvt64to32F(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	typ := &b.Func.Config.Types
+	// match: (Cvt64to32F x)
+	// cond: buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64"
+	// result: { ppc64Int64ToFloat32(v, x) }
+	for {
+		x := v_0
+		if !(buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64") {
+			break
+		}
+		v.copyOf(ppc64Int64ToFloat32(v, x))
+		return true
+	}
 	// match: (Cvt64to32F x)
 	// result: (FCFIDS (MTVSRD x))
 	for {

@@ -62,6 +62,8 @@
 (Div(32|64)F ...) => ((FDIVS|FDIV) ...)
 
 // Lowering float <=> int
+(Cvt32to32F x) && buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64" => (FRSP (FCFID (MTVSRD (SignExt32to64 x))))
+(Cvt64to32F x) && buildcfg.GOPPC64 == 5 && buildcfg.GOARCH == "ppc64" => { ppc64Int64ToFloat32(v, x) }
 (Cvt32to(32|64)F x) => ((FCFIDS|FCFID) (MTVSRD (SignExt32to64 x)))
 (Cvt64to(32|64)F x) => ((FCFIDS|FCFID) (MTVSRD x))
 

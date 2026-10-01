@@ -1056,6 +1056,48 @@ func resetCopy(v *Value, arg *Value) bool {
 	return true
 }
 
+// ppc64Int64ToFloat32 rounds an integer to a 24-bit significand before using
+// the PPC970's FCFID and FRSP. This avoids FCFIDS and binary64 double-rounding.
+func ppc64Int64ToFloat32(v, x *Value) *Value {
+	b, pos := v.Block, v.Pos
+	t := &b.Func.Config.Types
+	i64 := t.Int64
+	c := func(n int64) *Value { return b.NewValue0I(pos, OpPPC64MOVDconst, i64, n) }
+	unary := func(op Op, arg *Value) *Value { return b.NewValue1(pos, op, i64, arg) }
+	unaryI := func(op Op, aux int64, arg *Value) *Value {
+		return b.NewValue1I(pos, op, i64, aux, arg)
+	}
+	binary := func(op Op, a, z *Value) *Value { return b.NewValue2(pos, op, i64, a, z) }
+
+	// s = max(0, 40 - clz(abs(x))), the number of discarded bits.
+	sign := unaryI(OpPPC64SRADconst, 63, x)
+	magnitude := binary(OpPPC64SUB, binary(OpPPC64XOR, x, sign), sign)
+	shiftRaw := binary(OpPPC64SUB, c(40), unary(OpPPC64CNTLZD, magnitude))
+	shiftSign := unaryI(OpPPC64SRADconst, 63, shiftRaw)
+	shift := binary(OpPPC64ANDN, shiftRaw, shiftSign)
+
+	// Bias = 2^(s-1)-1 + (q&1), with both terms zero for s=0.
+	q := binary(OpPPC64SRD, magnitude, shift)
+	one := c(1)
+	lowMask := unaryI(OpPPC64ADDconst, -1, binary(OpPPC64SLD, one, shift))
+	halfMinusOne := unaryI(OpPPC64SRDconst, 1, lowMask)
+	negShift := unary(OpPPC64NEG, shift)
+	nonzero := unaryI(OpPPC64SRDconst, 63, binary(OpPPC64OR, shift, negShift))
+	qOdd := unaryI(OpPPC64ANDconst, 1, q)
+	qOdd = binary(OpPPC64AND, qOdd, nonzero)
+	bias := binary(OpPPC64ADD, halfMinusOne, qOdd)
+	roundedMagnitude := binary(OpPPC64SRD, binary(OpPPC64ADD, magnitude, bias), shift)
+	rounded := binary(OpPPC64SUB, binary(OpPPC64XOR, roundedMagnitude, sign), sign)
+	scale := binary(OpPPC64SLD, one, shift)
+
+	toFloat64 := func(integer *Value) *Value {
+		bits := b.NewValue1(pos, OpPPC64MTVSRD, t.Float64, integer)
+		return b.NewValue1(pos, OpPPC64FCFID, t.Float64, bits)
+	}
+	product := b.NewValue2(pos, OpPPC64FMUL, t.Float64, toFloat64(rounded), toFloat64(scale))
+	return b.NewValue1(pos, OpPPC64FRSP, v.Type, product)
+}
+
 // ppc64CopySign replaces the PPC970's unavailable FCPSGN with sign-bit
 // surgery. The GPR/FPR moves are lowered through the private scratch slot.
 func ppc64CopySign(v, x, y *Value) *Value {
