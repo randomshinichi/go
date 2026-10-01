@@ -103,6 +103,225 @@ func storeByType(t *types.Type) obj.As {
 	panic("bad store type")
 }
 
+// ssaGenAtomicByteRMW implements PPC970 byte atomics with a masked doubleword
+// reservation. The word reservation makes updates to adjacent bytes conflict and
+// retry, preserving atomicity even though the 970 has no byte LL/SC instructions.
+func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
+	ptr := v.Args[0].Reg()
+	val := v.Args[1].Reg()
+	var base int16
+	if v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
+		base = ptr // arg0 is clobberable and becomes the aligned address.
+	} else {
+		base = v.RegTmp()
+	}
+	const shift = ppc64.REGZERO // R0 is reserved from register allocation.
+	const word = ppc64.REGTMP // R31 is reserved as the assembler scratch register.
+
+	// PPC970 is big-endian: byte p in the word is shifted by
+	// (7-(p&7))*8 = 56-8*(p&7). The low 3 bits of ~(p&7)
+	// are exactly 7-(p&7), and SLD uses only the low 6 shift bits.
+	p := s.Prog(ppc64.AANDCC)
+	p.From.Type = obj.TYPE_CONST
+	p.From.Offset = 7
+	p.Reg = ptr
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = shift
+	p = s.Prog(ppc64.ANOR)
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = shift
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = shift
+	p = s.Prog(ppc64.ASLD)
+	p.From.Type = obj.TYPE_CONST
+	p.From.Offset = 3
+	p.Reg = shift
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = shift
+
+	// Align arg0 down to the containing 8-byte word. RLDICR with SH=0,
+	// ME=60 preserves address bits 63..3 and clears the low three bits.
+	p = s.Prog(ppc64.ARLDICR)
+	p.From.Type = obj.TYPE_CONST
+	p.From.Offset = 0
+	p.Reg = ptr
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = base
+	p.AddRestSourceConst(60)
+
+	if v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
+		p := s.Prog(ppc64.ALWSYNC)
+		p.To.Type = obj.TYPE_NONE
+		loop := s.Prog(ppc64.ALDAR)
+		loop.From.Type = obj.TYPE_MEM
+		loop.From.Reg = base
+		loop.To.Type = obj.TYPE_REG
+		loop.To.Reg = word
+
+		// Delta-XOR updates only the selected lane. The result register
+		// holds delta through the SC, then recovers old = delta ^ new.
+		out := v.Reg0()
+		p = s.Prog(ppc64.ASRD)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = shift
+		p.Reg = word
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 255
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AXOR)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = val
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 255
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.ASLD)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = shift
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AXOR)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = out
+		p.Reg = word
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = word
+
+		p = s.Prog(ppc64.ASTDCCC)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = word
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = base
+		p = s.Prog(ppc64.ABNE)
+		p.To.Type = obj.TYPE_BRANCH
+		p.To.SetTarget(loop)
+		p = s.Prog(ppc64.ASRD)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = shift
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 255
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AXOR)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = val
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 255
+		p.Reg = out
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = out
+
+		// The input pointer is temporarily aligned in-place above. Restore
+		// its original byte offset before leaving this unsafe-point region.
+		p = s.Prog(ppc64.ARLDICL)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 61 // logical shift right by 3
+		p.Reg = shift
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = shift
+		p.AddRestSourceConst(3)
+		p = s.Prog(ppc64.ANOR)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = shift
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = shift
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 7
+		p.Reg = shift
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = shift
+		p = s.Prog(ppc64.AADD)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = shift
+		p.Reg = ptr
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = ptr
+		p = s.Prog(ppc64.AISYNC)
+		p.To.Type = obj.TYPE_NONE
+		return
+	}
+
+	// Preserve the existing release/acquire LWSYNC placement for And8/Or8.
+	p = s.Prog(ppc64.ALWSYNC)
+	p.To.Type = obj.TYPE_NONE
+	loop := s.Prog(ppc64.ALDAR)
+	loop.From.Type = obj.TYPE_MEM
+	loop.From.Reg = base
+	loop.To.Type = obj.TYPE_REG
+	loop.To.Reg = word
+
+	// Or only sets bits in the target byte. And clears bits in the target
+	// byte by ANDing with the complement of (~val & 0xff) shifted into it.
+	if v.Op == ssa.OpPPC64LoweredAtomicAnd8 {
+		p = s.Prog(ppc64.ANOR)
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = val
+		p.Reg = val
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = ptr
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 255
+		p.Reg = ptr
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = ptr
+	} else {
+		p = s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 255
+		p.Reg = val
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = ptr
+	}
+	p = s.Prog(ppc64.ASLD)
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = shift
+	p.Reg = ptr
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = ptr
+	if v.Op == ssa.OpPPC64LoweredAtomicAnd8 {
+		p = s.Prog(ppc64.AANDN)
+	} else {
+		p = s.Prog(ppc64.AOR)
+	}
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = ptr
+	p.Reg = word
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = word
+	p = s.Prog(ppc64.ASTDCCC)
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = word
+	p.To.Type = obj.TYPE_MEM
+	p.To.Reg = base
+	p = s.Prog(ppc64.ABNE)
+	p.To.Type = obj.TYPE_BRANCH
+	p.To.SetTarget(loop)
+	p = s.Prog(ppc64.ALWSYNC)
+	p.To.Type = obj.TYPE_NONE
+}
+
 func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	switch v.Op {
 	case ssa.OpCopy:
@@ -130,6 +349,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		ssa.OpPPC64LoweredAtomicAnd32,
 		ssa.OpPPC64LoweredAtomicOr8,
 		ssa.OpPPC64LoweredAtomicOr32:
+		if buildcfg.GOPPC64 == 5 && (v.Op == ssa.OpPPC64LoweredAtomicAnd8 || v.Op == ssa.OpPPC64LoweredAtomicOr8) {
+			ssaGenAtomicByteRMW(s, v)
+			return
+		}
 		// LWSYNC
 		// LBAR/LWAR	(Rarg0), Rtmp
 		// AND/OR	Rarg1, Rtmp
@@ -238,6 +461,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPC64LoweredAtomicExchange8,
 		ssa.OpPPC64LoweredAtomicExchange32,
 		ssa.OpPPC64LoweredAtomicExchange64:
+		if buildcfg.GOPPC64 == 5 && v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
+			ssaGenAtomicByteRMW(s, v)
+			return
+		}
 		// LWSYNC
 		// LDAR/LWAR/LBAR        (Rarg0), Rout
 		// STDCCC/STWCCC/STBWCCC Rout, (Rarg0)

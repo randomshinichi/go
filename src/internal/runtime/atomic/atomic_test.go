@@ -225,6 +225,100 @@ func TestOr8(t *testing.T) {
 	}
 }
 
+func TestPPC970ByteRMWSharedWord(t *testing.T) {
+	const iterations = 1 << 12
+	var word uint64
+	bytes := (*[8]uint8)(unsafe.Pointer(&word))
+	for i := range bytes {
+		bytes[i] = 0x55
+	}
+
+	done := make(chan struct{}, len(bytes))
+	for offset := range bytes {
+		go func(i int) {
+			want := uint8(0x55)
+			for n := 0; n < iterations; n++ {
+				bit := uint8(1 << uint((n+i)&7))
+				atomic.Or8(&bytes[i], bit)
+				want |= bit
+				atomic.And8(&bytes[i], ^bit)
+				want &^= bit
+				if got := atomic.Xchg8(&bytes[i], uint8(0xaa)); got != want {
+					t.Errorf("offset %d Xchg8 prior: want %#02x, got %#02x", i, want, got)
+					return
+				}
+				want = 0xaa
+				atomic.Store8(&bytes[i], 0x55)
+				want = 0x55
+				if got := atomic.Load8(&bytes[i]); got != want {
+					t.Errorf("offset %d Load8: want %#02x, got %#02x", i, want, got)
+					return
+				}
+			}
+			done <- struct{}{}
+		}(offset)
+	}
+	for range bytes {
+		<-done
+	}
+	for i, got := range bytes {
+		if got != 0x55 {
+			t.Errorf("neighbor byte %d corrupted: want 0x55, got %#02x", i, got)
+		}
+	}
+}
+
+// byteCAS uses a containing-word CAS so the test can exercise byte lane
+// selection even though the runtime atomic API has no CAS8 operation.
+func byteCAS(ptr *uint8, old, new uint8) bool {
+	addr := uintptr(unsafe.Pointer(ptr))
+	word := (*uint64)(unsafe.Pointer(addr &^ 7))
+	shift := uint((7 - (addr & 7)) * 8)
+	mask := uint64(0xff) << shift
+	for {
+		prior := atomic.Load64(word)
+		if uint8(prior>>shift) != old {
+			return false
+		}
+		next := prior&^mask | uint64(new)<<shift
+		if atomic.Cas64(word, prior, next) {
+			return true
+		}
+	}
+}
+
+func TestPPC970ByteCASSharedWord(t *testing.T) {
+	const iterations = 1 << 12
+	var word uint64
+	bytes := (*[8]uint8)(unsafe.Pointer(&word))
+	for i := range bytes {
+		bytes[i] = uint8(i)
+	}
+	done := make(chan struct{}, len(bytes))
+	for offset := range bytes {
+		go func(i int) {
+			want := uint8(i)
+			for n := 0; n < iterations; n++ {
+				next := want + 1
+				if !byteCAS(&bytes[i], want, next) {
+					t.Errorf("offset %d byteCAS(%#02x, %#02x) failed", i, want, next)
+					return
+				}
+				want = next
+			}
+			done <- struct{}{}
+		}(offset)
+	}
+	for range bytes {
+		<-done
+	}
+	for i, got := range bytes {
+		if want := uint8(i + iterations); got != want {
+			t.Errorf("offset %d final byte: want %#02x, got %#02x", i, want, got)
+		}
+	}
+}
+
 func TestOr(t *testing.T) {
 	// Basic sanity check.
 	x := uint32(0)
