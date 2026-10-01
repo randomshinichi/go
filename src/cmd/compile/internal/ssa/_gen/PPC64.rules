@@ -812,6 +812,12 @@
 	&& ((is16Bit(int64(off1+off2)) && (x.Op != OpSB || p.Uses == 1)) || (supportsPPC64PCRel() && is32Bit(int64(off1+off2)))) =>
     (MOV(D|W|H|B)storezero [off1+off2] {mergeSym(sym1,sym2)} x mem)
 
+// PPC970 has no byte reservation instructions. Keep the other targets'
+// register allocation and flag metadata unchanged.
+(LoweredAtomicExchange8 ptr val mem) && buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 => (LoweredAtomicExchange8PPC970 ptr val mem)
+(LoweredAtomicAnd8 ptr val mem) && buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 => (LoweredAtomicAnd8PPC970 ptr val mem)
+(LoweredAtomicOr8 ptr val mem) && buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 => (LoweredAtomicOr8PPC970 ptr val mem)
+
 // atomic intrinsics
 (AtomicLoad(8|32|64|Ptr)  ptr mem) => (LoweredAtomicLoad(8|32|64|Ptr) [1] ptr mem)
 (AtomicLoadAcq(32|64)     ptr mem) => (LoweredAtomicLoad(32|64) [0] ptr mem)

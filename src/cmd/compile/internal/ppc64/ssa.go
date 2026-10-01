@@ -111,12 +111,15 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	val := v.Args[1].Reg()
 	const word = ppc64.REGTMP // R31 is scratch until LDAR loads the reserved word.
 	var base, shift int16
-	if v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
+	if v.Op == ssa.OpPPC64LoweredAtomicExchange8PPC970 {
 		base = ptr // arg0 is restored before leaving the unsafe-point region.
 		shift = v.RegTmp()
 	} else {
 		base = v.RegTmp()
-		shift = ptr // arg0 is clobberable; keep the aligned address in base.
+		shift = val // arg1 is clobberable; save the byte operand in R31.
+		p := s.Prog(ppc64.AMOVD)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: val}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: word}
 	}
 	captureLane := func() {
 		p := s.Prog(ppc64.AANDCC)
@@ -149,14 +152,20 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	p.From.Reg = shift
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = shift
+	// For And8/Or8 the aligned base is in the allocated temp, so ptr is
+	// dead and can hold the mask. Exchange must retain ptr until restore.
+	mask := ptr
+	if base == ptr {
+		mask = word
+	}
 	p = s.Prog(ppc64.AMOVD)
 	p.From.Type = obj.TYPE_CONST
 	p.From.Offset = 7
 	p.To.Type = obj.TYPE_REG
-	p.To.Reg = word
+	p.To.Reg = mask
 	p = s.Prog(ppc64.AAND)
 	p.From.Type = obj.TYPE_REG
-	p.From.Reg = word
+	p.From.Reg = mask
 	p.Reg = shift
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = shift
@@ -167,7 +176,7 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = shift
 
-	if v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
+	if v.Op == ssa.OpPPC64LoweredAtomicExchange8PPC970 {
 		p := s.Prog(ppc64.ALWSYNC)
 		p.To.Type = obj.TYPE_NONE
 		loop := s.Prog(ppc64.ALDAR)
@@ -280,22 +289,15 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 		return
 	}
 
-	// For And8/Or8, ptr holds the shift, but is also needed for the byte
-	// mask. Save the bounded shift in R31, compute the mask once before the
-	// retry loop, then reuse R31 for the reserved word.
-	p = s.Prog(ppc64.AMOVD)
-	p.From.Type = obj.TYPE_REG
-	p.From.Reg = shift
-	p.To.Type = obj.TYPE_REG
-	p.To.Reg = word
-
+	// R31 still holds the original byte value. Build the shifted mask once
+	// before the retry loop; LDAR can then reuse R31 for the reserved word.
 	// Or only sets bits in the target byte. And clears bits in the target
 	// byte by ANDing with the complement of (~val & 0xff) shifted into it.
-	if v.Op == ssa.OpPPC64LoweredAtomicAnd8 {
+	if v.Op == ssa.OpPPC64LoweredAtomicAnd8PPC970 {
 		p = s.Prog(ppc64.ANOR)
 		p.From.Type = obj.TYPE_REG
-		p.From.Reg = val
-		p.Reg = val
+		p.From.Reg = word
+		p.Reg = word
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = ptr
 		p = s.Prog(ppc64.AANDCC)
@@ -308,13 +310,13 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 		p = s.Prog(ppc64.AANDCC)
 		p.From.Type = obj.TYPE_CONST
 		p.From.Offset = 255
-		p.Reg = val
+		p.Reg = word
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = ptr
 	}
 	p = s.Prog(ppc64.ASLD)
 	p.From.Type = obj.TYPE_REG
-	p.From.Reg = word
+	p.From.Reg = shift
 	p.Reg = ptr
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = ptr
@@ -327,7 +329,7 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	loop.From.Reg = base
 	loop.To.Type = obj.TYPE_REG
 	loop.To.Reg = word
-	if v.Op == ssa.OpPPC64LoweredAtomicAnd8 {
+	if v.Op == ssa.OpPPC64LoweredAtomicAnd8PPC970 {
 		p = s.Prog(ppc64.AANDN)
 	} else {
 		p = s.Prog(ppc64.AOR)
@@ -480,14 +482,17 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 			p.To.Reg = y
 		}
 
+	case ssa.OpPPC64LoweredAtomicAnd8PPC970, ssa.OpPPC64LoweredAtomicOr8PPC970:
+		if buildcfg.GOARCH != "ppc64" || buildcfg.GOPPC64 != 5 {
+			v.Fatalf("ppc970 byte atomic lowering requires big-endian ppc970")
+		}
+		ssaGenAtomicByteRMW(s, v)
+		return
+
 	case ssa.OpPPC64LoweredAtomicAnd8,
 		ssa.OpPPC64LoweredAtomicAnd32,
 		ssa.OpPPC64LoweredAtomicOr8,
 		ssa.OpPPC64LoweredAtomicOr32:
-		if buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 && (v.Op == ssa.OpPPC64LoweredAtomicAnd8 || v.Op == ssa.OpPPC64LoweredAtomicOr8) {
-			ssaGenAtomicByteRMW(s, v)
-			return
-		}
 		// LWSYNC
 		// LBAR/LWAR	(Rarg0), Rtmp
 		// AND/OR	Rarg1, Rtmp
@@ -593,13 +598,16 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		plwsync2 := s.Prog(ppc64.ALWSYNC)
 		plwsync2.To.Type = obj.TYPE_NONE
 
+	case ssa.OpPPC64LoweredAtomicExchange8PPC970:
+		if buildcfg.GOARCH != "ppc64" || buildcfg.GOPPC64 != 5 {
+			v.Fatalf("ppc970 byte atomic lowering requires big-endian ppc970")
+		}
+		ssaGenAtomicByteRMW(s, v)
+		return
+
 	case ssa.OpPPC64LoweredAtomicExchange8,
 		ssa.OpPPC64LoweredAtomicExchange32,
 		ssa.OpPPC64LoweredAtomicExchange64:
-		if buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5 && v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
-			ssaGenAtomicByteRMW(s, v)
-			return
-		}
 		// LWSYNC
 		// LDAR/LWAR/LBAR        (Rarg0), Rout
 		// STDCCC/STWCCC/STBWCCC Rout, (Rarg0)

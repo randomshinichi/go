@@ -540,6 +540,12 @@ func rewriteValuePPC64(v *Value) bool {
 		return rewriteValuePPC64_OpPPC64LessEqual(v)
 	case OpPPC64LessThan:
 		return rewriteValuePPC64_OpPPC64LessThan(v)
+	case OpPPC64LoweredAtomicAnd8:
+		return rewriteValuePPC64_OpPPC64LoweredAtomicAnd8(v)
+	case OpPPC64LoweredAtomicExchange8:
+		return rewriteValuePPC64_OpPPC64LoweredAtomicExchange8(v)
+	case OpPPC64LoweredAtomicOr8:
+		return rewriteValuePPC64_OpPPC64LoweredAtomicOr8(v)
 	case OpPPC64LoweredPanicBoundsCR:
 		return rewriteValuePPC64_OpPPC64LoweredPanicBoundsCR(v)
 	case OpPPC64LoweredPanicBoundsRC:
@@ -6903,6 +6909,66 @@ func rewriteValuePPC64_OpPPC64LessThan(v *Value) bool {
 		v.AddArg(cmp)
 		return true
 	}
+}
+func rewriteValuePPC64_OpPPC64LoweredAtomicAnd8(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (LoweredAtomicAnd8 ptr val mem)
+	// cond: buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5
+	// result: (LoweredAtomicAnd8PPC970 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64LoweredAtomicAnd8PPC970)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC64_OpPPC64LoweredAtomicExchange8(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (LoweredAtomicExchange8 ptr val mem)
+	// cond: buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5
+	// result: (LoweredAtomicExchange8PPC970 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64LoweredAtomicExchange8PPC970)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC64_OpPPC64LoweredAtomicOr8(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (LoweredAtomicOr8 ptr val mem)
+	// cond: buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5
+	// result: (LoweredAtomicOr8PPC970 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOARCH == "ppc64" && buildcfg.GOPPC64 == 5) {
+			break
+		}
+		v.reset(OpPPC64LoweredAtomicOr8PPC970)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValuePPC64_OpPPC64LoweredPanicBoundsCR(v *Value) bool {
 	v_1 := v.Args[1]
