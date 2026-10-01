@@ -11,6 +11,7 @@ import (
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 	"cmd/internal/src"
+	"internal/buildcfg"
 )
 
 // A Config holds readonly compilation information.
@@ -267,9 +268,13 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize, softfloat boo
 		// But it has bswap+load and bswap+store ops for all ppc64 variants.
 		// That is the sense we're using them here - they are only used
 		// in contexts where they can be merged with a load or store.
-		c.haveBswap64 = true
-		c.haveBswap32 = true
-		c.haveBswap16 = true
+		// The PPC970 lacks those byte-reversed memory instructions, so keep
+		// little-endian byte assembly as ordinary byte loads and stores there.
+		if arch != "ppc64" || buildcfg.GOPPC64 != 5 {
+			c.haveBswap64 = true
+			c.haveBswap32 = true
+			c.haveBswap16 = true
+		}
 		c.haveCondSelect = true
 	case "mips64":
 		c.BigEndian = true
