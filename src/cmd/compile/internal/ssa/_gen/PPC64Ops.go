@@ -675,7 +675,7 @@ func init() {
 		// BNE          -2(PC)
 		// ISYNC
 		// return old val
-		{name: "LoweredAtomicExchange8", argLength: 3, reg: gpxchg, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, unsafePoint: true},
+		{name: "LoweredAtomicExchange8", argLength: 3, reg: gpxchg, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, needIntTemp: true, unsafePoint: true},
 		{name: "LoweredAtomicExchange32", argLength: 3, reg: gpxchg, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true},
 		{name: "LoweredAtomicExchange64", argLength: 3, reg: gpxchg, resultNotInArgs: true, clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true},
 
@@ -704,9 +704,9 @@ func init() {
 		// AND/OR	Rarg1, Rtmp
 		// STBCCC/STWCCC Rtmp, (Rarg0), Rtmp
 		// BNE		Rtmp, -3(PC)
-		{name: "LoweredAtomicAnd8", argLength: 3, reg: atomicStore8, asm: "AND", faultOnNilArg0: true, hasSideEffects: true, needIntTemp: true, unsafePoint: true},
+		{name: "LoweredAtomicAnd8", argLength: 3, reg: atomicStore8, asm: "AND", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, needIntTemp: true, unsafePoint: true},
 		{name: "LoweredAtomicAnd32", argLength: 3, reg: gpstore, asm: "AND", faultOnNilArg0: true, hasSideEffects: true},
-		{name: "LoweredAtomicOr8", argLength: 3, reg: atomicStore8, asm: "OR", faultOnNilArg0: true, hasSideEffects: true, needIntTemp: true, unsafePoint: true},
+		{name: "LoweredAtomicOr8", argLength: 3, reg: atomicStore8, asm: "OR", clobberFlags: true, faultOnNilArg0: true, hasSideEffects: true, needIntTemp: true, unsafePoint: true},
 		{name: "LoweredAtomicOr32", argLength: 3, reg: gpstore, asm: "OR", faultOnNilArg0: true, hasSideEffects: true},
 
 		// LoweredWB invokes runtime.gcWriteBarrier. arg0=mem, auxint=# of buffer entries needed

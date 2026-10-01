@@ -109,27 +109,55 @@ func storeByType(t *types.Type) obj.As {
 func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	ptr := v.Args[0].Reg()
 	val := v.Args[1].Reg()
-	var base int16
+	const word = ppc64.REGTMP // R31 is scratch until LDAR loads the reserved word.
+	var base, shift int16
 	if v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
-		base = ptr // arg0 is clobberable and becomes the aligned address.
+		base = ptr // arg0 is restored before leaving the unsafe-point region.
+		shift = v.RegTmp()
 	} else {
 		base = v.RegTmp()
+		shift = ptr // arg0 is clobberable; keep the aligned address in base.
 	}
-	const shift = ppc64.REGZERO // R0 is reserved from register allocation.
-	const word = ppc64.REGTMP // R31 is reserved as the assembler scratch register.
-
-	// PPC970 is big-endian: byte p in the word is shifted by
-	// (7-(p&7))*8 = 56-8*(p&7). The low 3 bits of ~(p&7)
-	// are exactly 7-(p&7), and SLD uses only the low 6 shift bits.
-	p := s.Prog(ppc64.AANDCC)
+	captureLane := func() {
+		p := s.Prog(ppc64.AANDCC)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 7
+		p.Reg = ptr
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = shift
+	}
+	// Exchange must capture the byte offset before aligning ptr in place.
+	if base == ptr {
+		captureLane()
+	}
+	// RLDICR with SH=0, ME=60 clears the address's low three bits.
+	p := s.Prog(ppc64.ARLDICR)
 	p.From.Type = obj.TYPE_CONST
-	p.From.Offset = 7
+	p.From.Offset = 0
 	p.Reg = ptr
 	p.To.Type = obj.TYPE_REG
-	p.To.Reg = shift
+	p.To.Reg = base
+	p.AddRestSourceConst(60)
+	if base != ptr {
+		captureLane() // ptr is dead after the aligned address is saved.
+	}
+
+	// Big-endian byte p is at bit (7-(p&7))*8. SLD/SRD read SEVEN
+	// shift bits: mask ~lane to three bits BEFORE scaling to 0..56.
 	p = s.Prog(ppc64.ANOR)
 	p.From.Type = obj.TYPE_REG
 	p.From.Reg = shift
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = shift
+	p = s.Prog(ppc64.AMOVD)
+	p.From.Type = obj.TYPE_CONST
+	p.From.Offset = 7
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = word
+	p = s.Prog(ppc64.AAND)
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = word
+	p.Reg = shift
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = shift
 	p = s.Prog(ppc64.ASLD)
@@ -138,16 +166,6 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	p.Reg = shift
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = shift
-
-	// Align arg0 down to the containing 8-byte word. RLDICR with SH=0,
-	// ME=60 preserves address bits 63..3 and clears the low three bits.
-	p = s.Prog(ppc64.ARLDICR)
-	p.From.Type = obj.TYPE_CONST
-	p.From.Offset = 0
-	p.Reg = ptr
-	p.To.Type = obj.TYPE_REG
-	p.To.Reg = base
-	p.AddRestSourceConst(60)
 
 	if v.Op == ssa.OpPPC64LoweredAtomicExchange8 {
 		p := s.Prog(ppc64.ALWSYNC)
@@ -262,14 +280,14 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 		return
 	}
 
-	// Preserve the existing release/acquire LWSYNC placement for And8/Or8.
-	p = s.Prog(ppc64.ALWSYNC)
-	p.To.Type = obj.TYPE_NONE
-	loop := s.Prog(ppc64.ALDAR)
-	loop.From.Type = obj.TYPE_MEM
-	loop.From.Reg = base
-	loop.To.Type = obj.TYPE_REG
-	loop.To.Reg = word
+	// For And8/Or8, ptr holds the shift, but is also needed for the byte
+	// mask. Save the bounded shift in R31, compute the mask once before the
+	// retry loop, then reuse R31 for the reserved word.
+	p = s.Prog(ppc64.AMOVD)
+	p.From.Type = obj.TYPE_REG
+	p.From.Reg = shift
+	p.To.Type = obj.TYPE_REG
+	p.To.Reg = word
 
 	// Or only sets bits in the target byte. And clears bits in the target
 	// byte by ANDing with the complement of (~val & 0xff) shifted into it.
@@ -296,10 +314,19 @@ func ssaGenAtomicByteRMW(s *ssagen.State, v *ssa.Value) {
 	}
 	p = s.Prog(ppc64.ASLD)
 	p.From.Type = obj.TYPE_REG
-	p.From.Reg = shift
+	p.From.Reg = word
 	p.Reg = ptr
 	p.To.Type = obj.TYPE_REG
 	p.To.Reg = ptr
+
+	// Preserve the release/acquire LWSYNC placement around the retry loop.
+	p = s.Prog(ppc64.ALWSYNC)
+	p.To.Type = obj.TYPE_NONE
+	loop := s.Prog(ppc64.ALDAR)
+	loop.From.Type = obj.TYPE_MEM
+	loop.From.Reg = base
+	loop.To.Type = obj.TYPE_REG
+	loop.To.Reg = word
 	if v.Op == ssa.OpPPC64LoweredAtomicAnd8 {
 		p = s.Prog(ppc64.AANDN)
 	} else {

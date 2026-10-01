@@ -79340,6 +79340,7 @@ var opcodeTable = [...]opInfo{
 		argLen:          3,
 		resultNotInArgs: true,
 		clobberFlags:    true,
+		needIntTemp:     true,
 		faultOnNilArg0:  true,
 		hasSideEffects:  true,
 		unsafePoint:     true,
@@ -79428,6 +79429,7 @@ var opcodeTable = [...]opInfo{
 	{
 		name:           "LoweredAtomicAnd8",
 		argLen:         3,
+		clobberFlags:   true,
 		needIntTemp:    true,
 		faultOnNilArg0: true,
 		hasSideEffects: true,
@@ -79457,6 +79459,7 @@ var opcodeTable = [...]opInfo{
 	{
 		name:           "LoweredAtomicOr8",
 		argLen:         3,
+		clobberFlags:   true,
 		needIntTemp:    true,
 		faultOnNilArg0: true,
 		hasSideEffects: true,
