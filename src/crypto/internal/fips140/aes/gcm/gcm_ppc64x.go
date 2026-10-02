@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build (ppc64le || ppc64) && !purego
+//go:build (ppc64le || ppc64) && !purego && !ppc64.ppc970
 
 package gcm
 

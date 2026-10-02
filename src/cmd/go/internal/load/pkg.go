@@ -2314,6 +2314,13 @@ func appendBuildSetting(info *debug.BuildInfo, key, value string) {
 	info.Settings = append(info.Settings, debug.BuildSetting{Key: key, Value: value})
 }
 
+func ppc64CryptoBuildSetting(goarch, goppc64 string) (string, string, bool) {
+	if goarch == "ppc64" && goppc64 == "ppc970" {
+		return "ppc64.crypto", "scalar-variable-time-aes-ghash-v1", true
+	}
+	return "", "", false
+}
+
 // setBuildInfo gathers build information and sets it into
 // p.Internal.BuildInfo, which will later be formatted as a string and embedded
 // in the binary. setBuildInfo should only be called on a main package with no
@@ -2480,6 +2487,9 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 	appendSetting("GOOS", cfg.BuildContext.GOOS)
 	if key, val, _ := cfg.GetArchEnv(); key != "" && val != "" {
 		appendSetting(key, val)
+	}
+	if key, value, ok := ppc64CryptoBuildSetting(cfg.Goarch, cfg.GOPPC64); ok {
+		appendSetting(key, value)
 	}
 
 	// Add VCS status if all conditions are true:

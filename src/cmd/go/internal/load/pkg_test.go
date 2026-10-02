@@ -57,6 +57,31 @@ func TestPkgDefaultExecName(t *testing.T) {
 	}
 }
 
+func TestPPC64CryptoBuildSetting(t *testing.T) {
+	for _, tt := range []struct {
+		goarch, goppc64 string
+		want           bool
+	}{
+		{"ppc64", "ppc970", true},
+		{"ppc64", "power8", false},
+		{"ppc64", "", false},
+		{"ppc64le", "ppc970", false},
+		{"ppc64le", "power8", false},
+		{"", "ppc970", false},
+	} {
+		key, value, ok := ppc64CryptoBuildSetting(tt.goarch, tt.goppc64)
+		if ok != tt.want {
+			t.Errorf("ppc64CryptoBuildSetting(%q, %q) enabled = %v, want %v", tt.goarch, tt.goppc64, ok, tt.want)
+		}
+		if tt.want && (key != "ppc64.crypto" || value != "scalar-variable-time-aes-ghash-v1") {
+			t.Errorf("ppc64CryptoBuildSetting(%q, %q) = %q, %q, want ppc64.crypto=%q", tt.goarch, tt.goppc64, key, value, "scalar-variable-time-aes-ghash-v1")
+		}
+		if !tt.want && (key != "" || value != "") {
+			t.Errorf("ppc64CryptoBuildSetting(%q, %q) = %q, %q, want empty setting", tt.goarch, tt.goppc64, key, value)
+		}
+	}
+}
+
 func TestIsVersionElement(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
