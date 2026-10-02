@@ -10,7 +10,7 @@
 // # details see http://www.openssl.org/~appro/cryptogams/.
 // # ====================================================================
 
-//go:build (ppc64 || ppc64le) && !purego
+//go:build (ppc64 || ppc64le) && !purego && !ppc64.ppc970
 
 #include "textflag.h"
 
