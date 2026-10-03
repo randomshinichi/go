@@ -309,15 +309,24 @@ func TestMemclrAtomicity(t *testing.T) {
 			// Even on failure, join the writer before leaving this subtest.
 			defer func() { <-done }()
 			close(start)
+			var sawNil, sawOrig bool
 			for {
 				select {
 				case <-done:
+					if !sawNil || !sawOrig {
+						t.Skipf("inconclusive: reader never overlapped writer")
+					}
 					return
 				default:
 				}
 				for i := range dst {
 					p := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&dst[i])))
-					if p != nil && p != original {
+					switch p {
+					case nil:
+						sawNil = true
+					case original:
+						sawOrig = true
+					default:
 						t.Fatalf("got partially cleared pointer %p at dst[%d], want either nil or %p", p, i, original)
 					}
 				}
