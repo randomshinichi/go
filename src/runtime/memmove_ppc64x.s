@@ -37,33 +37,101 @@ TEXT runtime·memmove<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-24
 	// R5 = LEN = n
 
 #ifndef GOPPC64_vsx
-	// Conservative GPR-only path unless the assembler has an explicit VSX
-	// capability define. Keep the optimized body unchanged for POWER8 and newer.
+	// GPR-only path for the 970: aligned MOVD stores preserve pointer-sized
+	// element atomicity. If the pointers have different alignment, no common
+	// aligned word boundary exists, so use bytes for the whole copy.
 	CMP	LEN, $0
 	BEQ	memmove_ppc970_done
 	SUB	SRC, TGT, TMP
 	CMPU	TMP, LEN, CR0
 	BLT	CR0, memmove_ppc970_backward
-memmove_ppc970_forward:
+	ANDCC	$7, SRC, TMP
+	ANDCC	$7, TGT, R7
+	CMP	TMP, R7
+	BNE	memmove_ppc970_forward_bytes
+memmove_ppc970_forward_head:
+	CMP	LEN, $0
+	BEQ	memmove_ppc970_done
+	ANDCC	$7, TGT, TMP
+	BEQ	memmove_ppc970_forward_words
 	MOVBZ	0(SRC), TMP
 	MOVB	TMP, 0(TGT)
 	ADD	$1, SRC
 	ADD	$1, TGT
 	ADD	$-1, LEN
+	BR	memmove_ppc970_forward_head
+memmove_ppc970_forward_words:
+	CMP	LEN, $8
+	BLT	memmove_ppc970_forward_tail
+	MOVD	0(SRC), TMP
+	MOVD	TMP, 0(TGT)
+	ADD	$8, SRC
+	ADD	$8, TGT
+	ADD	$-8, LEN
+	BR	memmove_ppc970_forward_words
+memmove_ppc970_forward_tail:
 	CMP	LEN, $0
-	BGT	memmove_ppc970_forward
-	RET
+	BEQ	memmove_ppc970_done
+	MOVBZ	0(SRC), TMP
+	MOVB	TMP, 0(TGT)
+	ADD	$1, SRC
+	ADD	$1, TGT
+	ADD	$-1, LEN
+	BR	memmove_ppc970_forward_tail
+memmove_ppc970_forward_bytes:
+	CMP	LEN, $0
+	BEQ	memmove_ppc970_done
+	MOVBZ	0(SRC), TMP
+	MOVB	TMP, 0(TGT)
+	ADD	$1, SRC
+	ADD	$1, TGT
+	ADD	$-1, LEN
+	BR	memmove_ppc970_forward_bytes
 memmove_ppc970_backward:
 	ADD	LEN, SRC, SRC
 	ADD	TGT, LEN, TGT
-memmove_ppc970_backward_loop:
+	ANDCC	$7, SRC, TMP
+	ANDCC	$7, TGT, R7
+	CMP	TMP, R7
+	BNE	memmove_ppc970_backward_bytes
+memmove_ppc970_backward_head:
+	CMP	LEN, $0
+	BEQ	memmove_ppc970_done
+	ANDCC	$7, TGT, TMP
+	BEQ	memmove_ppc970_backward_words
 	MOVBZ	-1(SRC), TMP
 	SUB	$1, SRC
 	MOVB	TMP, -1(TGT)
 	SUB	$1, TGT
 	ADD	$-1, LEN
+	BR	memmove_ppc970_backward_head
+memmove_ppc970_backward_words:
+	CMP	LEN, $8
+	BLT	memmove_ppc970_backward_tail
+	SUB	$8, SRC
+	SUB	$8, TGT
+	MOVD	0(SRC), TMP
+	MOVD	TMP, 0(TGT)
+	ADD	$-8, LEN
+	BR	memmove_ppc970_backward_words
+memmove_ppc970_backward_tail:
 	CMP	LEN, $0
-	BGT	memmove_ppc970_backward_loop
+	BEQ	memmove_ppc970_done
+	MOVBZ	-1(SRC), TMP
+	SUB	$1, SRC
+	MOVB	TMP, -1(TGT)
+	SUB	$1, TGT
+	ADD	$-1, LEN
+	BR	memmove_ppc970_backward_tail
+memmove_ppc970_backward_bytes:
+	CMP	LEN, $0
+	BEQ	memmove_ppc970_done
+	MOVBZ	-1(SRC), TMP
+	SUB	$1, SRC
+	MOVB	TMP, -1(TGT)
+	SUB	$1, TGT
+	ADD	$-1, LEN
+	BR	memmove_ppc970_backward_bytes
 memmove_ppc970_done:
 	RET
 #else

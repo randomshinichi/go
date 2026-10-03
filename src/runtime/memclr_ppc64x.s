@@ -14,16 +14,33 @@ TEXT runtime·memclrNoHeapPointers<ABIInternal>(SB), NOSPLIT|NOFRAME, $0-16
 	// R4 = n
 
 #ifndef GOPPC64_vsx
-	// Conservative GPR-only path unless the assembler has an explicit VSX
-	// capability define. Keep the optimized body unchanged for POWER8 and newer.
-	MOVD	$0, R5
-memclr_ppc970_loop:
+	// Keep every naturally aligned 8-byte clear to a single GPR store, so
+	// pointer-sized elements are not observed partially cleared.
 	CMP	R4, $0
 	BEQ	memclr_ppc970_done
-	MOVB	R5, 0(R3)
+memclr_ppc970_head:
+	CMP	R4, $0
+	BEQ	memclr_ppc970_done
+	ANDCC	$7, R3, R5
+	BEQ	memclr_ppc970_words
+	MOVB	R0, 0(R3)
 	ADD	$1, R3
 	ADD	$-1, R4
-	BR	memclr_ppc970_loop
+	BR	memclr_ppc970_head
+memclr_ppc970_words:
+	CMP	R4, $8
+	BLT	memclr_ppc970_tail
+	MOVD	R0, 0(R3)
+	ADD	$8, R3
+	ADD	$-8, R4
+	BR	memclr_ppc970_words
+memclr_ppc970_tail:
+	CMP	R4, $0
+	BEQ	memclr_ppc970_done
+	MOVB	R0, 0(R3)
+	ADD	$1, R3
+	ADD	$-1, R4
+	BR	memclr_ppc970_tail
 memclr_ppc970_done:
 	RET
 #else
