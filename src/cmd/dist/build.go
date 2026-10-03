@@ -1773,6 +1773,7 @@ var cgoEnabled = map[string]bool{
 	"aix/ppc64":       true,
 	"darwin/amd64":    true,
 	"darwin/arm64":    true,
+	"darwin/ppc64":    false,
 	"dragonfly/amd64": true,
 	"freebsd/386":     true,
 	"freebsd/amd64":   true,
