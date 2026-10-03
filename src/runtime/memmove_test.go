@@ -271,6 +271,61 @@ func TestMemmoveAtomicity(t *testing.T) {
 	}
 }
 
+// Ensure that memclr clears aligned pointer-sized slots atomically, so the GC
+// won't observe a partially cleared pointer.
+func TestMemclrAtomicity(t *testing.T) {
+	if race.Enabled {
+		t.Skip("skip under the race detector -- this test is intentionally racy")
+	}
+
+	// The writer and reader must be able to execute concurrently.
+	procs := GOMAXPROCS(2)
+	defer GOMAXPROCS(procs)
+
+	var x int
+	original := unsafe.Pointer(&x)
+	for _, n := range []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 25, 49} {
+		t.Run(fmt.Sprint(n*PtrSize), func(t *testing.T) {
+			dst := make([]*int, n)
+			dp := unsafe.Pointer(&dst[0])
+			sz := uintptr(n * PtrSize)
+			ready := make(chan struct{})
+			start := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				close(ready)
+				<-start
+				for j := 0; j < 10000; j++ {
+					// Restore each slot with a single pointer store, not memmove:
+					// a torn value must implicate memclr, not the reset operation.
+					for i := range dst {
+						atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&dst[i])), original)
+					}
+					MemclrNoHeapPointers(dp, sz)
+				}
+			}()
+			<-ready
+			// Even on failure, join the writer before leaving this subtest.
+			defer func() { <-done }()
+			close(start)
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				for i := range dst {
+					p := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&dst[i])))
+					if p != nil && p != original {
+						t.Fatalf("got partially cleared pointer %p at dst[%d], want either nil or %p", p, i, original)
+					}
+				}
+			}
+		})
+	}
+}
+
 func benchmarkSizes(b *testing.B, sizes []int, fn func(b *testing.B, n int)) {
 	for _, n := range sizes {
 		b.Run(fmt.Sprint(n), func(b *testing.B) {
