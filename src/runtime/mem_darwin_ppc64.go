@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !ppc64
-
 package runtime
 
 import (
@@ -22,17 +20,14 @@ func sysAllocOS(n uintptr, _ string) unsafe.Pointer {
 	return v
 }
 
+// Leopard has no MADV_FREE_REUSABLE or MADV_FREE_REUSE. This deliberately
+// differs from modern Darwin: MADV_FREE releases pages without marking them
+// reusable in task_info accounting, and returning them to use needs no advice.
 func sysUnusedOS(v unsafe.Pointer, n uintptr) {
-	// MADV_FREE_REUSABLE is like MADV_FREE except it also propagates
-	// accounting information about the process to task_info.
-	madvise(v, n, _MADV_FREE_REUSABLE)
+	madvise(v, n, _MADV_FREE)
 }
 
 func sysUsedOS(v unsafe.Pointer, n uintptr) {
-	// MADV_FREE_REUSE is necessary to keep the kernel's accounting
-	// accurate. If called on any memory region that hasn't been
-	// MADV_FREE_REUSABLE'd, it's a no-op.
-	madvise(v, n, _MADV_FREE_REUSE)
 }
 
 func sysHugePageOS(v unsafe.Pointer, n uintptr) {
