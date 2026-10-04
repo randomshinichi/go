@@ -115,7 +115,9 @@ func machoreloc1(arch *sys.Arch, out *ld.OutBuf, ldr *loader.Loader, s loader.Sy
 		out.Write32(machoRelocWord(symnum, pcrel, length, ext, typ))
 	}
 	emitPair := func(half uint32) {
-		emit(int64(half), false, 2, false, ld.MACHO_PPC_RELOC_PAIR, 0)
+		// Apple's non-scattered PAIR uses the all-ones symbolnum sentinel,
+		// not a symbol or section index. Scattered PAIRs have no such field.
+		emit(int64(half), false, 2, false, ld.MACHO_PPC_RELOC_PAIR, 0xffffff)
 	}
 
 	switch r.Type {
