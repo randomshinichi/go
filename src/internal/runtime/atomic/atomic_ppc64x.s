@@ -240,22 +240,6 @@ TEXT ·Xadd64(SB), NOSPLIT, $0-24
 	MOVD	R3, ret+16(FP)
 	RET
 
-// uint8 Xchg(ptr *uint8, new uint8)
-// Atomically:
-//	old := *ptr;
-//	*ptr = new;
-//	return old;
-TEXT ·Xchg8(SB), NOSPLIT, $0-17
-	MOVD	ptr+0(FP), R4
-	MOVB	new+8(FP), R5
-	LWSYNC
-	LBAR	(R4), R3
-	STBCCC	R5, (R4)
-	BNE	-2(PC)
-	ISYNC
-	MOVB	R3, ret+16(FP)
-	RET
-
 // uint32 Xchg(ptr *uint32, new uint32)
 // Atomically:
 //	old := *ptr;
@@ -333,32 +317,6 @@ TEXT ·StoreRel64(SB), NOSPLIT, $0-16
 	MOVD	val+8(FP), R4
 	LWSYNC
 	MOVD	R4, 0(R3)
-	RET
-
-// void ·Or8(byte volatile*, byte);
-TEXT ·Or8(SB), NOSPLIT, $0-9
-	MOVD	ptr+0(FP), R3
-	MOVBZ	val+8(FP), R4
-	LWSYNC
-again:
-	LBAR	(R3), R6
-	OR	R4, R6
-	STBCCC	R6, (R3)
-	BNE	again
-	LWSYNC
-	RET
-
-// void ·And8(byte volatile*, byte);
-TEXT ·And8(SB), NOSPLIT, $0-9
-	MOVD	ptr+0(FP), R3
-	MOVBZ	val+8(FP), R4
-	LWSYNC
-again:
-	LBAR	(R3), R6
-	AND	R4, R6
-	STBCCC	R6, (R3)
-	BNE	again
-	LWSYNC
 	RET
 
 // func Or(addr *uint32, v uint32)
