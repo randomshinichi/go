@@ -616,6 +616,34 @@ func addmachodynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s 
 		su.SetRelocSym(rIdx, syms.GOT)
 		return true
 	}
+	if r.Type() == objabi.R_ADDRPOWER {
+		// The address of an imported variable (e.g. MOVD $libc_mach_task_self_(SB), R3):
+		// lis rT,sym@ha ; addi rT,rT,sym@l. The address is not known at link
+		// time, so read it from the symbol's non-lazy GOT slot, which dyld
+		// binds to &sym. That turns the addi into ld rT,slot@l(rT) and the
+		// pair into the same lis/ld shape as the call stubs above.
+		if r.Add() != 0 {
+			ldr.Errorf(s, "Mach-O dynamic address reference requires a zero addend: %s%+d", ldr.SymName(r.Sym()), r.Add())
+			return false
+		}
+		su := ldr.MakeSymbolUpdater(s)
+		off := int64(r.Off())
+		su.MakeWritable()
+		o1 := target.Arch.ByteOrder.Uint32(su.Data()[off:])
+		o2 := target.Arch.ByteOrder.Uint32(su.Data()[off+4:])
+		const maskRT = 0x03e00000 // RT field
+		const maskRA = 0x001f0000 // RA field
+		if o1&0xfc1f0000 != OP_ADDIS || o2&0xfc00ffff != OP_ADDI || (o2&maskRA)>>16 != (o1&maskRT)>>21 {
+			ldr.Errorf(s, "Mach-O dynamic address reference to %s is not lis;addi (0x%08x 0x%08x)", ldr.SymName(r.Sym()), o1, o2)
+			return false
+		}
+		ld.AddGotSym(target, ldr, syms, r.Sym(), 0)
+		su.SetUint32(target.Arch, off+4, OP_LD|(o2&(maskRT|maskRA)))
+		su.SetRelocType(rIdx, objabi.R_ADDRPOWER_DS)
+		su.SetRelocAdd(rIdx, int64(ldr.SymGot(r.Sym())))
+		su.SetRelocSym(rIdx, syms.GOT)
+		return true
+	}
 	return false
 }
 
