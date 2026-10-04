@@ -205,8 +205,7 @@ type regs64 struct {
 	srr1   register64
 	gpr    [32]register64
 	cr     uint32
-	xer    uint32
-	_      [4]byte
+	xer    register64
 	lr     register64
 	ctr    register64
 	vrsave uint32

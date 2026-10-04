@@ -59,7 +59,7 @@ func (c *sigctxt) pc() uint64 { return c.regs().srr0.get() }
 
 func (c *sigctxt) ctr() uint64    { return c.regs().ctr.get() }
 func (c *sigctxt) link() uint64   { return c.regs().lr.get() }
-func (c *sigctxt) xer() uint64    { return uint64(c.regs().xer) }
+func (c *sigctxt) xer() uint64    { return c.regs().xer.get() }
 func (c *sigctxt) ccr() uint64    { return uint64(c.regs().cr) }
 func (c *sigctxt) vrsave() uint32 { return c.regs().vrsave }
 
