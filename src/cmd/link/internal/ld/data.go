@@ -1788,6 +1788,12 @@ func (ctxt *Link) dodata(symGroupType []sym.SymKind) {
 	n := int16(1)
 
 	for _, sect := range Segtext.Sections {
+		if ctxt.IsDarwin() && ctxt.Arch.Family == sys.PPC64 && sect.Name == ".plt" && sect.Length == 0 {
+			// machoshbits omits this section; n_sect must number only
+			// sections that will actually appear in the Mach-O file.
+			sect.Extnum = 0
+			continue
+		}
 		sect.Extnum = n
 		n++
 	}
