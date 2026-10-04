@@ -80,6 +80,9 @@ const (
 )
 
 const (
+	// Leopard mach/machine.h; Apple's PPC64 executable uses ALL | LIB64.
+	MACHO_CPU_PPC64                      = 1<<24 | 18
+	MACHO_SUBCPU_PPC64_ALL               = 0x80000000
 	MACHO_CPU_AMD64                      = 1<<24 | 7
 	MACHO_CPU_386                        = 7
 	MACHO_SUBCPU_X86                     = 3
@@ -328,6 +331,11 @@ func machowrite(ctxt *Link, arch *sys.Arch, out *OutBuf, linkmode LinkMode) int 
 	if ctxt.IsPIE() && linkmode == LinkInternal {
 		flags |= MH_PIE | MH_DYLDLINK
 	}
+	if arch.Family == sys.PPC64 && linkmode == LinkInternal && !*FlagD {
+		// Use Go's existing flat namespace (n_desc == 0), not Apple's
+		// TWOLEVEL convention. NOUNDEFS still follows the rule above.
+		flags |= MH_DYLDLINK
+	}
 	out.Write32(flags) /* flags */
 	if arch.PtrSize == 8 {
 		out.Write32(0) /* reserved */
@@ -427,7 +435,8 @@ func (ctxt *Link) domacho() {
 		if buildcfg.GOOS == "ios" {
 			machoPlatform = PLATFORM_IOS
 		}
-		if ctxt.LinkMode == LinkInternal && machoPlatform == PLATFORM_MACOS {
+		if ctxt.LinkMode == LinkInternal && machoPlatform == PLATFORM_MACOS && ctxt.Arch.Family != sys.PPC64 {
+			// Leopard has neither LC_BUILD_VERSION nor LC_VERSION_MIN_MACOSX.
 			var version uint32
 			switch ctxt.Arch.Family {
 			case sys.ARM64, sys.AMD64:
@@ -638,6 +647,10 @@ func asmbMacho(ctxt *Link) {
 	default:
 		Exitf("unknown macho architecture: %v", ctxt.Arch.Family)
 
+	case sys.PPC64:
+		mh.cpu = MACHO_CPU_PPC64
+		mh.subcpu = MACHO_SUBCPU_PPC64_ALL
+
 	case sys.AMD64:
 		mh.cpu = MACHO_CPU_AMD64
 		mh.subcpu = MACHO_SUBCPU_X86
@@ -732,6 +745,16 @@ func asmbMacho(ctxt *Link) {
 		default:
 			Exitf("unknown macho architecture: %v", ctxt.Arch.Family)
 
+		case sys.PPC64:
+			// Measured Leopard ppc_thread_state64_t: 304 bytes, srr0 at
+			// offset 0. The state is word-packed; even XER at offset 276
+			// is 64-bit. Only srr0 (entry PC) is nonzero, in big-endian order.
+			ml := newMachoLoad(ctxt.Arch, imacho.LC_UNIXTHREAD, 76+2)
+			ml.data[0] = 5  // PPC_THREAD_STATE64
+			ml.data[1] = 76 // PPC_THREAD_STATE64_COUNT, 304 / 4
+			ml.data[2] = uint32(Entryvalue(ctxt) >> 32)
+			ml.data[3] = uint32(Entryvalue(ctxt))
+
 		case sys.AMD64:
 			ml := newMachoLoad(ctxt.Arch, imacho.LC_UNIXTHREAD, 42+2)
 			ml.data[0] = 4                           /* thread type */
@@ -794,7 +817,7 @@ func asmbMacho(ctxt *Link) {
 
 			ml := newMachoLoad(ctxt.Arch, imacho.LC_LOAD_DYLINKER, 6)
 			ml.data[0] = 12 /* offset to string */
-			stringtouint32(ml.data[1:], "/usr/lib/dyld")
+			stringtouint32(ml.data[1:], "/usr/lib/dyld", ctxt.Arch.ByteOrder)
 
 			for _, lib := range dylib {
 				ml = newMachoLoad(ctxt.Arch, imacho.LC_LOAD_DYLIB, 4+(uint32(len(lib))+1+7)/8*2)
@@ -802,7 +825,7 @@ func asmbMacho(ctxt *Link) {
 				ml.data[1] = 0  /* time stamp */
 				ml.data[2] = 0  /* version */
 				ml.data[3] = 0  /* compatibility version */
-				stringtouint32(ml.data[4:], lib)
+				stringtouint32(ml.data[4:], lib, ctxt.Arch.ByteOrder)
 			}
 		}
 

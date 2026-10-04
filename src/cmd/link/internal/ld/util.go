@@ -96,10 +96,10 @@ func artrim(x []byte) string {
 	return string(x[i:j])
 }
 
-func stringtouint32(x []uint32, s string) {
+func stringtouint32(x []uint32, s string, order binary.ByteOrder) {
 	for i := 0; len(s) > 0; i++ {
 		var buf [4]byte
 		s = s[copy(buf[:], s):]
-		x[i] = binary.LittleEndian.Uint32(buf[:])
+		x[i] = order.Uint32(buf[:])
 	}
 }
