@@ -2115,3 +2115,5 @@ var (
 	Complex128Bytes = complex128Bytes
 	Complex64Bytes  = complex64Bytes
 )
+
+var MachTimeToNanos = machTimeToNanos

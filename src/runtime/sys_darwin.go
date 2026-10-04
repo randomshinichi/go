@@ -307,17 +307,10 @@ func nanotime1() int64 {
 		numer, denom uint32 // conversion factors. nanoseconds = t * numer / denom.
 	}
 	libcCall(unsafe.Pointer(abi.FuncPCABI0(nanotime_trampoline)), unsafe.Pointer(&r))
-	// Note: Apple seems unconcerned about overflow here. See
-	// https://developer.apple.com/library/content/qa/qa1398/_index.html
-	// Note also, numer == denom == 1 is common.
-	t := r.t
-	if r.numer != 1 {
-		t *= int64(r.numer)
-	}
-	if r.denom != 1 {
-		t /= int64(r.denom)
-	}
-	return t
+	// Note: numer == denom == 1 is common, but not where the tick rate is
+	// far below 1 GHz (PowerPC): t*numer can overflow. See machTimeToNanos
+	// and https://developer.apple.com/library/content/qa/qa1398/_index.html
+	return machTimeToNanos(uint64(r.t), r.numer, r.denom)
 }
 func nanotime_trampoline()
 
