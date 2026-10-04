@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !ppc64
+//go:build darwin && !ppc64
 
 // Getdirentries and fdopendir moved here, unchanged, from syscall_darwin.go so
 // that darwin/ppc64 can provide its own Getdirentries
@@ -17,6 +17,8 @@ import (
 	"unsafe"
 )
 
+// used by internal/poll
+//go:linkname fdopendir
 func fdopendir(fd int) (dir uintptr, err error) {
 	r0, _, e1 := syscallPtr(abi.FuncPCABI0(libc_fdopendir_trampoline), uintptr(fd), 0, 0)
 	dir = r0
