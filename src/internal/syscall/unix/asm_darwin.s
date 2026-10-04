@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !ppc64
+
 #include "textflag.h"
 
 TEXT ·libc_arc4random_buf_trampoline(SB),NOSPLIT,$0-0; JMP libc_arc4random_buf(SB)

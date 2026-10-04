@@ -47,11 +47,12 @@ func setTimeval(sec, usec int64) Timeval {
 // *at function; fstatat64 is among the names dlprobe reports MISSING). With
 // the current directory as the base it is stat or lstat. With any other
 // directory descriptor there is no equivalent to build on, so it fails with
-// ENOSYS rather than pretending.
+// ENOTSUP rather than pretending, as internal/syscall/unix's *at family does
+// (at_darwin_ppc64.go).
 func fstatat(fd int, path string, stat *Stat_t, flags int) (err error) {
 	const atSymlinkNofollow = 0x20 // the value of the modern *at interface; Leopard defines none
 	if fd != _AT_FDCWD {
-		return ENOSYS
+		return ENOTSUP
 	}
 	if flags&atSymlinkNofollow != 0 {
 		return Lstat(path, stat)
