@@ -10,8 +10,6 @@ import _ "unsafe"
 //go:linkname closedir
 //go:linkname readdir_r
 
-// used by internal/poll
-//go:linkname fdopendir
 
 // used by internal/syscall/unix
 //go:linkname unlinkat
