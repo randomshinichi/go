@@ -18,9 +18,6 @@ func Xadd64(ptr *uint64, delta int64) uint64
 func Xadduintptr(ptr *uintptr, delta uintptr) uintptr
 
 //go:noescape
-func Xchg8(ptr *uint8, new uint8) uint8
-
-//go:noescape
 func Xchg(ptr *uint32, new uint32) uint32
 
 //go:noescape
@@ -49,12 +46,6 @@ func LoadAcq64(ptr *uint64) uint64
 
 //go:noescape
 func LoadAcquintptr(ptr *uintptr) uintptr
-
-//go:noescape
-func And8(ptr *uint8, val uint8)
-
-//go:noescape
-func Or8(ptr *uint8, val uint8)
 
 // NOTE: Do not add atomicxor8 (XOR is not idempotent).
 
