@@ -111,6 +111,12 @@ func (ctxt *Link) computeTLSOffset() {
 
 		case sys.ARM64:
 			ctxt.Tlsoffset = 0 // dummy value, not needed
+
+		case sys.PPC64:
+			// runtime.tls_g is an ordinary variable holding the byte offset
+			// of the g slot from R13 (see runtime/tls_darwin_ppc64.s), so,
+			// as on arm64, the linker never uses this value.
+			ctxt.Tlsoffset = 0
 		}
 	}
 
