@@ -64,6 +64,7 @@ func Init() (*sys.Arch, ld.Arch) {
 		Gentext:          gentext,
 		Trampoline:       trampoline,
 		Machoreloc1:      machoreloc1,
+		MachorelocSize:   8,
 		Xcoffreloc1:      xcoffreloc1,
 
 		ELF: ld.ELFArch{

@@ -1059,10 +1059,6 @@ func elfsetupplt(ctxt *ld.Link, ldr *loader.Loader, plt, got *loader.SymbolBuild
 	}
 }
 
-func machoreloc1(*sys.Arch, *ld.OutBuf, *loader.Loader, loader.Sym, loader.ExtReloc, int64) bool {
-	return false
-}
-
 // Return the value of .TOC. for symbol s
 func symtoc(ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym) int64 {
 	v := ldr.SymVersion(s)
@@ -1427,6 +1423,9 @@ func computeTLSLEReloc(target *ld.Target, ldr *loader.Loader, rs, s loader.Sym) 
 func archreloc(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, r loader.Reloc, s loader.Sym, val int64) (relocatedOffset int64, nExtReloc int, ok bool) {
 	rs := r.Sym()
 	if target.IsExternal() {
+		if target.IsDarwin() {
+			return archrelocmacho(target, ldr, r, s, val)
+		}
 		// On AIX, relocations (except TLS ones) must be also done to the
 		// value with the current addresses.
 		switch rt := r.Type(); rt {
