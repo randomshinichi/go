@@ -584,6 +584,16 @@ func machoadddynlib(lib string, linkmode LinkMode) {
 }
 
 func machoshbits(ctxt *Link, mseg *MachoSeg, sect *sym.Section, segname string) {
+	if ctxt.Arch.Family == sys.PPC64 && sect.Name == ".plt" {
+		// PPC64's eager call stubs live in ordinary __text, not .plt.
+		// Omit the empty section rather than describe it with the x86
+		// stub size below. A populated PPC64 .plt has no defined format.
+		if sect.Length != 0 {
+			Errorf("Mach-O ppc64 does not support a non-empty .plt section")
+		}
+		return
+	}
+
 	buf := "__" + strings.ReplaceAll(sect.Name[1:], ".", "_")
 
 	msect := newMachoSect(mseg, buf, segname)
