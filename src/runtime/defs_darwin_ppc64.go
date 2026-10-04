@@ -168,6 +168,20 @@ type pthreadcond struct {
 	_ [48]byte
 }
 
+// _PTHREAD_TSD_OFFSET is the byte offset from the thread pointer (R13) of the
+// first pthread-specific-data slot. libSystem's pthread_getspecific computes
+// r13 + 0x60 + key*8 (disassembly of the ppc64 slice supplied 2026-10-04); the
+// d4tls probe agreed (key 256, slot found at byte offset 2144 = 0x60+256*8).
+// tlsinit validates the formula at startup instead of trusting it.
+const _PTHREAD_TSD_OFFSET = 0x60
+
+// pthreadkey is pthread_key_t. UNMEASURED: its width and signedness are not
+// recorded in docs/darwin-abi-reference.md (the header only says
+// "typedef __darwin_pthread_key_t pthread_key_t"). It is modelled as an 8-byte
+// unsigned integer, as on darwin/arm64, and the slot check in tlsinit aborts
+// the program if that is wrong in a way that matters. Pending measurement.
+type pthreadkey uint64
+
 type pthreadattr struct {
 	_ [0]uint64
 	_ [64]byte
