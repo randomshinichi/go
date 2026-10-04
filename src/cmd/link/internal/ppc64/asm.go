@@ -487,7 +487,11 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 	}
 
 	if ctxt.LinkMode == ld.LinkInternal {
-		genstubs(ctxt, ldr)
+		if ctxt.IsDarwin() {
+			genmachostubs(ctxt, ldr)
+		} else {
+			genstubs(ctxt, ldr)
+		}
 	}
 }
 
@@ -566,8 +570,55 @@ func rewritetonop(target *ld.Target, ldr *loader.Loader, su *loader.SymbolBuilde
 	rewritetoinsn(target, ldr, su, offset, mask, check, OP_NOP)
 }
 
+// genmachostubs uses eagerly bound function pointers, like Go's non-PIE
+// amd64 Mach-O linker. There is no ELF TOC, function descriptor, or lazy
+// resolver at this boundary. Only R12 and CTR are clobbered by the stub.
+func genmachostubs(ctxt *ld.Link, ldr *loader.Loader) {
+	var stubs []loader.Sym
+	for _, s := range ctxt.Textp {
+		relocs := ldr.Relocs(s)
+		for i := 0; i < relocs.Count(); i++ {
+			r := relocs.At(i)
+			if r.Type() != objabi.R_CALLPOWER || ldr.SymType(r.Sym()) != sym.SDYNIMPORT {
+				continue
+			}
+			stub := ldr.CreateSymForUpdate("_macho_callstub."+ldr.SymName(r.Sym()), 0)
+			if stub.Size() == 0 {
+				stub.SetType(sym.STEXT)
+				stub.SetReachable(true)
+				// The dynamic relocation pass will allocate the non-lazy GOT
+				// slot after Mach-O symbol IDs have been assigned.
+				stub.AddSymRef(ctxt.Arch, r.Sym(), 0, objabi.R_ADDRPOWER_DS, 8)
+				stub.SetUint32(ctxt.Arch, 0, OP_LIS_R12)
+				stub.SetUint32(ctxt.Arch, 4, OP_LD_R12_R12)
+				stub.AddUint32(ctxt.Arch, OP_MTCTR_R12)
+				stub.AddUint32(ctxt.Arch, OP_BCTR)
+				stubs = append(stubs, stub.Sym())
+			}
+			ldr.MakeSymbolUpdater(s).SetRelocSym(i, stub.Sym())
+		}
+	}
+	ctxt.Textp = append(stubs, ctxt.Textp...)
+}
+
+func addmachodynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {
+	if target.IsExternal() || ldr.SymType(r.Sym()) != sym.SDYNIMPORT {
+		return false
+	}
+	if r.Type() == objabi.R_ADDRPOWER_DS {
+		ld.AddGotSym(target, ldr, syms, r.Sym(), 0)
+		su := ldr.MakeSymbolUpdater(s)
+		su.SetRelocAdd(rIdx, r.Add()+int64(ldr.SymGot(r.Sym())))
+		su.SetRelocSym(rIdx, syms.GOT)
+		return true
+	}
+	return false
+}
+
 func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {
-	if target.IsElf() {
+	if target.IsDarwin() {
+		return addmachodynrel(target, ldr, syms, s, r, rIdx)
+	} else if target.IsElf() {
 		return addelfdynrel(target, ldr, syms, s, r, rIdx)
 	} else if target.IsAIX() {
 		return ld.Xcoffadddynrel(target, ldr, syms, s, r, rIdx)
