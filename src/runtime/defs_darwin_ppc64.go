@@ -178,13 +178,26 @@ type pthreadattr struct {
 // and unaligned doubleword accesses when reading or updating those registers.
 type register64 [2]uint32
 
+// Keep the word accesses out of line: SSA memcombine would otherwise fuse
+// adjacent halves into an unaligned doubleword load/store on PPC64.
+//
 //go:nosplit
-func (r *register64) get() uint64 { return uint64(r[0])<<32 | uint64(r[1]) }
+//go:noinline
+func readRegisterWord(p *uint32) uint32 { return *p }
+
+//go:nosplit
+//go:noinline
+func writeRegisterWord(p *uint32, x uint32) { *p = x }
+
+//go:nosplit
+func (r *register64) get() uint64 {
+	return uint64(readRegisterWord(&r[0]))<<32 | uint64(readRegisterWord(&r[1]))
+}
 
 //go:nosplit
 func (r *register64) set(x uint64) {
-	r[0] = uint32(x >> 32)
-	r[1] = uint32(x)
+	writeRegisterWord(&r[0], uint32(x>>32))
+	writeRegisterWord(&r[1], uint32(x))
 }
 
 type regs64 struct {
