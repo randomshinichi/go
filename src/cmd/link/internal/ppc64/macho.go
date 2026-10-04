@@ -180,7 +180,11 @@ func machoreloc1(arch *sys.Arch, out *ld.OutBuf, ldr *loader.Loader, s loader.Sy
 			ldr.Errorf(s, "Mach-O scattered relocation values exceed 32-bit object addresses")
 			return false
 		}
-		t := uint32(v + r.Xadd - p)
+		delta := v + r.Xadd - p
+		if delta < -1<<31 || delta >= 1<<31 {
+			return false
+		}
+		t := uint32(delta)
 		emitScattered := func(address uint32, typ uint32, value uint32) {
 			out.Write32(machoScatteredWord(address, false, 2, typ))
 			out.Write32(value)

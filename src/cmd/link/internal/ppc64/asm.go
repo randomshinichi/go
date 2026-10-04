@@ -582,6 +582,10 @@ func genmachostubs(ctxt *ld.Link, ldr *loader.Loader) {
 			if r.Type() != objabi.R_CALLPOWER || ldr.SymType(r.Sym()) != sym.SDYNIMPORT {
 				continue
 			}
+			if r.Add() != 0 {
+				ldr.Errorf(s, "Mach-O dynamic call requires a zero addend: %s%+d", ldr.SymName(r.Sym()), r.Add())
+				continue
+			}
 			stub := ldr.CreateSymForUpdate("_macho_callstub."+ldr.SymName(r.Sym()), 0)
 			if stub.Size() == 0 {
 				stub.SetType(sym.STEXT)
