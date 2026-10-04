@@ -99,6 +99,18 @@ func archinit(ctxt *ld.Link) {
 			*ld.FlagTextAddr = ld.Rnd(4096, *ld.FlagRound) + int64(ld.HEADR)
 		}
 
+	case objabi.Hdarwin: /* Apple Mach-O, non-PIE */
+		ld.HEADR = ld.INITIAL_MACHO_HEADR
+		if *ld.FlagRound == -1 {
+			*ld.FlagRound = 4096
+		}
+		if *ld.FlagTextAddr == -1 {
+			// Deliberately below 2GB: Go's lis/addi absolute-address sequences
+			// cannot address Apple's usual 4GB __TEXT base. Leopard accepts
+			// this 16MB base with __PAGEZERO ending at __TEXT (G5 oracle).
+			*ld.FlagTextAddr = ld.Rnd(0x1000000, *ld.FlagRound) + int64(ld.HEADR)
+		}
+
 	case objabi.Hlinux, /* ppc64 elf */
 		objabi.Hopenbsd:
 		ld.Elfinit(ctxt)
