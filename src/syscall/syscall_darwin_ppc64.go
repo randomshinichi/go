@@ -93,3 +93,38 @@ func sendfile(outfd int, infd int, offset *int64, count int) (written int, err e
 func libc_sendfile_trampoline()
 
 //go:cgo_import_dynamic libc_sendfile sendfile "/usr/lib/libSystem.B.dylib"
+
+// Getdirentries is a SUBSTITUTED mechanism on darwin/ppc64. The shared
+// implementation (syscall_darwin_libcdir.go) simulates it with libc fdopendir,
+// openat, readdir_r and closedir; fdopendir and openat do not exist on Leopard
+// (dlprobe, out/stage2-20261003/D7-syscall/g5-request/out-d7/08-dlprobe.txt), and
+// plain readdir_r returns the legacy 32-bit-inode record rather than the Dirent
+// of ztypes_darwin_ppc64.go.
+//
+// Instead this issues SYS_getdirentries64 (344) directly. Measured on the G5
+// (out/stage2-20261003/D7-syscall/g5-request2/out-d7r2/C-dirent-test.txt) it
+// returns exactly the 64-bit-inode record that Dirent describes: ino@0,
+// seekoff@8, reclen@16, namlen@18, type@20, name@21. SYS_getdirentries (196)
+// returns a different, legacy record and must not be used here.
+//
+// seekoff in those records is a filesystem cookie (values such as
+// 2208261730205695 were observed), not a byte offset; nothing here interprets it.
+// *basep receives the kernel's position cookie and is likewise opaque.
+func Getdirentries(fd int, buf []byte, basep *uintptr) (n int, err error) {
+	var _p0 unsafe.Pointer
+	if len(buf) > 0 {
+		_p0 = unsafe.Pointer(&buf[0])
+	} else {
+		_p0 = unsafe.Pointer(&_zero)
+	}
+	var base uintptr
+	if basep == nil {
+		basep = &base
+	}
+	r0, _, e1 := Syscall6(SYS_GETDIRENTRIES64, uintptr(fd), uintptr(_p0), uintptr(len(buf)), uintptr(unsafe.Pointer(basep)), 0, 0)
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
