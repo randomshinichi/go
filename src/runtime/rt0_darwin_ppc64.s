@@ -13,19 +13,27 @@
 // On entry the stack holds the 32-bit argc at 0(R1) and the argv pointers from
 // 8(R1) (the first instructions of Apple's own crt1 `start`, disassembled from
 // t_ppc64: `lwz r3,0(r26)` with r26 = the entry r1, and `addi r4,r26,8`).
-// Unlike the other Darwin ports there is no argc/argv in registers, and no
-// libc initialisation to wait for: dyld has already bound libSystem.
+//
+// This entry replaces crt1's `start` entirely, as the other Darwin Go ports
+// replace theirs. UNVERIFIED on Leopard: whatever else crt1's `start` does
+// besides calling main (it is not recorded in docs/darwin-abi-reference.md) is
+// skipped, and dyld is assumed to have run libSystem's initialisers before it
+// transfers control here.
+//
+// Crt1 aligns the stack itself before calling main, and nothing documents the
+// alignment of the entry stack pointer, so this aligns R1 to 16 bytes (below
+// the argument block, which stays where it is) before using it.
 //
 // Before rt0_go can call save_g, runtime·tls_g must hold the g slot offset, so
 // this runs tlsinit first. It is NOSPLIT because g is not yet set.
 TEXT _rt0_ppc64_darwin(SB),NOSPLIT,$48
 	MOVD	$0, R0			// Go expects R0 == 0
-	MOVD	R1, R14
+	ADD	$80, R1, R14		// the entry stack pointer: 32 header + 48 frame
 	MOVWZ	0(R14), R3		// argc
 	ADD	$8, R14, R4		// argv
+	RLDCR	$0, R1, $~15, R1
 	MOVD	R3, 48(R1)
 	MOVD	R4, 56(R1)
-	MOVD	R14, 64(R1)
 
 	MOVD	$0, g			// make sure g is not junk
 	MOVD	$runtime·tls_g(SB), R3
@@ -35,7 +43,6 @@ TEXT _rt0_ppc64_darwin(SB),NOSPLIT,$48
 
 	MOVD	48(R1), R3
 	MOVD	56(R1), R4
-	MOVD	64(R1), R1		// back to the entry stack pointer
 	MOVD	$runtime·rt0_go(SB), R12
 	MOVD	R12, CTR
 	BR	(CTR)
