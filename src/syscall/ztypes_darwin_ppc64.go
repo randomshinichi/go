@@ -453,7 +453,7 @@ type BpfHdr struct {
 }
 
 const (
-	_AT_FDCWD = -0x2 // UNMEASURED: Leopard defines no AT_FDCWD and has no *at system calls; value of the other darwin ports
+	_AT_FDCWD = -0x2 // ABSENT on Leopard (no AT_FDCWD, no *at system calls); the value is a chosen sentinel matching the other darwin ports, not an Apple-provided one
 )
 
 type Termios struct {
