@@ -117,8 +117,28 @@ const (
 	MACHO_ARM64_RELOC_GOT_LOAD_PAGEOFF12 = 6
 	MACHO_ARM64_RELOC_POINTER_TO_GOT     = 7
 	MACHO_ARM64_RELOC_ADDEND             = 10
-	MACHO_GENERIC_RELOC_VANILLA          = 0
-	MACHO_FAKE_GOTPCREL                  = 100
+	// Leopard mach-o/ppc/reloc.h. Instruction relocations address the
+	// instruction word, not its immediate field. BR14 length 3 denotes
+	// static prediction: for a non-always branch a linker must flip Y if
+	// the displacement changes sign.
+	MACHO_PPC_RELOC_VANILLA        = 0
+	MACHO_PPC_RELOC_PAIR           = 1
+	MACHO_PPC_RELOC_BR14           = 2
+	MACHO_PPC_RELOC_BR24           = 3
+	MACHO_PPC_RELOC_HI16           = 4
+	MACHO_PPC_RELOC_LO16           = 5
+	MACHO_PPC_RELOC_HA16           = 6
+	MACHO_PPC_RELOC_LO14           = 7
+	MACHO_PPC_RELOC_SECTDIFF       = 8
+	MACHO_PPC_RELOC_PB_LA_PTR      = 9
+	MACHO_PPC_RELOC_HI16_SECTDIFF  = 10
+	MACHO_PPC_RELOC_LO16_SECTDIFF  = 11
+	MACHO_PPC_RELOC_HA16_SECTDIFF  = 12
+	MACHO_PPC_RELOC_JBSR           = 13
+	MACHO_PPC_RELOC_LO14_SECTDIFF  = 14
+	MACHO_PPC_RELOC_LOCAL_SECTDIFF = 15
+	MACHO_GENERIC_RELOC_VANILLA    = 0
+	MACHO_FAKE_GOTPCREL            = 100
 )
 
 const (
@@ -485,6 +505,10 @@ func (ctxt *Link) domacho() {
 		}
 		sb.SetReachable(true)
 		sb.SetAlign(4)
+		if ctxt.Arch.Family == sys.PPC64 {
+			// The eager call stubs load doubleword function pointers.
+			sb.SetAlign(8)
+		}
 
 		s = ctxt.loader.LookupOrCreateSym(".linkedit.plt", 0) // indirect table for .plt
 		sb = ctxt.loader.MakeSymbolUpdater(s)
