@@ -159,8 +159,6 @@ TEXT ·libc_pwrite_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_pwrite(SB)
 TEXT ·libc_read_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_read(SB)
-TEXT ·libc_readdir_r_trampoline(SB),NOSPLIT,$0-0
-	JMP	libc_readdir_r(SB)
 TEXT ·libc_readlink_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_readlink(SB)
 TEXT ·libc_rename_trampoline(SB),NOSPLIT,$0-0
@@ -251,5 +249,7 @@ TEXT ·libc_fstatat64_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_fstatat64(SB)
 TEXT ·libc_utimensat_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_utimensat(SB)
+TEXT ·libc_readdir_r_trampoline(SB),NOSPLIT,$0-0
+	JMP	libc_readdir_r(SB)
 TEXT ·libc_ptrace_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_ptrace(SB)
