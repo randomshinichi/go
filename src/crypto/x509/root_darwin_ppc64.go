@@ -43,8 +43,17 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) ([][]*Certificate, error
 }
 
 func loadSystemRoots() (*CertPool, error) {
+	roots, _, err := loadDarwinPPC64SystemRoots()
+	return roots, err
+}
+
+// loadDarwinPPC64SystemRoots returns the selected source with the pool so tests
+// can distinguish the current bundle from the older, last-resort bundles. It is
+// the same loader used by loadSystemRoots, not a separate selection probe.
+func loadDarwinPPC64SystemRoots() (*CertPool, string, error) {
 	if file := os.Getenv("SSL_CERT_FILE"); file != "" {
-		return loadDarwinPPC64CertFile(file)
+		roots, err := loadDarwinPPC64CertFile(file)
+		return roots, file, err
 	}
 	if dirs := os.Getenv("SSL_CERT_DIR"); dirs != "" {
 		roots := NewCertPool()
@@ -55,7 +64,7 @@ func loadSystemRoots() (*CertPool, error) {
 				if os.IsNotExist(err) {
 					continue
 				}
-				return nil, fmt.Errorf("x509: cannot read SSL_CERT_DIR directory %q: %w", dir, err)
+				return nil, "", fmt.Errorf("x509: cannot read SSL_CERT_DIR directory %q: %w", dir, err)
 			}
 			for _, entry := range entries {
 				if entry.IsDir() {
@@ -75,19 +84,12 @@ func loadSystemRoots() (*CertPool, error) {
 		}
 		if roots.len() == 0 {
 			if firstErr != nil {
-				return nil, fmt.Errorf("x509: SSL_CERT_DIR contains no certificates: %w", firstErr)
+				return nil, "", fmt.Errorf("x509: SSL_CERT_DIR contains no certificates: %w", firstErr)
 			}
-			return nil, errors.New("x509: SSL_CERT_DIR contains no certificates")
+			return nil, "", errors.New("x509: SSL_CERT_DIR contains no certificates")
 		}
-		return roots, nil
+		return roots, dirs, nil
 	}
-	roots, _, err := loadDarwinPPC64DefaultRoots()
-	return roots, err
-}
-
-// loadDarwinPPC64DefaultRoots returns the selected path with the pool so tests
-// can distinguish the current bundle from the older, last-resort bundles.
-func loadDarwinPPC64DefaultRoots() (*CertPool, string, error) {
 	var firstErr error
 	for _, file := range darwinPPC64CertFiles {
 		data, err := os.ReadFile(file)
