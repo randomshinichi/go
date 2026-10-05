@@ -178,6 +178,29 @@ func libc_sendfile_trampoline()
 
 //go:cgo_import_dynamic libc_sendfile sendfile "/usr/lib/libSystem.B.dylib"
 
+// getfsstat64 is the libc entry point that fills the 64-bit-inode Statfs_t
+// (struct statfs64, 2168 bytes). Leopard's plain getfsstat, which the shared
+// Getfsstat (syscall_darwin_getfsstat.go) imports, fills the legacy 336-byte
+// struct statfs instead (sys/mount.h, !__DARWIN_64_BIT_INO_T); read through a
+// Statfs_t slice that is a wrong stride, so only entry 0 is partly meaningful and
+// the rest is zero. getfsstat64 is exported by Leopard's libSystem
+// (out/stage2-20261003/D7-syscall/g5-request/out-d7/08-dlprobe.txt).
+//
+//sys	getfsstat64(buf unsafe.Pointer, size uintptr, flags int) (n int, err error)
+
+// Getfsstat on darwin/ppc64 reads the mount table through getfsstat64 so that
+// the records match Statfs_t, as Statfs and Fstatfs already do (SYS_statfs64,
+// SYS_fstatfs64 above).
+func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
+	var _p0 unsafe.Pointer
+	var bufsize uintptr
+	if len(buf) > 0 {
+		_p0 = unsafe.Pointer(&buf[0])
+		bufsize = unsafe.Sizeof(Statfs_t{}) * uintptr(len(buf))
+	}
+	return getfsstat64(_p0, bufsize, flags)
+}
+
 // Getdirentries is a SUBSTITUTED mechanism on darwin/ppc64. The shared
 // implementation (syscall_darwin_libcdir.go) simulates it with libc fdopendir,
 // openat, readdir_r and closedir; fdopendir and openat do not exist on Leopard
