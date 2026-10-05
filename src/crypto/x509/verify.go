@@ -556,7 +556,7 @@ func (c *Certificate) Verify(opts VerifyOptions) ([][]*Certificate, error) {
 	}
 
 	// Use platform verifiers, where available, if Roots is from SystemCertPool.
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	if runtime.GOOS == "windows" || (runtime.GOOS == "darwin" && runtime.GOARCH != "ppc64") || runtime.GOOS == "ios" {
 		// Don't use the system verifier if the system pool was replaced with a non-system pool,
 		// i.e. if SetFallbackRoots was called with x509usefallbackroots=1.
 		systemPool := systemRootsPool()

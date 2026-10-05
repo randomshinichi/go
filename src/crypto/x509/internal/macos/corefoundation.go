@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin
+//go:build darwin && !ppc64
 
 // Package macos provides cgo-less wrappers for Core Foundation and
 // Security.framework, similarly to how package syscall provides access to
