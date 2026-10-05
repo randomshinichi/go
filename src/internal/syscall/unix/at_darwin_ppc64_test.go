@@ -95,6 +95,7 @@ func TestAtRealDirfdNotSupportedDarwinPPC64(t *testing.T) {
 		"Linkat":    unix.Linkat(dirfd, "f", dirfd, "g", 0),
 		"Symlinkat": unix.Symlinkat("f", dirfd, "s"),
 		"Fstatat":   unix.Fstatat(dirfd, "f", &st, 0),
+		"Utimensat": unix.Utimensat(dirfd, "f", &[2]syscall.Timespec{{Sec: 1e9}, {Sec: 1e9}}, 0),
 	} {
 		if err != syscall.ENOTSUP {
 			t.Errorf("%s(real dirfd) = %v; want ENOTSUP", name, err)
@@ -112,6 +113,107 @@ func TestAtRealDirfdNotSupportedDarwinPPC64(t *testing.T) {
 		if err != nil || len(entries) != 1 || entries[0].Name() != "f" {
 			t.Errorf("directory %s changed: %v, %v", d, entries, err)
 		}
+	}
+	// Utimensat(real dirfd) touched neither file's modification time.
+	for _, d := range []string{dirA, dirB} {
+		fi, err := os.Stat(filepath.Join(d, "f"))
+		if err != nil || fi.ModTime().Unix() == 1e9 {
+			t.Errorf("%s/f modification time changed by Utimensat(real dirfd): %v, %v", d, fi, err)
+		}
+	}
+}
+
+// TestUtimensatDarwinPPC64 checks syscall.utimensat on Mac OS X 10.5, which has
+// no utimensat and maps AT_FDCWD onto utimes (syscall_darwin_ppc64.go). Times
+// are whole seconds because the file system, not the call, decides the finer
+// resolution.
+func TestUtimensatDarwinPPC64(t *testing.T) {
+	const utimeNow = -1 // modern Darwin value; Leopard defines none
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("f", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	at := func(sec int64) syscall.Timespec { return syscall.Timespec{Sec: sec} }
+	omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+	now := syscall.Timespec{Nsec: utimeNow}
+	times := func() (atime, mtime int64) {
+		t.Helper()
+		var st syscall.Stat_t
+		if err := syscall.Stat("f", &st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Atimespec.Sec, st.Mtimespec.Sec
+	}
+	set := func(ts [2]syscall.Timespec, flags int) error {
+		return unix.Utimensat(unix.AT_FDCWD, "f", &ts, flags)
+	}
+
+	if err := set([2]syscall.Timespec{at(1_000_000_000), at(1_100_000_000)}, 0); err != nil {
+		t.Fatalf("explicit times: %v", err)
+	}
+	if a, m := times(); a != 1_000_000_000 || m != 1_100_000_000 {
+		t.Fatalf("explicit times: got atime %d mtime %d", a, m)
+	}
+	if err := set([2]syscall.Timespec{omit, at(1_200_000_000)}, 0); err != nil {
+		t.Fatalf("omit atime: %v", err)
+	}
+	if a, m := times(); a != 1_000_000_000 || m != 1_200_000_000 {
+		t.Fatalf("omit atime: got atime %d mtime %d; want atime kept", a, m)
+	}
+	if err := set([2]syscall.Timespec{at(1_300_000_000), omit}, 0); err != nil {
+		t.Fatalf("omit mtime: %v", err)
+	}
+	if a, m := times(); a != 1_300_000_000 || m != 1_200_000_000 {
+		t.Fatalf("omit mtime: got atime %d mtime %d; want mtime kept", a, m)
+	}
+	if err := set([2]syscall.Timespec{omit, omit}, 0); err != nil {
+		t.Fatalf("omit both: %v", err)
+	}
+	if a, m := times(); a != 1_300_000_000 || m != 1_200_000_000 {
+		t.Fatalf("omit both: got atime %d mtime %d; want both kept", a, m)
+	}
+	if err := unix.Utimensat(unix.AT_FDCWD, "missing", &[2]syscall.Timespec{omit, omit}, 0); err != syscall.ENOENT {
+		t.Errorf("omit both on a missing file = %v; want ENOENT", err)
+	}
+	if err := unix.Utimensat(unix.AT_FDCWD, "f", nil, 0); err != nil {
+		t.Fatalf("nil times: %v", err)
+	}
+	if a, m := times(); a < 1_400_000_000 || m < 1_400_000_000 {
+		t.Fatalf("nil times: got atime %d mtime %d; want the current time", a, m)
+	}
+	if err := set([2]syscall.Timespec{at(1_000_000_000), at(1_000_000_000)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := set([2]syscall.Timespec{now, now}, 0); err != nil {
+		t.Fatalf("both now: %v", err)
+	}
+	if a, m := times(); a < 1_400_000_000 || m < 1_400_000_000 {
+		t.Fatalf("both now: got atime %d mtime %d; want the current time", a, m)
+	}
+
+	// Refusals leave the file alone.
+	if err := set([2]syscall.Timespec{at(1_000_000_000), at(1_000_000_000)}, 0); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		ts    [2]syscall.Timespec
+		flags int
+		want  error
+	}{
+		"nofollow":      {[2]syscall.Timespec{at(5), at(5)}, unix.AT_SYMLINK_NOFOLLOW, syscall.ENOTSUP},
+		"undefined bit": {[2]syscall.Timespec{at(5), at(5)}, 0x1, syscall.EINVAL},
+		"now and time":  {[2]syscall.Timespec{now, at(5)}, 0, syscall.ENOTSUP},
+		"now and omit":  {[2]syscall.Timespec{omit, now}, 0, syscall.ENOTSUP},
+		"nsec too big":  {[2]syscall.Timespec{{Sec: 5, Nsec: 1e9}, at(5)}, 0, syscall.EINVAL},
+		"nsec negative": {[2]syscall.Timespec{at(5), {Sec: 5, Nsec: -3}}, 0, syscall.EINVAL},
+	} {
+		if err := set(c.ts, c.flags); err != c.want {
+			t.Errorf("%s: got %v; want %v", name, err, c.want)
+		}
+	}
+	if a, m := times(); a != 1_000_000_000 || m != 1_000_000_000 {
+		t.Errorf("refusals changed the file: atime %d mtime %d", a, m)
 	}
 }
 
