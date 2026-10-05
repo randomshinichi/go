@@ -60,6 +60,89 @@ func fstatat(fd int, path string, stat *Stat_t, flags int) (err error) {
 	return Stat(path, stat)
 }
 
+// utimensat is implemented without libc's utimensat: Leopard does not have it
+// (dlprobe reports utimensat and futimens MISSING; the *at family is absent
+// altogether), so shared callers (UtimesNano, internal/syscall/unix.Utimensat)
+// would otherwise import a symbol dyld cannot resolve. What Leopard does have
+// is utimes (path, follows symlinks), futimes and lutimes, all in libSystem's
+// exports; none takes a nanosecond or a "leave this one alone" value.
+//
+// The mapping, and what it does not cover:
+//   - dirfd must be _AT_FDCWD (a chosen sentinel, absent on Leopard). Any real
+//     directory descriptor returns ENOTSUP, never a fall-back to the
+//     path-based call: that would act on the wrong file.
+//   - flags 0 is utimes. Undefined bits are EINVAL. AT_SYMLINK_NOFOLLOW would
+//     be lutimes, but lutimes's behaviour on Leopard has not been measured, so
+//     it returns ENOTSUP rather than assume it does not follow the link.
+//   - times == nil, or both entries UTIME_NOW, is utimes(path, NULL).
+//   - A UTIME_OMIT entry keeps that time by reading it with stat and writing it
+//     back with the other one (the technique fs_wasip1.go's UtimesNano uses).
+//     That is a read-modify-write: another process changing the omitted time
+//     between the stat and the utimes has its change overwritten. If both are
+//     UTIME_OMIT nothing is written and only the stat's error is reported.
+//   - UTIME_NOW mixed with any other value is ENOTSUP. utimes needs ownership
+//     for an explicit time but only write access for "now"; mixing them cannot
+//     be expressed faithfully. Nothing in the standard library does this.
+//   - Precision: utimes takes microseconds. Explicit times are rounded up to a
+//     microsecond by NsecToTimeval (as UtimesNano's ENOSYS fallback already
+//     does on the other BSDs), and a time kept via UTIME_OMIT is passed through
+//     the same conversion.
+func utimensat(dirfd int, path string, times *[2]Timespec, flags int) (err error) {
+	const (
+		atSymlinkNofollow = 0x20 // value of the modern *at interface; Leopard defines none
+		utimeNow          = -1   // modern Darwin values; Leopard defines neither
+		utimeOmit         = -2
+	)
+	if dirfd != _AT_FDCWD {
+		return ENOTSUP
+	}
+	if flags&^atSymlinkNofollow != 0 {
+		return EINVAL
+	}
+	if flags != 0 {
+		return ENOTSUP
+	}
+	if times == nil {
+		return utimes(path, nil)
+	}
+	for _, ts := range times {
+		if ts.Nsec == utimeNow || ts.Nsec == utimeOmit {
+			continue
+		}
+		if ts.Nsec < 0 || ts.Nsec >= 1e9 {
+			return EINVAL
+		}
+	}
+	now0, now1 := times[0].Nsec == utimeNow, times[1].Nsec == utimeNow
+	if now0 && now1 {
+		return utimes(path, nil)
+	}
+	if now0 || now1 {
+		return ENOTSUP
+	}
+	omit0, omit1 := times[0].Nsec == utimeOmit, times[1].Nsec == utimeOmit
+	var tv [2]Timeval
+	if omit0 || omit1 {
+		var st Stat_t
+		if err := Stat(path, &st); err != nil {
+			return err
+		}
+		if omit0 && omit1 {
+			return nil
+		}
+		times = &[2]Timespec{times[0], times[1]}
+		if omit0 {
+			times[0] = st.Atimespec
+		}
+		if omit1 {
+			times[1] = st.Mtimespec
+		}
+	}
+	tv[0] = NsecToTimeval(TimespecToNsec(times[0]))
+	tv[1] = NsecToTimeval(TimespecToNsec(times[1]))
+	return utimes(path, &tv)
+}
+
 func SetKevent(k *Kevent_t, fd, mode, flags int) {
 	k.Ident = uint64(fd)
 	k.Filter = int16(mode)

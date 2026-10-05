@@ -53,8 +53,6 @@ TEXT ·libc_ioctl_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_ioctl(SB)
 TEXT ·libc_pipe_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_pipe(SB)
-TEXT ·libc_utimensat_trampoline(SB),NOSPLIT,$0-0
-	JMP	libc_utimensat(SB)
 TEXT ·libc_kill_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_kill(SB)
 TEXT ·libc_access_trampoline(SB),NOSPLIT,$0-0
@@ -251,5 +249,7 @@ TEXT ·libc_statfs_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_statfs(SB)
 TEXT ·libc_fstatat_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_fstatat(SB)
+TEXT ·libc_utimensat_trampoline(SB),NOSPLIT,$0-0
+	JMP	libc_utimensat(SB)
 TEXT ·libc_ptrace_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_ptrace(SB)

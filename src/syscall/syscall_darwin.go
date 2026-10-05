@@ -122,7 +122,9 @@ func libc_getfsstat_trampoline()
 //
 //go:linkname utimensat
 
-//sys	utimensat(dirfd int, path string, times *[2]Timespec, flags int) (err error)
+// utimensat is declared (//sys) in syscall_darwin_amd64.go and
+// syscall_darwin_arm64.go. darwin/ppc64 defines it by hand in
+// syscall_darwin_ppc64.go, because Mac OS X 10.5 has no utimensat.
 
 /*
  * Wrapped

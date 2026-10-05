@@ -24,6 +24,7 @@ func setTimeval(sec, usec int64) Timeval {
 //sys	Stat(path string, stat *Stat_t) (err error)
 //sys	Statfs(path string, stat *Statfs_t) (err error)
 //sys	fstatat(fd int, path string, stat *Stat_t, flags int) (err error)
+//sys	utimensat(dirfd int, path string, times *[2]Timespec, flags int) (err error)
 //sys	ptrace(request int, pid int, addr uintptr, data uintptr) (err error)
 
 func SetKevent(k *Kevent_t, fd, mode, flags int) {
