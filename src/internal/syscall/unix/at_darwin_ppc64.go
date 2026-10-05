@@ -24,6 +24,10 @@ import (
 // silently act on the wrong directory. The visible consequence is that
 // os.Root, and the fd-based halves of os (openDirAt and friends), fail with
 // ENOTSUP on darwin/ppc64 rather than misbehave.
+//
+// There is one exception to that, and it is a read: LstatatByPath, below, lets
+// (*os.File).Readdir lstat the entries of a directory it has open by resolving
+// the descriptor to a path. No operation that writes gets such a form.
 
 // Flag combinations the path-based call cannot express are rejected, with
 // EINVAL for undefined bits and ENOTSUP for defined ones Leopard cannot honour.
@@ -63,12 +67,20 @@ func Mkdirat(dirfd int, path string, mode uint32) error {
 }
 
 func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
-	// Leopard has no way to chmod a symlink in this package's reach, so a
-	// non-zero flags (AT_SYMLINK_NOFOLLOW) is refused rather than approximated.
-	if dirfd != AT_FDCWD || flags != 0 {
+	if dirfd != AT_FDCWD {
 		return syscall.ENOTSUP
 	}
-	return syscall.Chmod(path, mode)
+	switch flags {
+	case 0:
+		return syscall.Chmod(path, mode)
+	case AT_SYMLINK_NOFOLLOW:
+		// lchmod changes the link itself: measured on the G5, lchmod(link, 0600)
+		// made lstat(link) report 0120600 and left stat(target) at 0100644, while
+		// the control chmod(link) followed the link (out/stage2-20261003/
+		// parent-native-run/BREADTH-AT-NATIVE-RUNG.md item 3).
+		return lchmod(path, mode)
+	}
+	return syscall.EINVAL
 }
 
 func Fchownat(dirfd int, path string, uid, gid int, flags int) error {
@@ -116,6 +128,21 @@ func Fstatat(dirfd int, path string, stat *syscall.Stat_t, flags int) error {
 //
 //go:linkname fstatat syscall.fstatat
 func fstatat(dirfd int, path string, stat *syscall.Stat_t, flags int) error
+
+// LstatatByPath is lstat of name inside the directory open as dirfd, done by
+// resolving dirfd to a path (syscall.lstatatByPath, which documents the
+// measurement it rests on and what it costs). It is the one exception to the
+// ENOTSUP rule above, and it exists only for (*os.File).Readdir. Fstatat above
+// keeps refusing a real dirfd, so os.Root's lstat of an entry stays ENOTSUP:
+// Root's whole purpose is the race protection this path form gives up.
+//
+//go:linkname LstatatByPath syscall.lstatatByPath
+func LstatatByPath(dirfd int, name string, stat *syscall.Stat_t) error
+
+// lchmod is syscall.lchmod (zsyscall_darwin_ppc64.go).
+//
+//go:linkname lchmod syscall.lchmod
+func lchmod(path string, mode uint32) error
 
 // faccessat is used by Eaccess, which asks for AT_EACCESS (check with the
 // effective user and group ids).

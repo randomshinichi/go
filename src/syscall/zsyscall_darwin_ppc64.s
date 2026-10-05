@@ -251,3 +251,7 @@ TEXT ·libc_ptrace_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_ptrace(SB)
 TEXT ·libc_getfsstat64_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_getfsstat64(SB)
+TEXT ·libc_lutimes_trampoline(SB),NOSPLIT,$0-0
+	JMP	libc_lutimes(SB)
+TEXT ·libc_lchmod_trampoline(SB),NOSPLIT,$0-0
+	JMP	libc_lchmod(SB)
