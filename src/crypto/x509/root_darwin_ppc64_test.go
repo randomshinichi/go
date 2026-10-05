@@ -76,6 +76,60 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 			}
 		}
 	})
+	t.Run("unreadable-explicit-file-does-not-fallback", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can read mode-000 files")
+		}
+		unreadable := filepath.Join(t.TempDir(), "unreadable.pem")
+		if err := os.WriteFile(unreadable, []byte(gtsRoot), 0000); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.ReadFile(unreadable); !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("permission precondition: got %v, want permission denied", err)
+		}
+		t.Setenv("SSL_CERT_FILE", unreadable)
+		t.Setenv("SSL_CERT_DIR", dir) // readable alternatives must not rescue it
+		if roots, err := loadSystemRoots(); roots != nil || !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("unreadable explicit file: got %v, %v; want permission error and no pool", roots, err)
+		}
+	})
+	t.Run("missing-listed-directory-is-tolerated", func(t *testing.T) {
+		chosen := t.TempDir()
+		if err := os.WriteFile(filepath.Join(chosen, "root.pem"), []byte(gtsRoot), 0600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SSL_CERT_FILE", "")
+		t.Setenv("SSL_CERT_DIR", filepath.Join(dir, "absent-dir")+string(os.PathListSeparator)+chosen)
+		roots, err := loadSystemRoots()
+		assertPool(t, roots, err, a, b)
+	})
+	t.Run("unreadable-listed-directory-is-hard-error", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root can read mode-000 directories")
+		}
+		unreadable := t.TempDir()
+		if err := os.Chmod(unreadable, 0000); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(unreadable, 0700) })
+		if _, err := os.ReadDir(unreadable); !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("permission precondition: got %v, want permission denied", err)
+		}
+		t.Setenv("SSL_CERT_FILE", "")
+		for _, dirs := range []string{unreadable + string(os.PathListSeparator) + dir, dir + string(os.PathListSeparator) + unreadable} {
+			t.Setenv("SSL_CERT_DIR", dirs)
+			if roots, err := loadSystemRoots(); roots != nil || !errors.Is(err, os.ErrPermission) {
+				t.Fatalf("%q: got %v, %v; want permission error and no pool", dirs, roots, err)
+			}
+		}
+	})
+	t.Run("not-a-directory-is-hard-error", func(t *testing.T) {
+		t.Setenv("SSL_CERT_FILE", "")
+		t.Setenv("SSL_CERT_DIR", dir+string(os.PathListSeparator)+fileA)
+		if roots, err := loadSystemRoots(); roots != nil || err == nil {
+			t.Fatalf("not a directory: got %v, %v; want hard error", roots, err)
+		}
+	})
 	t.Run("directory-only-hashed-symlink-deduplicated", func(t *testing.T) {
 		chosen := t.TempDir()
 		if err := os.WriteFile(filepath.Join(chosen, "root.pem"), []byte(gtsRoot), 0600); err != nil {
@@ -101,7 +155,10 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 	t.Run("defaults-first-readable-only", func(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", "")
 		t.Setenv("SSL_CERT_DIR", "")
-		roots, err := loadSystemRoots()
+		roots, source, err := loadDarwinPPC64DefaultRoots()
+		if source != fileB {
+			t.Fatalf("selected bundle %q, want %q", source, fileB)
+		}
 		assertPool(t, roots, err, b, a)
 	})
 	t.Run("readable-invalid-default-stops-search", func(t *testing.T) {
@@ -151,11 +208,15 @@ func TestBundleRootFailureDispatchDarwinPPC64(t *testing.T) {
 func TestSystemBundleDarwinPPC64(t *testing.T) {
 	t.Setenv("SSL_CERT_FILE", "")
 	t.Setenv("SSL_CERT_DIR", "")
-	roots, err := loadSystemRoots()
+	roots, source, err := loadDarwinPPC64DefaultRoots()
 	if err != nil || roots == nil || roots.len() == 0 || roots.systemPool {
 		t.Fatalf("system bundle: %v", err)
 	}
-	t.Logf("loaded %d roots from the first readable configured bundle", roots.len())
+	const currentBundle = "/usr/local/etc/openssl/ca-bundle-current.crt"
+	if source != currentBundle {
+		t.Fatalf("selected bundle %q, want operator's current bundle %q", source, currentBundle)
+	}
+	t.Logf("loaded %d roots from %s", roots.len(), source)
 	root, _, err := roots.cert(0)
 	if err != nil {
 		t.Fatal(err)
