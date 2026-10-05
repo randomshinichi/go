@@ -2,7 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !cmd_go_bootstrap && unix
+//go:build !cmd_go_bootstrap && unix && !(darwin && ppc64)
+
+// darwin/ppc64 is excluded above on purpose: this file calls unix.Uname, and the vendored
+// cmd/vendor/golang.org/x/sys/unix has no darwin/ppc64 type/syscall tables. The port supplies
+// version_darwin_ppc64.go on upstream's version_other.go path instead. See that file's header.
 
 package telemetrystats
 
