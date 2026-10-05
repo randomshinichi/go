@@ -15,9 +15,13 @@ package x509
 // The measured paths below are from
 // out/stage2-20261003/parent-native-run/D18-ADDENDUM4-NETWORK-TOOLING-CA.md.
 // Unlike root_unix.go, SSL_CERT_FILE suppresses ALL directory/default sources;
-// otherwise SSL_CERT_DIR suppresses default files. Explicit-source failures
-// are hard errors, never a fallback that silently widens trust. Without either
-// override, the first readable default file wins (no directory union).
+// otherwise SSL_CERT_DIR suppresses default files. An explicit file failure is
+// a hard error. Listed directories that do not exist are skipped; any other
+// error reading a listed directory is a hard error, even if another has roots.
+// Unreadable entries within directories are skipped, as in the Unix loader;
+// zero certificates overall is a hard error. No explicit failure falls back to
+// defaults. Without either override, the first readable default file wins
+// (no directory union).
 // The pool is cached by root.go:systemRootsPool, as on other platforms.
 
 import (
@@ -48,10 +52,10 @@ func loadSystemRoots() (*CertPool, error) {
 		for _, dir := range filepath.SplitList(dirs) {
 			entries, err := os.ReadDir(dir)
 			if err != nil {
-				if firstErr == nil {
-					firstErr = err
+				if os.IsNotExist(err) {
+					continue
 				}
-				continue
+				return nil, fmt.Errorf("x509: cannot read SSL_CERT_DIR directory %q: %w", dir, err)
 			}
 			for _, entry := range entries {
 				if entry.IsDir() {
@@ -77,6 +81,13 @@ func loadSystemRoots() (*CertPool, error) {
 		}
 		return roots, nil
 	}
+	roots, _, err := loadDarwinPPC64DefaultRoots()
+	return roots, err
+}
+
+// loadDarwinPPC64DefaultRoots returns the selected path with the pool so tests
+// can distinguish the current bundle from the older, last-resort bundles.
+func loadDarwinPPC64DefaultRoots() (*CertPool, string, error) {
 	var firstErr error
 	for _, file := range darwinPPC64CertFiles {
 		data, err := os.ReadFile(file)
@@ -88,9 +99,10 @@ func loadSystemRoots() (*CertPool, error) {
 		}
 		// A readable but empty/invalid bundle is an error, not permission to
 		// trust a different source. This is the first-readable rule.
-		return darwinPPC64CertPool(file, data)
+		roots, err := darwinPPC64CertPool(file, data)
+		return roots, file, err
 	}
-	return nil, fmt.Errorf("x509: no readable CA bundle: %w", firstErr)
+	return nil, "", fmt.Errorf("x509: no readable CA bundle: %w", firstErr)
 }
 
 func loadDarwinPPC64CertFile(file string) (*CertPool, error) {
