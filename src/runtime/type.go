@@ -121,7 +121,13 @@ func getGCMaskOnDemand(t *_type) *byte {
 			// Just wait until the builder is done.
 			// We can't block here, so spinning while having
 			// the OS thread yield is about the best we can do.
-			osyield()
+			//
+			// Yield on the system stack. On some targets (darwin)
+			// osyield is a libc call, and a direct call would add its
+			// whole nosplit chain to every nosplit function that can
+			// reach this one (e.g. typedmemmove), which overflows the
+			// nosplit stack limit on ppc64 once PGO inlines callers.
+			systemstack(osyield)
 			continue
 		case nil: // Not built yet.
 			// Attempt to get exclusive access to build it.
@@ -130,11 +136,19 @@ func getGCMaskOnDemand(t *_type) *byte {
 			}
 
 			// Build gcmask for this type.
+			// Allocate it on the system stack too (persistentalloc1
+			// is what persistentalloc runs there), so that this
+			// function's nosplit height does not include
+			// persistentalloc's own frame.
 			bytes := goarch.PtrSize * divRoundUp(t.PtrBytes/goarch.PtrSize, 8*goarch.PtrSize)
-			p = (*byte)(persistentalloc(bytes, goarch.PtrSize, &memstats.other_sys))
+			// mem is *notInHeap, so the closure's store needs no write
+			// barrier (this function must not have one).
+			var mem *notInHeap
 			systemstack(func() {
-				buildGCMask(t, bitCursor{ptr: p, n: 0})
+				mem = persistentalloc1(bytes, goarch.PtrSize, &memstats.other_sys)
+				buildGCMask(t, bitCursor{ptr: (*byte)(unsafe.Pointer(mem)), n: 0})
 			})
+			p = (*byte)(unsafe.Pointer(mem))
 
 			// Store the newly-built gcmask for future callers.
 			atomic.StorepNoWB(addr, unsafe.Pointer(p))
