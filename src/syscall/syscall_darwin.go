@@ -175,7 +175,11 @@ func Kill(pid int, signum Signal) (err error) { return kill(pid, int(signum), 1)
 //sys	pread(fd int, p []byte, offset int64) (n int, err error)
 //sys	pwrite(fd int, p []byte, offset int64) (n int, err error)
 //sys	read(fd int, p []byte) (n int, err error)
-//sys	readdir_r(dir uintptr, entry *Dirent, result **Dirent) (res Errno)
+// readdir_r is declared (//sys) in syscall_darwin_amd64.go and
+// syscall_darwin_arm64.go. darwin/ppc64 defines it by hand in
+// syscall_darwin_ppc64.go: Leopard's plain readdir_r fills the legacy
+// 32-bit-inode record, and the 64-bit-inode record Dirent describes comes from
+// readdir_r$INODE64, a name mksyscall.pl cannot spell.
 //sys	Readlink(path string, buf []byte) (n int, err error)
 //sys	Rename(from string, to string) (err error)
 //sys	Revoke(path string) (err error)

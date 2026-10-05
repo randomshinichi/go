@@ -178,6 +178,19 @@ func libc_sendfile_trampoline()
 
 //go:cgo_import_dynamic libc_sendfile sendfile "/usr/lib/libSystem.B.dylib"
 
+// Exec cannot work on darwin/ppc64 Leopard, and this is a platform limit, not a
+// port defect. Leopard's kernel refuses execve (and posix_spawn with
+// POSIX_SPAWN_SETEXEC) from any process that has more than one thread, with
+// errno 45 (ENOTSUP), before it looks at the path: execve of a path that does
+// not exist also returns 45. A Go process always has several threads, so
+// syscall.Exec always returns ENOTSUP here, from libc execve and from the raw
+// SYS_EXECVE alike. Measured on the G5 (out/stage2-20261003/D16-statfs-exec/
+// native-g5/out-d16: c-e1 count=1 succeeds; c-e-mt-main, c-e-mt4-main,
+// c-e-mt-helper, c-e-mt-enoent, c-e-spawn-mt return 45; go-rawexec 45;
+// go-threads shows 5 threads). fork followed by execve in the child works
+// (c-e-mt-fork), which is what ForkExec, StartProcess and os/exec use.
+// TestExec fails here for this reason and is not weakened.
+
 // getfsstat64 is the libc entry point that fills the 64-bit-inode Statfs_t
 // (struct statfs64, 2168 bytes). Leopard's plain getfsstat, which the shared
 // Getfsstat (syscall_darwin_getfsstat.go) imports, fills the legacy 336-byte
@@ -200,6 +213,29 @@ func Getfsstat(buf []Statfs_t, flags int) (n int, err error) {
 	}
 	return getfsstat64(_p0, bufsize, flags)
 }
+
+// readdir_r reads one directory entry through libc's readdir_r$INODE64. It is
+// exported through //go:linkname (linkname_darwin.go) but nothing in this tree
+// reaches it on darwin/ppc64: Getdirentries below is raw SYS_getdirentries64.
+//
+// The shared //sys declaration imports plain readdir_r. On Leopard that is the
+// legacy function: it fills the 32-bit-inode record (reclen 12 for ".",
+// sizeof(struct dirent) 264; out/stage2-20261003/D7-syscall/g5-request2/
+// out-d7r2/C-dirent-test.txt) while Dirent describes the 64-bit-inode record
+// (1048 bytes). A caller using it would read garbage and not see an error.
+// readdir_r$INODE64 is exported by Leopard's libSystem (parent measurement,
+// D16, nm -g and dlsym); mksyscall.pl cannot spell the $ in the import name, so
+// the wrapper and its cgo_import_dynamic are written by hand here, and
+// mkasm.go finds the trampoline declaration in this file.
+func readdir_r(dir uintptr, entry *Dirent, result **Dirent) (res Errno) {
+	r0, _, _ := syscall(abi.FuncPCABI0(libc_readdir_r_inode64_trampoline), uintptr(dir), uintptr(unsafe.Pointer(entry)), uintptr(unsafe.Pointer(result)))
+	res = Errno(r0)
+	return
+}
+
+func libc_readdir_r_inode64_trampoline()
+
+//go:cgo_import_dynamic libc_readdir_r_inode64 readdir_r$INODE64 "/usr/lib/libSystem.B.dylib"
 
 // Getdirentries is a SUBSTITUTED mechanism on darwin/ppc64. The shared
 // implementation (syscall_darwin_libcdir.go) simulates it with libc fdopendir,

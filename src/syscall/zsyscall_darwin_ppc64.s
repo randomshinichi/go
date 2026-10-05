@@ -7,6 +7,8 @@ TEXT ·libc_fdopendir_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_fdopendir(SB)
 TEXT ·libc_sendfile_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_sendfile(SB)
+TEXT ·libc_readdir_r_inode64_trampoline(SB),NOSPLIT,$0-0
+	JMP	libc_readdir_r_inode64(SB)
 TEXT ·libc_getgroups_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_getgroups(SB)
 TEXT ·libc_setgroups_trampoline(SB),NOSPLIT,$0-0
@@ -159,8 +161,6 @@ TEXT ·libc_pwrite_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_pwrite(SB)
 TEXT ·libc_read_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_read(SB)
-TEXT ·libc_readdir_r_trampoline(SB),NOSPLIT,$0-0
-	JMP	libc_readdir_r(SB)
 TEXT ·libc_readlink_trampoline(SB),NOSPLIT,$0-0
 	JMP	libc_readlink(SB)
 TEXT ·libc_rename_trampoline(SB),NOSPLIT,$0-0
