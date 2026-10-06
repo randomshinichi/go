@@ -43,6 +43,10 @@ var commands = map[string]func(){
 }
 
 // main takes care of OS-specific startup and dispatches to xmain.
+func nativeGOARCH() string {
+	return runtime.GOARCH
+}
+
 func main() {
 	os.Setenv("TERM", "dumb") // disable escape codes in clang errors
 
@@ -146,6 +150,9 @@ func main() {
 			}
 		default:
 			fatalf("unknown architecture: %s", out)
+		}
+		if gohostarch == "" && (gohostos == "darwin" || gohostos == "ios") {
+			gohostarch = nativeGOARCH()
 		}
 	}
 

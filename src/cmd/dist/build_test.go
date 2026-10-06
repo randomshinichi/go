@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"internal/platform"
 	"internal/testenv"
 	"os"
@@ -29,6 +30,92 @@ func TestMustLinkExternal(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestDistNativeDarwinPPCHostDetection(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	if testing.Short() {
+		t.Skip("skipping building cmd/dist in short mode")
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	goroot := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
+
+	// Model only the platform facts unavailable on this Linux test host. The
+	// real dist startup, uname parsing, xinit validation and target default run.
+	mainSrc, err := os.ReadFile(filepath.Join(wd, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := strings.Replace(string(mainSrc), "gohostos = runtime.GOOS", `gohostos = "darwin"`, 1)
+	main = strings.Replace(main, "func nativeGOARCH() string {\n\treturn runtime.GOARCH\n}", "func nativeGOARCH() string {\n\treturn \"ppc64\"\n}", 1)
+	if main == string(mainSrc) || strings.Contains(main, "return runtime.GOARCH") {
+		t.Fatal("platform-fact overlay did not replace both intended seams")
+	}
+	mainOverlay := filepath.Join(t.TempDir(), "main.go")
+	if err := os.WriteFile(mainOverlay, []byte(main), 0600); err != nil {
+		t.Fatal(err)
+	}
+	overlay := filepath.Join(t.TempDir(), "overlay.json")
+	overlayJSON, err := json.Marshal(map[string]map[string]string{"Replace": {filepath.Join(wd, "main.go"): mainOverlay}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(overlay, overlayJSON, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	dist := filepath.Join(t.TempDir(), "dist")
+	build := exec.Command(testenv.GoToolPath(t), "build", "-overlay", overlay, "-o", dist, ".")
+	build.Dir = wd
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fixture dist: %v\n%s", err, out)
+	}
+
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.Mkdir(fakeBin, 0700); err != nil {
+		t.Fatal(err)
+	}
+	uname := "#!/bin/sh\ncase $1 in\n-m) echo 'Power Macintosh' ;;\n-a) if [ \"$UNAME_ARM64\" = 1 ]; then echo 'Darwin armhost 21.1.0 xnu-8019/RELEASE_ARM64_T6000 x86_64'; else echo 'Darwin pmg5.lan 9.8.0 Darwin Kernel Version 9.8.0: Wed Jul 15 16:57:01 PDT 2009; root:xnu-1228.15.4~1/RELEASE_PPC Power Macintosh'; fi ;;\n-v) echo 'Darwin Kernel Version 9.8.0: root:xnu-1228.15.4~1/RELEASE_PPC' ;;\n*) exit 2 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(fakeBin, "uname"), []byte(uname), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(dist, "env")
+	cmd.Env = []string{"PATH=" + fakeBin + ":/usr/bin:/bin", "TMPDIR=" + os.TempDir(), "GOROOT=" + goroot}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("direct fixture dist env: %v\n%s", err, out)
+	}
+	for _, key := range []string{"GOHOSTARCH", "GOARCH", "GOPPC64"} {
+		if strings.Contains(strings.Join(cmd.Env, "\n"), key+"=") {
+			t.Fatalf("fixture exec environment unexpectedly contains %s", key)
+		}
+	}
+	for _, want := range []string{`GOHOSTARCH="ppc64";`, `GOARCH="ppc64";`, `GOPPC64="ppc970";`} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("direct fixture output lacks %q:\n%s", want, out)
+		}
+	}
+
+	// The uname RELEASE_ARM64 branch must continue to outrank the runtime
+	// architecture fallback.
+	arm := exec.Command(dist, "env")
+	arm.Env = append(cmd.Env, "UNAME_ARM64=1")
+	armOut, err := arm.CombinedOutput()
+	if err != nil || !strings.Contains(string(armOut), `GOHOSTARCH="arm64";`) {
+		t.Fatalf("Darwin translated ARM64 control: err=%v\n%s", err, armOut)
+	}
+
+	// An explicit host override is applied later by xinit and must win over
+	// both uname and the modeled runtime fact.
+	override := exec.Command(dist, "env")
+	override.Env = append(cmd.Env, "GOHOSTARCH=amd64")
+	overrideOut, err := override.CombinedOutput()
+	if err != nil || !strings.Contains(string(overrideOut), `GOHOSTARCH="amd64";`) {
+		t.Fatalf("explicit GOHOSTARCH control: err=%v\n%s", err, overrideOut)
 	}
 }
 
