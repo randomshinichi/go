@@ -229,6 +229,15 @@ func madvise_trampoline()
 
 //go:nosplit
 //go:cgo_unsafe_args
+func msync(addr unsafe.Pointer, n uintptr, flags int32) int32 {
+	ret := libcCall(unsafe.Pointer(abi.FuncPCABI0(msync_trampoline)), unsafe.Pointer(&addr))
+	KeepAlive(addr)
+	return int32(ret)
+}
+func msync_trampoline()
+
+//go:nosplit
+//go:cgo_unsafe_args
 func mlock(addr unsafe.Pointer, n uintptr) {
 	libcCall(unsafe.Pointer(abi.FuncPCABI0(mlock_trampoline)), unsafe.Pointer(&addr))
 	KeepAlive(addr) // Just for consistency. Hopefully addr is not a Go address.
@@ -605,6 +614,7 @@ func proc_regionfilename_trampoline()
 //go:cgo_import_dynamic libc_mmap mmap "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_munmap munmap "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_madvise madvise "/usr/lib/libSystem.B.dylib"
+//go:cgo_import_dynamic libc_msync msync "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_mlock mlock "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_error __error "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_usleep usleep "/usr/lib/libSystem.B.dylib"
