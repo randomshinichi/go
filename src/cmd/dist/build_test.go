@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -33,6 +35,21 @@ func TestMustLinkExternal(t *testing.T) {
 	}
 }
 
+// TestDistNativeDarwinPPCHostDetection builds cmd/dist with a source overlay
+// that replaces at most two platform facts the Linux test host cannot supply:
+// gohostos and the return value of nativeGOARCH. Everything else, including
+// uname parsing, the Darwin/iOS fallback, xinit validation and the GOPPC64
+// default, is the real dist code. No case supplies GOHOSTARCH, GOARCH or
+// GOPPC64 to dist except the one case that is labelled as an explicit override.
+//
+// In each case the host arch in the output is COMPUTED by dist from the
+// injected facts; the facts and the uname text are INJECTED. The cases are
+// chosen so that each of the following counterfeits fails one of them:
+//   - gohostarch hard-coded to "ppc64" in place of nativeGOARCH(): fails
+//     "native amd64" and "real runtime";
+//   - the darwin/ios condition removed from the fallback: fails
+//     "freebsd refuses" and "openbsd refuses";
+//   - nativeGOARCH deleted or stubbed: fails the seam guard.
 func TestDistNativeDarwinPPCHostDetection(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	if testing.Short() {
@@ -44,78 +61,166 @@ func TestDistNativeDarwinPPCHostDetection(t *testing.T) {
 	}
 	goroot := filepath.Clean(filepath.Join(wd, "..", "..", ".."))
 
-	// Model only the platform facts unavailable on this Linux test host. The
-	// real dist startup, uname parsing, xinit validation and target default run.
+	const (
+		hostOSSeam = "gohostos = runtime.GOOS"
+		archSeam   = "func nativeGOARCH() string {\n\treturn runtime.GOARCH\n}"
+	)
 	mainSrc, err := os.ReadFile(filepath.Join(wd, "main.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	main := strings.Replace(string(mainSrc), "gohostos = runtime.GOOS", `gohostos = "darwin"`, 1)
-	main = strings.Replace(main, "func nativeGOARCH() string {\n\treturn runtime.GOARCH\n}", "func nativeGOARCH() string {\n\treturn \"ppc64\"\n}", 1)
-	if main == string(mainSrc) || strings.Contains(main, "return runtime.GOARCH") {
-		t.Fatal("platform-fact overlay did not replace both intended seams")
-	}
-	mainOverlay := filepath.Join(t.TempDir(), "main.go")
-	if err := os.WriteFile(mainOverlay, []byte(main), 0600); err != nil {
-		t.Fatal(err)
-	}
-	overlay := filepath.Join(t.TempDir(), "overlay.json")
-	overlayJSON, err := json.Marshal(map[string]map[string]string{"Replace": {filepath.Join(wd, "main.go"): mainOverlay}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(overlay, overlayJSON, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	dist := filepath.Join(t.TempDir(), "dist")
-	build := exec.Command(testenv.GoToolPath(t), "build", "-overlay", overlay, "-o", dist, ".")
-	build.Dir = wd
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build fixture dist: %v\n%s", err, out)
+	// Seam guard: each seam must exist exactly once, so that a deleted or
+	// already-stubbed nativeGOARCH (or a duplicated seam) fails here rather
+	// than letting the overlay silently model nothing.
+	for _, seam := range []string{hostOSSeam, archSeam} {
+		if n := strings.Count(string(mainSrc), seam); n != 1 {
+			t.Fatalf("seam guard: main.go contains %q %d times, want exactly 1 (nativeGOARCH deleted or stubbed?)", seam, n)
+		}
 	}
 
 	fakeBin := filepath.Join(t.TempDir(), "bin")
 	if err := os.Mkdir(fakeBin, 0700); err != nil {
 		t.Fatal(err)
 	}
-	uname := "#!/bin/sh\ncase $1 in\n-m) echo 'Power Macintosh' ;;\n-a) if [ \"$UNAME_ARM64\" = 1 ]; then echo 'Darwin armhost 21.1.0 xnu-8019/RELEASE_ARM64_T6000 x86_64'; else echo 'Darwin pmg5.lan 9.8.0 Darwin Kernel Version 9.8.0: Wed Jul 15 16:57:01 PDT 2009; root:xnu-1228.15.4~1/RELEASE_PPC Power Macintosh'; fi ;;\n-v) echo 'Darwin Kernel Version 9.8.0: root:xnu-1228.15.4~1/RELEASE_PPC' ;;\n*) exit 2 ;;\nesac\n"
+	// Recorded Leopard uname strings; -p serves the BSD arms of the fallback
+	// scoping cases. UNAME_ARM64=1 selects the translated-Darwin string.
+	uname := "#!/bin/sh\ncase $1 in\n-m) echo 'Power Macintosh' ;;\n-p) echo powerpc ;;\n-a) if [ \"$UNAME_ARM64\" = 1 ]; then echo 'Darwin armhost 21.1.0 xnu-8019/RELEASE_ARM64_T6000 x86_64'; else echo 'Darwin pmg5.lan 9.8.0 Darwin Kernel Version 9.8.0: Wed Jul 15 16:57:01 PDT 2009; root:xnu-1228.15.4~1/RELEASE_PPC Power Macintosh'; fi ;;\n-v) echo 'Darwin Kernel Version 9.8.0: root:xnu-1228.15.4~1/RELEASE_PPC' ;;\n*) exit 2 ;;\nesac\n"
 	if err := os.WriteFile(filepath.Join(fakeBin, "uname"), []byte(uname), 0700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(dist, "env")
-	cmd.Env = []string{"PATH=" + fakeBin + ":/usr/bin:/bin", "TMPDIR=" + os.TempDir(), "GOROOT=" + goroot}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("direct fixture dist env: %v\n%s", err, out)
-	}
-	for _, key := range []string{"GOHOSTARCH", "GOARCH", "GOPPC64"} {
-		if strings.Contains(strings.Join(cmd.Env, "\n"), key+"=") {
-			t.Fatalf("fixture exec environment unexpectedly contains %s", key)
+
+	// buildDist builds dist with gohostos modelled as hostOS and nativeGOARCH
+	// modelled as nativeArch; an empty nativeArch leaves the real runtime.GOARCH.
+	// The build directories belong to the parent test so that they outlive
+	// the subtest that first built them.
+	parent := t
+	built := make(map[[2]string]string)
+	buildDist := func(t *testing.T, hostOS, nativeArch string) string {
+		key := [2]string{hostOS, nativeArch}
+		if dist, ok := built[key]; ok {
+			return dist
 		}
-	}
-	for _, want := range []string{`GOHOSTARCH="ppc64";`, `GOARCH="ppc64";`, `GOPPC64="ppc970";`} {
-		if !strings.Contains(string(out), want) {
-			t.Fatalf("direct fixture output lacks %q:\n%s", want, out)
+		main := strings.Replace(string(mainSrc), hostOSSeam, "gohostos = "+strconv.Quote(hostOS), 1)
+		if nativeArch != "" {
+			main = strings.Replace(main, archSeam, "func nativeGOARCH() string {\n\treturn "+strconv.Quote(nativeArch)+"\n}", 1)
 		}
+		dir := parent.TempDir()
+		mainOverlay := filepath.Join(dir, "main.go")
+		if err := os.WriteFile(mainOverlay, []byte(main), 0600); err != nil {
+			t.Fatal(err)
+		}
+		overlayJSON, err := json.Marshal(map[string]map[string]string{"Replace": {filepath.Join(wd, "main.go"): mainOverlay}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		overlay := filepath.Join(dir, "overlay.json")
+		if err := os.WriteFile(overlay, overlayJSON, 0600); err != nil {
+			t.Fatal(err)
+		}
+		dist := filepath.Join(dir, "dist")
+		build := exec.Command(testenv.GoToolPath(t), "build", "-overlay", overlay, "-o", dist, ".")
+		build.Dir = wd
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build fixture dist (host %s, native %q): %v\n%s", hostOS, nativeArch, err, out)
+		}
+		built[key] = dist
+		return dist
 	}
 
-	// The uname RELEASE_ARM64 branch must continue to outrank the runtime
-	// architecture fallback.
-	arm := exec.Command(dist, "env")
-	arm.Env = append(cmd.Env, "UNAME_ARM64=1")
-	armOut, err := arm.CombinedOutput()
-	if err != nil || !strings.Contains(string(armOut), `GOHOSTARCH="arm64";`) {
-		t.Fatalf("Darwin translated ARM64 control: err=%v\n%s", err, armOut)
-	}
+	envLine := regexp.MustCompile(`(?m)^([A-Z0-9_]+)="([^"]*)";$`)
 
-	// An explicit host override is applied later by xinit and must win over
-	// both uname and the modeled runtime fact.
-	override := exec.Command(dist, "env")
-	override.Env = append(cmd.Env, "GOHOSTARCH=amd64")
-	overrideOut, err := override.CombinedOutput()
-	if err != nil || !strings.Contains(string(overrideOut), `GOHOSTARCH="amd64";`) {
-		t.Fatalf("explicit GOHOSTARCH control: err=%v\n%s", err, overrideOut)
+	tests := []struct {
+		name       string
+		hostOS     string
+		nativeArch string   // "" leaves runtime.GOARCH unmodelled
+		extraEnv   []string // explicit override control only
+		armUname   bool
+		onlyOn     []string // runtime.GOARCH values for which the case is meaningful
+		wantFail   string   // dist must exit non-zero with this in its output
+		want       map[string]string
+		notWant    map[string]string
+	}{
+		{
+			name: "leopard native ppc64", hostOS: "darwin", nativeArch: "ppc64",
+			want: map[string]string{"GOHOSTARCH": "ppc64", "GOARCH": "ppc64", "GOPPC64": "ppc970"},
+		},
+		{
+			// Fails if the host arch is hard-coded rather than taken from nativeGOARCH.
+			name: "leopard native amd64", hostOS: "darwin", nativeArch: "amd64",
+			want:    map[string]string{"GOHOSTARCH": "amd64", "GOARCH": "amd64"},
+			notWant: map[string]string{"GOHOSTARCH": "ppc64"},
+		},
+		{
+			// No modelled arch at all: the value must be this process's real
+			// runtime.GOARCH, which differs from ppc64 on every non-PPC64 test host.
+			name: "leopard real runtime", hostOS: "darwin", onlyOn: []string{"amd64", "arm64", "ppc64"},
+			want: map[string]string{"GOHOSTARCH": runtime.GOARCH, "GOARCH": runtime.GOARCH},
+		},
+		{
+			name: "translated arm64 uname outranks fallback", hostOS: "darwin", nativeArch: "ppc64", armUname: true,
+			want: map[string]string{"GOHOSTARCH": "arm64"},
+		},
+		{
+			// INJECTED GOHOSTARCH: an override control, not detection evidence.
+			name: "explicit GOHOSTARCH override", hostOS: "darwin", nativeArch: "ppc64", extraEnv: []string{"GOHOSTARCH=amd64"},
+			want: map[string]string{"GOHOSTARCH": "amd64"},
+		},
+		{
+			// Fails if the darwin/ios scoping is dropped: freebsd would silently
+			// resolve to freebsd/ppc64 instead of upstream's fatal.
+			name: "freebsd refuses", hostOS: "freebsd", nativeArch: "ppc64",
+			wantFail: "unknown $GOHOSTARCH",
+		},
+		{
+			name: "openbsd refuses", hostOS: "openbsd", nativeArch: "ppc64",
+			wantFail: "unknown $GOHOSTARCH",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.onlyOn != nil && !slices.Contains(tt.onlyOn, runtime.GOARCH) {
+				t.Skipf("case not meaningful on runtime.GOARCH=%s", runtime.GOARCH)
+			}
+			dist := buildDist(t, tt.hostOS, tt.nativeArch)
+			cmd := exec.Command(dist, "env")
+			cmd.Env = []string{"PATH=" + fakeBin + ":/usr/bin:/bin", "TMPDIR=" + os.TempDir(), "GOROOT=" + goroot}
+			if tt.armUname {
+				cmd.Env = append(cmd.Env, "UNAME_ARM64=1")
+			}
+			for _, key := range []string{"GOHOSTARCH", "GOARCH", "GOPPC64"} {
+				if strings.Contains(strings.Join(cmd.Env, "\n"), key+"=") {
+					t.Fatalf("exec environment unexpectedly contains %s", key)
+				}
+			}
+			cmd.Env = append(cmd.Env, tt.extraEnv...)
+			out, err := cmd.CombinedOutput()
+			if tt.wantFail != "" {
+				if err == nil {
+					t.Fatalf("dist env succeeded, want failure containing %q:\n%s", tt.wantFail, out)
+				}
+				if !strings.Contains(string(out), tt.wantFail) {
+					t.Fatalf("dist env failed without %q: %v\n%s", tt.wantFail, err, out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("dist env: %v\n%s", err, out)
+			}
+			got := make(map[string]string)
+			for _, m := range envLine.FindAllStringSubmatch(string(out), -1) {
+				got[m[1]] = m[2]
+			}
+			for key, want := range tt.want {
+				if got[key] != want {
+					t.Errorf("%s = %q, want %q\n%s", key, got[key], want, out)
+				}
+			}
+			for key, bad := range tt.notWant {
+				if got[key] == bad {
+					t.Errorf("%s = %q, which must not be produced here\n%s", key, got[key], out)
+				}
+			}
+		})
 	}
 }
 
