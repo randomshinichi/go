@@ -2156,6 +2156,8 @@
 //     ppc64.power8, ppc64.power9, and ppc64.power10
 //     (or ppc64le.power8, ppc64le.power9, and ppc64le.power10)
 //     feature build tags.
+//     In this fork, GOARCH=ppc64 GOPPC64=ppc970 corresponds to the
+//     ppc64.ppc970 build tag only.
 //   - For GOARCH=riscv64,
 //     GORISCV64=rva20u64, rva22u64 and rva23u64 correspond to the riscv64.rva20u64,
 //     riscv64.rva22u64 and riscv64.rva23u64 build tags.
@@ -2538,6 +2540,9 @@
 //	GOPPC64
 //		For GOARCH=ppc64{,le}, the target ISA (Instruction Set Architecture).
 //		Valid values are power8 (default), power9, power10.
+//		In this fork, GOARCH=ppc64 also accepts ppc970 (big-endian only),
+//		which is the default for GOOS=darwin GOARCH=ppc64; power8 remains
+//		the default for every other target. An explicit setting always wins.
 //	GORISCV64
 //		For GOARCH=riscv64, the RISC-V user-mode application profile for which
 //		to compile. Valid values are rva20u64 (default), rva22u64, rva23u64.
