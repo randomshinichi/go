@@ -236,6 +236,9 @@ func xinit() {
 
 	defaultldso = os.Getenv("GO_LDSO")
 
+	// All GO$GOARCH settings are final now, so the architecture sub-version
+	// build tags can be derived for shouldbuild.
+	setArchTags()
 	// For tools being invoked but also for os.ExpandEnv.
 	os.Setenv("GO386", go386)
 	os.Setenv("GOAMD64", goamd64)
@@ -1103,8 +1106,95 @@ func matchtag(tag string) bool {
 	case "unix":
 		return unixOS[goos]
 	default:
-		return false
+		// Architecture sub-version tags, e.g. ppc64.ppc970 or amd64.v2.
+		// See setArchTags.
+		return archTagSet[tag]
 	}
+}
+
+// archTagSet holds the architecture sub-version build tags that are set for
+// this build, such as "ppc64.ppc970" or "amd64.v2". It is populated by
+// setArchTags.
+var archTagSet map[string]bool
+
+// setArchTags records the architecture sub-version build tags that are set for
+// this build, mirroring internal/buildcfg's gogoarchTags.
+//
+// dist evaluates //go:build lines itself when it builds the bootstrap go
+// command (see shouldbuild), because it cannot use a go command to build the
+// go command. It must therefore agree with the tags the real build system
+// derives from the GO$GOARCH settings. If it does not, a negated tag such as
+// "!ppc64.ppc970" is evaluated as true and ISA-specific code is admitted into a
+// binary built for an older machine: that is exactly how a POWER8 SHA-256
+// implementation once reached a 970, where it died with SIGILL. The gap is only
+// reachable on a native ppc64 bootstrap, because dist's own builder only builds
+// the bootstrap go command and the toolchain commands.
+//
+// Keep this in sync with internal/buildcfg.gogoarchTags.
+func setArchTags() {
+	tags := make(map[string]bool)
+	switch goarch {
+	case "386":
+		tags[goarch+"."+go386] = true
+	case "amd64":
+		var n int
+		if _, err := fmt.Sscanf(goamd64, "v%d", &n); err == nil {
+			for i := 1; i <= n; i++ {
+				tags[fmt.Sprintf("%s.v%d", goarch, i)] = true
+			}
+		}
+	case "arm":
+		var n int
+		if _, err := fmt.Sscanf(goarm, "%d", &n); err == nil {
+			for i := 5; i <= n; i++ {
+				tags[fmt.Sprintf("%s.%d", goarch, i)] = true
+			}
+		}
+	case "arm64":
+		var major, minor int
+		if _, err := fmt.Sscanf(goarm64, "v%d.%d", &major, &minor); err == nil {
+			for i := 0; i <= minor; i++ {
+				tags[fmt.Sprintf("%s.v%d.%d", goarch, major, i)] = true
+			}
+			// ARM64 v9.x also includes support for v8.x+5, i.e. v9.1
+			// includes v8.6.
+			if major == 9 {
+				for i := 0; i <= minor+5 && i <= 9; i++ {
+					tags[fmt.Sprintf("%s.v%d.%d", goarch, 8, i)] = true
+				}
+			}
+		}
+	case "mips", "mipsle":
+		tags[goarch+"."+gomips] = true
+	case "mips64", "mips64le":
+		tags[goarch+"."+gomips64] = true
+	case "ppc64", "ppc64le":
+		if goppc64 == "ppc970" {
+			// The port's floor is the 970, an ISA older than power8, so
+			// power8..power10 are not implied.
+			tags[goarch+".ppc970"] = true
+		} else {
+			var n int
+			if _, err := fmt.Sscanf(goppc64, "power%d", &n); err == nil {
+				for i := 8; i <= n; i++ {
+					tags[fmt.Sprintf("%s.power%d", goarch, i)] = true
+				}
+			}
+		}
+	case "riscv64":
+		tags[goarch+".rva20u64"] = true
+		switch goriscv64 {
+		case "rva23u64":
+			tags[goarch+".rva22u64"] = true
+			tags[goarch+".rva23u64"] = true
+		case "rva22u64":
+			tags[goarch+".rva22u64"] = true
+		}
+	case "wasm":
+		tags[goarch+".satconv"] = true
+		tags[goarch+".signext"] = true
+	}
+	archTagSet = tags
 }
 
 // shouldbuild reports whether we should build this file.
