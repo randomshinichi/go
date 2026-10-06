@@ -71,18 +71,20 @@ func TestDistEnvGOPPC64Default(t *testing.T) {
 		t.Fatalf("go build cmd/dist: %v\n%s", err, out)
 	}
 
-	// The unset-GOARCH case falls back to GOHOSTARCH, so the native
-	// darwin/ppc64 case is simulated with GOHOSTARCH=ppc64.
-	hostDefault := "power8"
-	if runtime.GOOS == "darwin" && runtime.GOARCH == "ppc64" {
-		hostDefault = "ppc970"
+	// Unset GOOS falls back to the host OS.
+	hostOSDefault := "power8"
+	if runtime.GOOS == "darwin" {
+		hostOSDefault = "ppc970"
 	}
+	// Unset GOARCH falls back to GOHOSTARCH, so the native darwin/ppc64
+	// case is simulated with GOHOSTARCH=ppc64. Want "" means dist env
+	// does not print GOPPC64 because the target is not a ppc64 architecture.
 	tests := []struct {
 		name string
 		env  []string
 		want string
 	}{
-		{"host", nil, hostDefault},
+		{"GOOS unset", []string{"GOARCH=ppc64"}, hostOSDefault},
 		{"darwin/ppc64", []string{"GOOS=darwin", "GOARCH=ppc64"}, "ppc970"},
 		{"darwin/ppc64 GOARCH unset", []string{"GOOS=darwin", "GOHOSTARCH=ppc64"}, "ppc970"},
 		{"darwin/ppc64 explicit power8", []string{"GOOS=darwin", "GOARCH=ppc64", "GOPPC64=power8"}, "power8"},
@@ -90,7 +92,7 @@ func TestDistEnvGOPPC64Default(t *testing.T) {
 		{"darwin/ppc64 empty GOPPC64", []string{"GOOS=darwin", "GOARCH=ppc64", "GOPPC64="}, "ppc970"},
 		{"linux/ppc64", []string{"GOOS=linux", "GOARCH=ppc64"}, "power8"},
 		{"linux/ppc64le", []string{"GOOS=linux", "GOARCH=ppc64le"}, "power8"},
-		{"darwin/amd64", []string{"GOOS=darwin", "GOARCH=amd64"}, "power8"},
+		{"darwin/amd64", []string{"GOOS=darwin", "GOARCH=amd64"}, ""},
 	}
 	line := regexp.MustCompile(`(?m)^GOPPC64="([^"]*)"`)
 	for _, tt := range tests {
@@ -110,6 +112,12 @@ func TestDistEnvGOPPC64Default(t *testing.T) {
 				t.Fatalf("dist env: %v\n%s", err, out)
 			}
 			m := line.FindSubmatch(out)
+			if tt.want == "" {
+				if m != nil {
+					t.Errorf("unexpected GOPPC64 line in dist env output:\n%s", out)
+				}
+				return
+			}
 			if m == nil {
 				t.Fatalf("no GOPPC64 line in dist env output:\n%s", out)
 			}
