@@ -165,15 +165,6 @@ func xinit() {
 	}
 	gomips64 = b
 
-	b = os.Getenv("GOPPC64")
-	if b == "" {
-		b = "power8"
-		if goos == "darwin" && goarch == "ppc64" {
-			b = "ppc970"
-		}
-	}
-	goppc64 = b
-
 	b = os.Getenv("GORISCV64")
 	if b == "" {
 		b = "rva20u64"
@@ -208,6 +199,17 @@ func xinit() {
 	if slices.Index(okgoarch, goarch) < 0 {
 		fatalf("unknown $GOARCH %s", goarch)
 	}
+
+	// The default depends on the target, so select it only after
+	// goos and goarch have been initialized and validated.
+	b = os.Getenv("GOPPC64")
+	if b == "" {
+		b = "power8"
+		if goos == "darwin" && goarch == "ppc64" {
+			b = "ppc970"
+		}
+	}
+	goppc64 = b
 
 	b = os.Getenv("GO_EXTLINK_ENABLED")
 	if b != "" {
