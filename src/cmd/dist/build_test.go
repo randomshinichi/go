@@ -261,7 +261,7 @@ func TestMatchtagArchTags(t *testing.T) {
 // make.bash on a 970. dist builds the bootstrap go command itself, evaluating
 // //go:build lines with matchtag/shouldbuild. Before those knew about the port's
 // ppc64.ppc970 tag, "!ppc64.ppc970" evaluated as true, so the POWER8 AES/SHA-2
-// assembly was compiled into go_bootstrap; it executed vshasigmaw on a 970 and
+// assembly was compiled into go_bootstrap; it executed a VSX instruction (LXVW4X) on a 970 and
 // died with "SIGILL" (and cascaded into "semasleep on Darwin signal stack").
 // The POWER8 file must therefore be excluded, and the generic one included.
 func TestShouldbuildPPC970Crypto(t *testing.T) {
