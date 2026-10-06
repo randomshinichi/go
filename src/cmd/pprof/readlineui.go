@@ -5,7 +5,10 @@
 // This file contains a driver.UI implementation
 // that provides the readline functionality if possible.
 
-//go:build (darwin || dragonfly || freebsd || linux || netbsd || openbsd || solaris || windows) && !appengine && !android
+// The vendored x/sys/unix has no generated Darwin/ppc64 socket types. Disable
+// the optional readline UI on that target; pprof falls back to its nil UI, so
+// interactive editing is unavailable.
+//go:build ((darwin && !ppc64) || dragonfly || freebsd || linux || netbsd || openbsd || solaris || windows) && !appengine && !android
 
 package main
 
