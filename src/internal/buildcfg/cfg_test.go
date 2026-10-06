@@ -5,6 +5,7 @@
 package buildcfg
 
 import (
+	"errors"
 	"os"
 	"slices"
 	"testing"
@@ -80,9 +81,9 @@ func TestConfigFlags(t *testing.T) {
 }
 
 func TestGOPPC64(t *testing.T) {
-	oldGOPPC64, oldGOARCH, oldError := GOPPC64, GOARCH, Error
+	oldGOPPC64, oldGOOS, oldGOARCH, oldError := GOPPC64, GOOS, GOARCH, Error
 	defer func() {
-		GOPPC64, GOARCH, Error = oldGOPPC64, oldGOARCH, oldError
+		GOPPC64, GOOS, GOARCH, Error = oldGOPPC64, oldGOOS, oldGOARCH, oldError
 	}()
 
 	for _, tc := range []struct {
@@ -174,6 +175,22 @@ func TestGOPPC64(t *testing.T) {
 		t.Errorf("GOGOARCH() for GOPPC64=8 = (%q, %q), want (GOPPC64, power8)", name, value)
 	}
 	Error = nil
+}
+
+// TestGOPPC64RestoresGlobals runs TestGOPPC64 from a non-Linux, non-ppc64
+// starting state and checks that the package globals it mutates are restored.
+func TestGOPPC64RestoresGlobals(t *testing.T) {
+	oldGOPPC64, oldGOOS, oldGOARCH, oldError := GOPPC64, GOOS, GOARCH, Error
+	defer func() {
+		GOPPC64, GOOS, GOARCH, Error = oldGOPPC64, oldGOOS, oldGOARCH, oldError
+	}()
+
+	GOPPC64, GOOS, GOARCH, Error = 9, "plan9", "s390x", errors.New("sentinel")
+	t.Run("TestGOPPC64", TestGOPPC64)
+	if GOPPC64 != 9 || GOOS != "plan9" || GOARCH != "s390x" || Error == nil || Error.Error() != "sentinel" {
+		t.Errorf("TestGOPPC64 leaked globals: GOPPC64=%d GOOS=%q GOARCH=%q Error=%v; want 9 plan9 s390x sentinel",
+			GOPPC64, GOOS, GOARCH, Error)
+	}
 }
 
 func TestGoarm64FeaturesSupports(t *testing.T) {
