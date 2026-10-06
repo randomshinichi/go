@@ -214,3 +214,89 @@ func TestDistEnvGOPPC64Default(t *testing.T) {
 		})
 	}
 }
+
+// TestMatchtagArchTags checks that dist's own evaluation of //go:build lines
+// agrees with the architecture sub-version tags that the real build system
+// derives (internal/buildcfg.gogoarchTags). A disagreement makes a negated tag
+// such as "!ppc64.ppc970" evaluate as true, which admits ISA-specific code into
+// a binary built for an older machine.
+func TestMatchtagArchTags(t *testing.T) {
+	savedArch, savedPpc64, savedAmd64 := goarch, goppc64, goamd64
+	defer func() {
+		goarch, goppc64, goamd64 = savedArch, savedPpc64, savedAmd64
+		setArchTags()
+	}()
+
+	tests := []struct {
+		arch, ppc64, amd64, tag string
+		want                    bool
+	}{
+		{"ppc64", "ppc970", "v1", "ppc64.ppc970", true},
+		{"ppc64", "ppc970", "v1", "ppc64.power8", false},
+		{"ppc64", "ppc970", "v1", "ppc64.power9", false},
+		{"ppc64", "ppc970", "v1", "ppc64.power10", false},
+		{"ppc64", "power8", "v1", "ppc64.power8", true},
+		{"ppc64", "power8", "v1", "ppc64.ppc970", false},
+		{"ppc64", "power8", "v1", "ppc64.power9", false},
+		{"ppc64", "power9", "v1", "ppc64.power8", true},
+		{"ppc64", "power9", "v1", "ppc64.power9", true},
+		{"ppc64", "power9", "v1", "ppc64.power10", false},
+		{"ppc64le", "power10", "v1", "ppc64le.power8", true},
+		{"ppc64le", "ppc970", "v1", "ppc64le.ppc970", true},
+		{"amd64", "power8", "v1", "amd64.v1", true},
+		{"amd64", "power8", "v1", "amd64.v2", false},
+		{"amd64", "power8", "v3", "amd64.v2", true},
+		{"amd64", "power8", "v3", "amd64.v4", false},
+		{"arm64", "power8", "v1", "ppc64.ppc970", false},
+	}
+	for _, tt := range tests {
+		goarch, goppc64, goamd64 = tt.arch, tt.ppc64, tt.amd64
+		setArchTags()
+		if got := matchtag(tt.tag); got != tt.want {
+			t.Errorf("matchtag(%q) with goarch=%q goppc64=%q goamd64=%q = %v, want %v",
+				tt.tag, tt.arch, tt.ppc64, tt.amd64, got, tt.want)
+		}
+	}
+}
+
+// TestShouldbuildPPC970Crypto is the regression test for a SIGILL in a native
+// make.bash on a 970. dist builds the bootstrap go command itself, evaluating
+// //go:build lines with matchtag/shouldbuild. Before those knew about the port's
+// ppc64.ppc970 tag, "!ppc64.ppc970" evaluated as true, so the POWER8 AES/SHA-2
+// assembly was compiled into go_bootstrap; it executed vshasigmaw on a 970 and
+// died with "SIGILL" (and cascaded into "semasleep on Darwin signal stack").
+// The POWER8 file must therefore be excluded, and the generic one included.
+func TestShouldbuildPPC970Crypto(t *testing.T) {
+	savedArch, savedPpc64 := goarch, goppc64
+	defer func() {
+		goarch, goppc64 = savedArch, savedPpc64
+		setArchTags()
+	}()
+
+	const pkg = "crypto/internal/fips140/sha256"
+	asmFile := filepath.Join("..", "..", "crypto", "internal", "fips140", "sha256", "sha256block_ppc64x.go")
+	noasmFile := filepath.Join("..", "..", "crypto", "internal", "fips140", "sha256", "sha256block_noasm.go")
+
+	goarch = "ppc64"
+	goppc64 = "ppc970"
+	setArchTags()
+	if shouldbuild(asmFile, pkg) {
+		t.Errorf("shouldbuild(%s) = true with GOPPC64=ppc970; the POWER8 implementation must be excluded", asmFile)
+	}
+	if !shouldbuild(noasmFile, pkg) {
+		t.Errorf("shouldbuild(%s) = false with GOPPC64=ppc970; the generic implementation is required", noasmFile)
+	}
+
+	// Control: on a POWER8 (and later) target the assembly implementation is
+	// the one that must be built.
+	for _, setting := range []string{"power8", "power9", "power10"} {
+		goppc64 = setting
+		setArchTags()
+		if !shouldbuild(asmFile, pkg) {
+			t.Errorf("shouldbuild(%s) = false with GOPPC64=%s; the POWER8 implementation is required there", asmFile, setting)
+		}
+		if shouldbuild(noasmFile, pkg) {
+			t.Errorf("shouldbuild(%s) = true with GOPPC64=%s; the generic implementation must be excluded there", noasmFile, setting)
+		}
+	}
+}
