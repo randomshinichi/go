@@ -20,11 +20,19 @@ func sysAllocOS(n uintptr, _ string) unsafe.Pointer {
 	return v
 }
 
-// Leopard has no MADV_FREE_REUSABLE or MADV_FREE_REUSE. This deliberately
-// differs from modern Darwin: MADV_FREE releases pages without marking them
-// reusable in task_info accounting, and returning them to use needs no advice.
+// sysUnusedOS uses Leopard's MS_KILLPAGES because its kernel rejects
+// MADV_FREE with EINVAL. On xnu-1228 this moves eligible pages to the inactive
+// queue while leaving the mapping valid, making them reclaimable by the kernel.
+// The operation is conditional: xnu skips objects with ref_count != 1,
+// needs_copy, or a shadow, and skips wired, busy, or gobbled pages even when
+// msync succeeds. A successful call therefore does not mean immediate RSS reduction
+// or guarantee that every page in the range was reclaimed. The G5 measurement
+// found a 1 GiB anonymous mapping moved active-to-inactive with no pressure.
 func sysUnusedOS(v unsafe.Pointer, n uintptr) {
-	madvise(v, n, _MADV_FREE)
+	if msync(v, n, _MS_KILLPAGES) != 0 {
+		print("runtime: msync(", v, ", ", n, ", MS_KILLPAGES) failed\n")
+		throw("runtime: cannot mark unused pages reclaimable")
+	}
 }
 
 func sysUsedOS(v unsafe.Pointer, n uintptr) {

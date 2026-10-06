@@ -147,6 +147,13 @@ TEXT runtime·madvise_trampoline(SB),NOSPLIT,$80
 	// ignore failure - maybe pages are locked
 	RET
 
+TEXT runtime·msync_trampoline(SB),NOSPLIT,$80
+	MOVD	8(R3), R4	// arg 2 len
+	MOVW	16(R3), R5	// arg 3 flags
+	MOVD	0(R3), R3	// arg 1 addr
+	BL	libc_msync(SB)
+	RET
+
 TEXT runtime·mlock_trampoline(SB),NOSPLIT,$80
 	MOVD	8(R3), R4	// arg 2 len
 	MOVD	0(R3), R3	// arg 1 addr

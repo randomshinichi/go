@@ -23,6 +23,8 @@ const (
 	_MADV_DONTNEED = 4
 	_MADV_FREE     = 5
 
+	_MS_KILLPAGES = 0x4
+
 	_F_GETFL = 3
 	_F_SETFL = 4
 
