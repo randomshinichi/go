@@ -299,8 +299,16 @@ func gomips64() string {
 	return DefaultGOMIPS64
 }
 
+func defaultGOPPC64() string {
+	if GOOS == "darwin" && GOARCH == "ppc64" {
+		return "ppc970"
+	}
+	return "power8"
+}
+
 func goppc64() int {
-	switch v := envOr("GOPPC64", DefaultGOPPC64); v {
+	defaultValue := defaultGOPPC64()
+	switch v := envOr("GOPPC64", defaultValue); v {
 	// ppc970 is a fork-only name for the PPC970/G5 VMX floor.
 	case "ppc970":
 		return 5
@@ -312,7 +320,10 @@ func goppc64() int {
 		return 10
 	}
 	Error = fmt.Errorf("invalid GOPPC64: must be ppc970, power8, power9, power10")
-	return int(DefaultGOPPC64[len("power")] - '0')
+	if defaultValue == "ppc970" {
+		return 5
+	}
+	return int(defaultValue[len("power")] - '0')
 }
 
 func goriscv64() int {
