@@ -220,7 +220,7 @@ func ForceHost() {
 	GOARM64 = buildcfg.DefaultGOARM64
 	GOMIPS = buildcfg.DefaultGOMIPS
 	GOMIPS64 = buildcfg.DefaultGOMIPS64
-	GOPPC64 = buildcfg.DefaultGOPPC64
+	GOPPC64 = ppc64Default()
 	GORISCV64 = buildcfg.DefaultGORISCV64
 	GOWASM = ""
 
@@ -471,7 +471,7 @@ var (
 	GOAMD64, goAMD64Changed     = EnvOrAndChanged("GOAMD64", buildcfg.DefaultGOAMD64)
 	GOMIPS, goMIPSChanged       = EnvOrAndChanged("GOMIPS", buildcfg.DefaultGOMIPS)
 	GOMIPS64, goMIPS64Changed   = EnvOrAndChanged("GOMIPS64", buildcfg.DefaultGOMIPS64)
-	GOPPC64, goPPC64Changed     = EnvOrAndChanged("GOPPC64", buildcfg.DefaultGOPPC64)
+	GOPPC64, goPPC64Changed     = EnvOrAndChanged("GOPPC64", ppc64Default())
 	GORISCV64, goRISCV64Changed = EnvOrAndChanged("GORISCV64", buildcfg.DefaultGORISCV64)
 	GOWASM, goWASMChanged       = EnvOrAndChanged("GOWASM", fmt.Sprint(buildcfg.GOWASM))
 
@@ -488,6 +488,13 @@ var (
 
 // EnvOrAndChanged returns the environment variable value
 // and reports whether it differs from the default value.
+func ppc64Default() string {
+	if Goos == "darwin" && Goarch == "ppc64" {
+		return "ppc970"
+	}
+	return "power8"
+}
+
 func EnvOrAndChanged(name, def string) (v string, changed bool) {
 	val := Getenv(name)
 	if val != "" {

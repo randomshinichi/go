@@ -85,9 +85,21 @@ func TestGOPPC64(t *testing.T) {
 		GOPPC64, GOARCH, Error = oldGOPPC64, oldGOARCH, oldError
 	}()
 
-	if DefaultGOPPC64 != "power8" {
-		t.Fatalf("DefaultGOPPC64 = %q, want power8", DefaultGOPPC64)
+	for _, tc := range []struct {
+		goos, goarch string
+		want         string
+	}{
+		{"darwin", "ppc64", "ppc970"},
+		{"linux", "ppc64", "power8"},
+		{"darwin", "amd64", "power8"},
+		{"linux", "amd64", "power8"},
+	} {
+		GOOS, GOARCH = tc.goos, tc.goarch
+		if got := defaultGOPPC64(); got != tc.want {
+			t.Errorf("defaultGOPPC64() for %s/%s = %q, want %q", tc.goos, tc.goarch, got, tc.want)
+		}
 	}
+	GOOS, GOARCH = "linux", "amd64"
 
 	for _, tc := range []struct {
 		value string
@@ -112,6 +124,13 @@ func TestGOPPC64(t *testing.T) {
 	if GOPPC64 != 8 || Error != nil {
 		t.Errorf("GOPPC64 from empty setting = %d, error %v; want default 8, nil", GOPPC64, Error)
 	}
+	GOOS, GOARCH = "darwin", "ppc64"
+	Error = nil
+	GOPPC64 = goppc64()
+	if GOPPC64 != 5 || Error != nil {
+		t.Errorf("GOPPC64 for darwin/ppc64 with empty setting = %d, error %v; want ppc970 (5), nil", GOPPC64, Error)
+	}
+	GOOS, GOARCH = "linux", "ppc64"
 
 	for _, invalid := range []string{"power6"} {
 		t.Setenv("GOPPC64", invalid)

@@ -168,6 +168,9 @@ func xinit() {
 	b = os.Getenv("GOPPC64")
 	if b == "" {
 		b = "power8"
+		if goos == "darwin" && goarch == "ppc64" {
+			b = "ppc970"
+		}
 	}
 	goppc64 = b
 
