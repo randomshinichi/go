@@ -145,6 +145,11 @@ func TestDistNativeDarwinPPCHostDetection(t *testing.T) {
 			want: map[string]string{"GOHOSTARCH": "ppc64", "GOARCH": "ppc64", "GOPPC64": "ppc970"},
 		},
 		{
+			// Protect the iOS half of the fallback; only Darwin defaults to ppc970.
+			name: "ios native ppc64", hostOS: "ios", nativeArch: "ppc64",
+			want: map[string]string{"GOHOSTOS": "ios", "GOHOSTARCH": "ppc64", "GOARCH": "ppc64", "GOPPC64": "power8"},
+		},
+		{
 			// Fails if the host arch is hard-coded rather than taken from nativeGOARCH.
 			name: "leopard native amd64", hostOS: "darwin", nativeArch: "amd64",
 			want:    map[string]string{"GOHOSTARCH": "amd64", "GOARCH": "amd64"},
