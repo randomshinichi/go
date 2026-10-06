@@ -42,11 +42,11 @@ var commands = map[string]func(){
 	"version":   cmdversion,
 }
 
-// main takes care of OS-specific startup and dispatches to xmain.
 func nativeGOARCH() string {
 	return runtime.GOARCH
 }
 
+// main takes care of OS-specific startup and dispatches to xmain.
 func main() {
 	os.Setenv("TERM", "dumb") // disable escape codes in clang errors
 
