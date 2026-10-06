@@ -238,6 +238,11 @@ func bootstrapBuildTools() {
 	os.Setenv("GOARCH", "")
 	os.Setenv("GOHOSTARCH", "")
 
+	// The binaries built here run on the host, whatever the target is, so
+	// they take the host's ISA floor. The target's is restored when
+	// bootstrapBuildTools returns.
+	defer exportHostPPC64Floor()()
+
 	// Run Go bootstrap to build binaries.
 	// Use the math_big_pure_go build tag to disable the assembly in math/big
 	// which may contain unsupported instructions.

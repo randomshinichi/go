@@ -40,7 +40,7 @@ var (
 	goamd64          string
 	gomips           string
 	gomips64         string
-	goppc64          string
+	goppc64Env       string // $GOPPC64 as the user supplied it, "" if unset; an input, not a floor (see ppc64Floor)
 	goriscv64        string
 	goroot           string
 	goextlinkenabled string
@@ -200,16 +200,11 @@ func xinit() {
 		fatalf("unknown $GOARCH %s", goarch)
 	}
 
-	// The default depends on the target, so select it only after
-	// goos and goarch have been initialized and validated.
-	b = os.Getenv("GOPPC64")
-	if b == "" {
-		b = "power8"
-		if goos == "darwin" && goarch == "ppc64" {
-			b = "ppc970"
-		}
-	}
-	goppc64 = b
+	// Remember only what the user supplied. The floor itself depends on
+	// the platform being built and on whether that is the target or the
+	// host, so ppc64Floor derives it at each use rather than fixing it here.
+	// This must be read before the os.Setenv below overwrites it.
+	goppc64Env = os.Getenv("GOPPC64")
 
 	b = os.Getenv("GO_EXTLINK_ENABLED")
 	if b != "" {
@@ -247,7 +242,7 @@ func xinit() {
 	os.Setenv("GOOS", goos)
 	os.Setenv("GOMIPS", gomips)
 	os.Setenv("GOMIPS64", gomips64)
-	os.Setenv("GOPPC64", goppc64)
+	os.Setenv("GOPPC64", ppc64Floor())
 	os.Setenv("GORISCV64", goriscv64)
 	os.Setenv("GOROOT", goroot)
 	os.Setenv("GOFIPS140", gofips140)
@@ -924,22 +919,7 @@ func runInstall(pkg string, ch chan struct{}) {
 		asmArgs = append(asmArgs, "-D", "GOMIPS64_"+gomips64)
 	}
 	if goarch == "ppc64" || goarch == "ppc64le" {
-		// We treat each powerpc version as a superset of functionality.
-		switch goppc64 {
-		case "ppc970":
-			asmArgs = append(asmArgs, "-D", "GOPPC64_ppc970")
-		case "power10":
-			asmArgs = append(asmArgs, "-D", "GOPPC64_power10")
-			fallthrough
-		case "power9":
-			asmArgs = append(asmArgs, "-D", "GOPPC64_power9")
-			fallthrough
-		default: // This should always be power8.
-			asmArgs = append(asmArgs, "-D", "GOPPC64_power8")
-		}
-		if goppc64 != "ppc970" {
-			asmArgs = append(asmArgs, "-D", "GOPPC64_vsx")
-		}
+		asmArgs = append(asmArgs, ppc64AsmDefines(ppc64Floor())...)
 	}
 	if goarch == "riscv64" {
 		// Define GORISCV64_value from goriscv64
@@ -1177,12 +1157,13 @@ func archTags() []string {
 		// power8..power10 are not implied. Note that this is deliberately
 		// restricted to ppc64: buildcfg emits nothing for ppc64le, and a
 		// tag emitted here but not there would flip a negated constraint.
-		if goarch == "ppc64" && goppc64 == "ppc970" {
+		floor := ppc64Floor()
+		if goarch == "ppc64" && floor == "ppc970" {
 			return []string{goarch + ".ppc970"}
 		}
 		var list []string
 		var n int
-		if _, err := fmt.Sscanf(goppc64, "power%d", &n); err == nil {
+		if _, err := fmt.Sscanf(floor, "power%d", &n); err == nil {
 			for i := 8; i <= n; i++ {
 				list = append(list, fmt.Sprintf("%s.power%d", goarch, i))
 			}
@@ -1400,7 +1381,7 @@ func cmdenv() {
 		xprintf(format, "GOMIPS64", gomips64)
 	}
 	if goarch == "ppc64" || goarch == "ppc64le" {
-		xprintf(format, "GOPPC64", goppc64)
+		xprintf(format, "GOPPC64", ppc64Floor())
 	}
 	if goarch == "riscv64" {
 		xprintf(format, "GORISCV64", goriscv64)
@@ -1598,14 +1579,9 @@ func cmdbootstrap() {
 	}
 
 	// For the main bootstrap, building for host os/arch.
-	oldgoos = goos
-	oldgoarch = goarch
-	goos = gohostos
-	goarch = gohostarch
-	os.Setenv("GOHOSTARCH", gohostarch)
-	os.Setenv("GOHOSTOS", gohostos)
-	os.Setenv("GOARCH", goarch)
-	os.Setenv("GOOS", goos)
+	// The host's ISA floor applies here, not the target's: this phase builds
+	// go_bootstrap and the host commands, which the build then executes.
+	switchToHostPlatform()
 
 	timelog("build", "go_bootstrap")
 	xprintf("Building Go bootstrap cmd/go (go_bootstrap) using Go toolchain1.\n")
@@ -1723,10 +1699,7 @@ func cmdbootstrap() {
 		if vflag > 0 {
 			xprintf("\n")
 		}
-		goos = oldgoos
-		goarch = oldgoarch
-		os.Setenv("GOOS", goos)
-		os.Setenv("GOARCH", goarch)
+		restoreTargetPlatform()
 		os.Setenv("CC", compilerEnvLookup("CC", defaultcc, goos, goarch))
 		xprintf("Building packages and commands for target, %s/%s.\n", goos, goarch)
 	}

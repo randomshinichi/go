@@ -331,9 +331,9 @@ func TestDistEnvGOPPC64Default(t *testing.T) {
 // such as "!ppc64.ppc970" evaluate as true, which admits ISA-specific code into
 // a binary built for an older machine.
 func TestMatchtagArchTags(t *testing.T) {
-	savedArch, savedPpc64, savedAmd64 := goarch, goppc64, goamd64
+	savedArch, savedPpc64, savedAmd64 := goarch, goppc64Env, goamd64
 	defer func() {
-		goarch, goppc64, goamd64 = savedArch, savedPpc64, savedAmd64
+		goarch, goppc64Env, goamd64 = savedArch, savedPpc64, savedAmd64
 	}()
 
 	tests := []struct {
@@ -359,9 +359,9 @@ func TestMatchtagArchTags(t *testing.T) {
 		{"arm64", "power8", "v1", "ppc64.ppc970", false},
 	}
 	for _, tt := range tests {
-		goarch, goppc64, goamd64 = tt.arch, tt.ppc64, tt.amd64
+		goarch, goppc64Env, goamd64 = tt.arch, tt.ppc64, tt.amd64
 		if got := matchtag(tt.tag); got != tt.want {
-			t.Errorf("matchtag(%q) with goarch=%q goppc64=%q goamd64=%q = %v, want %v",
+			t.Errorf("matchtag(%q) with goarch=%q goppc64Env=%q goamd64=%q = %v, want %v",
 				tt.tag, tt.arch, tt.ppc64, tt.amd64, got, tt.want)
 		}
 	}
@@ -375,9 +375,9 @@ func TestMatchtagArchTags(t *testing.T) {
 // died with "SIGILL" (and cascaded into "semasleep on Darwin signal stack").
 // The POWER8 file must therefore be excluded, and the generic one included.
 func TestShouldbuildPPC970Crypto(t *testing.T) {
-	savedArch, savedPpc64 := goarch, goppc64
+	savedArch, savedPpc64 := goarch, goppc64Env
 	defer func() {
-		goarch, goppc64 = savedArch, savedPpc64
+		goarch, goppc64Env = savedArch, savedPpc64
 	}()
 
 	const pkg = "crypto/internal/fips140/sha256"
@@ -385,7 +385,7 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 	noasmFile := filepath.Join("..", "..", "crypto", "internal", "fips140", "sha256", "sha256block_noasm.go")
 
 	goarch = "ppc64"
-	goppc64 = "ppc970"
+	goppc64Env = "ppc970"
 	if shouldbuild(asmFile, pkg) {
 		t.Errorf("shouldbuild(%s) = true with GOPPC64=ppc970; the POWER8 implementation must be excluded", asmFile)
 	}
@@ -396,7 +396,7 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 	// Control: on a POWER8 (and later) target the assembly implementation is
 	// the one that must be built.
 	for _, setting := range []string{"power8", "power9", "power10"} {
-		goppc64 = setting
+		goppc64Env = setting
 		if !shouldbuild(asmFile, pkg) {
 			t.Errorf("shouldbuild(%s) = false with GOPPC64=%s; the POWER8 implementation is required there", asmFile, setting)
 		}
@@ -419,8 +419,8 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 // "undefined: xorBytes". The three files' guards make this package the sharpest
 // available probe for the host/target switch.
 func TestArchTagsFollowTheArchitectureBeingBuilt(t *testing.T) {
-	savedArch, savedPpc64 := goarch, goppc64
-	defer func() { goarch, goppc64 = savedArch, savedPpc64 }()
+	savedArch, savedPpc64 := goarch, goppc64Env
+	defer func() { goarch, goppc64Env = savedArch, savedPpc64 }()
 
 	const pkg = "crypto/internal/fips140/subtle"
 	dir := filepath.Join("..", "..", "crypto", "internal", "fips140", "subtle")
@@ -430,7 +430,7 @@ func TestArchTagsFollowTheArchitectureBeingBuilt(t *testing.T) {
 
 	check := func(when, arch, ppc64 string, wantAsm, wantGen, wantPPC970, wantProvider bool) {
 		t.Helper()
-		goarch, goppc64 = arch, ppc64
+		goarch, goppc64Env = arch, ppc64
 		if got := shouldbuild(asmFile, pkg); got != wantAsm {
 			t.Errorf("%s: shouldbuild(xor_asm.go) = %v, want %v", when, got, wantAsm)
 		}

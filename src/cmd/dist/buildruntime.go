@@ -58,7 +58,7 @@ func mkbuildcfg(file string) {
 	fmt.Fprintf(&buf, "const DefaultGOARM64 = `%s`\n", goarm64)
 	fmt.Fprintf(&buf, "const DefaultGOMIPS = `%s`\n", gomips)
 	fmt.Fprintf(&buf, "const DefaultGOMIPS64 = `%s`\n", gomips64)
-	fmt.Fprintf(&buf, "const DefaultGOPPC64 = `%s`\n", goppc64)
+	fmt.Fprintf(&buf, "const DefaultGOPPC64 = `%s`\n", ppc64Floor())
 	fmt.Fprintf(&buf, "const DefaultGORISCV64 = `%s`\n", goriscv64)
 	fmt.Fprintf(&buf, "const defaultGOEXPERIMENT = `%s`\n", goexperiment)
 	fmt.Fprintf(&buf, "const defaultGO_EXTLINK_ENABLED = `%s`\n", goextlinkenabled)
