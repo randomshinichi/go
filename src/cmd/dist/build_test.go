@@ -224,7 +224,6 @@ func TestMatchtagArchTags(t *testing.T) {
 	savedArch, savedPpc64, savedAmd64 := goarch, goppc64, goamd64
 	defer func() {
 		goarch, goppc64, goamd64 = savedArch, savedPpc64, savedAmd64
-		setArchTags()
 	}()
 
 	tests := []struct {
@@ -242,7 +241,7 @@ func TestMatchtagArchTags(t *testing.T) {
 		{"ppc64", "power9", "v1", "ppc64.power9", true},
 		{"ppc64", "power9", "v1", "ppc64.power10", false},
 		{"ppc64le", "power10", "v1", "ppc64le.power8", true},
-		{"ppc64le", "ppc970", "v1", "ppc64le.ppc970", true},
+		{"ppc64le", "ppc970", "v1", "ppc64le.ppc970", false}, // buildcfg emits nothing here; a divergent tag would flip a negated constraint
 		{"amd64", "power8", "v1", "amd64.v1", true},
 		{"amd64", "power8", "v1", "amd64.v2", false},
 		{"amd64", "power8", "v3", "amd64.v2", true},
@@ -251,7 +250,6 @@ func TestMatchtagArchTags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		goarch, goppc64, goamd64 = tt.arch, tt.ppc64, tt.amd64
-		setArchTags()
 		if got := matchtag(tt.tag); got != tt.want {
 			t.Errorf("matchtag(%q) with goarch=%q goppc64=%q goamd64=%q = %v, want %v",
 				tt.tag, tt.arch, tt.ppc64, tt.amd64, got, tt.want)
@@ -270,7 +268,6 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 	savedArch, savedPpc64 := goarch, goppc64
 	defer func() {
 		goarch, goppc64 = savedArch, savedPpc64
-		setArchTags()
 	}()
 
 	const pkg = "crypto/internal/fips140/sha256"
@@ -279,7 +276,6 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 
 	goarch = "ppc64"
 	goppc64 = "ppc970"
-	setArchTags()
 	if shouldbuild(asmFile, pkg) {
 		t.Errorf("shouldbuild(%s) = true with GOPPC64=ppc970; the POWER8 implementation must be excluded", asmFile)
 	}
@@ -291,7 +287,6 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 	// the one that must be built.
 	for _, setting := range []string{"power8", "power9", "power10"} {
 		goppc64 = setting
-		setArchTags()
 		if !shouldbuild(asmFile, pkg) {
 			t.Errorf("shouldbuild(%s) = false with GOPPC64=%s; the POWER8 implementation is required there", asmFile, setting)
 		}
@@ -299,4 +294,66 @@ func TestShouldbuildPPC970Crypto(t *testing.T) {
 			t.Errorf("shouldbuild(%s) = true with GOPPC64=%s; the generic implementation must be excluded there", noasmFile, setting)
 		}
 	}
+}
+
+// TestArchTagsFollowTheArchitectureBeingBuilt is the regression test for a
+// stale tag set. cmd/dist builds for the target and then switches to build for
+// the host (cmdbootstrap), so the sub-version tags must follow goarch, not a
+// value computed once for the target.
+//
+// This is not hypothetical. With the tags derived once for a darwin/ppc64
+// target, a cross-bootstrap from linux/amd64 still had ppc64.ppc970 "set" while
+// building for amd64, and crypto/internal/fips140/subtle then defined xorBytes
+// nowhere at all: xor_asm.go and xor_generic.go are both guarded by
+// "!ppc64.ppc970", and xor_ppc970.go requires ppc64. The bootstrap failed with
+// "undefined: xorBytes". The three files' guards make this package the sharpest
+// available probe for the host/target switch.
+func TestArchTagsFollowTheArchitectureBeingBuilt(t *testing.T) {
+	savedArch, savedPpc64 := goarch, goppc64
+	defer func() { goarch, goppc64 = savedArch, savedPpc64 }()
+
+	const pkg = "crypto/internal/fips140/subtle"
+	dir := filepath.Join("..", "..", "crypto", "internal", "fips140", "subtle")
+	asmFile := filepath.Join(dir, "xor_asm.go")       // (amd64||arm64||ppc64||ppc64le||riscv64) && !purego && !ppc64.ppc970
+	genFile := filepath.Join(dir, "xor_generic.go")   // (... || purego) && !ppc64.ppc970
+	ppc970File := filepath.Join(dir, "xor_ppc970.go") // ppc64 && ppc64.ppc970
+
+	check := func(when, arch, ppc64 string, wantAsm, wantGen, wantPPC970, wantProvider bool) {
+		t.Helper()
+		goarch, goppc64 = arch, ppc64
+		if got := shouldbuild(asmFile, pkg); got != wantAsm {
+			t.Errorf("%s: shouldbuild(xor_asm.go) = %v, want %v", when, got, wantAsm)
+		}
+		if got := shouldbuild(genFile, pkg); got != wantGen {
+			t.Errorf("%s: shouldbuild(xor_generic.go) = %v, want %v", when, got, wantGen)
+		}
+		if got := shouldbuild(ppc970File, pkg); got != wantPPC970 {
+			t.Errorf("%s: shouldbuild(xor_ppc970.go) = %v, want %v", when, got, wantPPC970)
+		}
+		// Where one of these three is the provider, exactly one must be
+		// selected, or xorBytes is undefined. Other architectures (loong64)
+		// have their own file, so this invariant does not apply there.
+		n := 0
+		for _, f := range []string{asmFile, genFile, ppc970File} {
+			if shouldbuild(f, pkg) {
+				n++
+			}
+		}
+		if wantProvider && n != 1 {
+			t.Errorf("%s: %d of the three xor implementations selected, want exactly 1 (else xorBytes is undefined)", when, n)
+		}
+		if !wantProvider && n != 0 {
+			t.Errorf("%s: %d of the three xor implementations selected, want 0 (this architecture has its own provider)", when, n)
+		}
+	}
+
+	// Host build for amd64 while the target is darwin/ppc64 tagged ppc970.
+	// ppc64.ppc970 must NOT be set here.
+	check("target darwin/ppc64 ppc970, building for the amd64 host", "amd64", "ppc970", true, false, false, true)
+	// Native ppc64 build with the port's floor.
+	check("ppc64 tagged ppc970", "ppc64", "ppc970", false, false, true, true)
+	// An ordinary POWER8 target must still get the assembly implementation.
+	check("ppc64 tagged power8", "ppc64", "power8", true, false, false, true)
+	// A target with no ppc64 assembly at all falls back to the generic one.
+	check("loong64 (its own provider)", "loong64", "power8", false, false, false, false)
 }
