@@ -44,7 +44,8 @@ var profSampler struct {
 	wake    note
 }
 
-// setProcessCPUProfiler is called with prof.signalLock held.
+// setProcessCPUProfiler is called with prof.signalLock held and returns with
+// it held. The caller also holds cpuprof.lock, which serializes rate changes.
 func setProcessCPUProfiler(hz int32) {
 	if hz != 0 {
 		// setProcessCPUProfilerTimer installs the SIGPROF handler.
@@ -52,6 +53,13 @@ func setProcessCPUProfiler(hz int32) {
 		setProcessCPUProfilerTimer(hz)
 		setitimer(_ITIMER_PROF, &itimerval{}, nil)
 	}
+	// signalLock protects prof.hz and profile-buffer writes, not sampler
+	// state. A SIGPROF handler can interrupt an M holding sched.lock and
+	// acquire signalLock, so we must release it before taking sched.lock
+	// (including inside newm). cpuprof.lock keeps another rate change from
+	// intervening; handlers may still write to the current, valid buffer
+	// using the old prof.hz until our caller publishes the new rate.
+	prof.signalLock.Store(0)
 	start := false
 	lock(&sched.lock)
 	profSampler.hz = hz
@@ -67,6 +75,9 @@ func setProcessCPUProfiler(hz int32) {
 	unlock(&sched.lock)
 	if start {
 		newm(profSamplerLoop, nil, -1)
+	}
+	for !prof.signalLock.CompareAndSwap(0, 1) {
+		osyield()
 	}
 	if hz == 0 {
 		// The sampler rechecks hz under sched.lock before sending,
