@@ -102,6 +102,30 @@ interrupted code on the same thread still holds — and if a GC was stopping the
 with no Go in it hangs 3/3 that way, and never with `sched_yield`. On darwin/ppc64 `osyield` now calls `sched_yield`
 (as Linux does); the other Darwin ports keep `usleep(1)`.
 
+**3. Leopard has no per-socket TCP keepalive tuning — so we set what we can and connect anyway.**
+
+TCP keepalive probes an idle connection to find out whether the far end is still there. It has three knobs: how long
+the connection must be quiet before probing starts (the idle time), how long between probes (`TCP_KEEPINTVL`), and
+how many missed probes before declaring it dead (`TCP_KEEPCNT`). Go's `net.Dialer.KeepAliveConfig` exposes all three
+per connection, and on Darwin Go reaches for the socket options `0x101` and `0x102`.
+
+Leopard's kernel has only the first. From the machine's own header:
+
+```
+/usr/include/netinet/tcp.h:203:  #define TCP_KEEPALIVE  0x10
+```
+
+`0x101` and `0x102` appear nowhere — they arrived in Snow Leopard. So `setsockopt` returns `ENOPROTOOPT`, which
+means "no such option here", and Go's dial path treated that as fatal: **the connection was never made at all.** That
+single interaction cost the three `TestTCPConnKeepAliveConfig*` tests out of 283 passing in `net`.
+
+The feature is not missing, only the per-connection control. Leopard keeps connections alive on a system-wide
+schedule — `net.inet.tcp.keepidle` (2 h), `net.inet.tcp.keepintvl` (75 s), and no `keepcnt` sysctl at all. So on
+darwin/ppc64 we set the options the kernel does have, **ignore `ENOPROTOOPT` for the two it does not**, and let the
+system defaults stand: the connection is made and works, on Leopard's schedule rather than the requested one. Any
+other errno still propagates, so a real failure is not swallowed. The other Darwin ports, where the options exist,
+keep the strict behaviour.
+
 # `stdlib` testsuite failures - not a problem
 | leg | cause (measured) |
 |---|---|
