@@ -127,6 +127,9 @@ func init() {
 	var (
 		gp         = buildReg("R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29")
 		gpg        = gp | buildReg("g")
+		sp         = buildReg("SP")
+		sb         = buildReg("SB")
+		gpspsb     = gp | sp | sb
 		fp         = buildReg("F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31")
 	)
 	// Common regInfo. The carry / flags operand of a 3-argument op is listed
@@ -141,6 +144,8 @@ func init() {
 		gp2flags1      = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp}}
 		gp2flags1carry = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp, 0}}
 		gp22           = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, gp}}
+		gpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{gp}}
+		gpstore        = regInfo{inputs: []regMask{gpspsb, gp, 0}}
 	)
 
 	ops := []opData{
@@ -185,6 +190,18 @@ func init() {
 		// business (obj/ppc), not the register allocator's.
 		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32"},
 		{name: "MOVWreg", argLength: 1, reg: gp11, asm: "OR"}, // register-to-register move
+
+		// Address formation and memory. The 64-bit forms are not here: the
+		// decomposition has already split them into two 32-bit accesses.
+		{name: "MOVWaddr", argLength: 1, reg: regInfo{inputs: []regMask{gpspsb}, outputs: []regMask{gp}}, aux: "SymOff", asm: "ADDI", rematerializeable: true, symEffect: "Addr"}, // arg0 + auxInt + aux.(*obj.LSym)
+		{name: "MOVBload", argLength: 2, reg: gpload, aux: "SymOff", asm: "LBZ", typ: "Int8", faultOnNilArg0: true, symEffect: "Read", addrSinkArg0: true},
+		{name: "MOVBUload", argLength: 2, reg: gpload, aux: "SymOff", asm: "LBZ", typ: "UInt8", faultOnNilArg0: true, symEffect: "Read", addrSinkArg0: true},
+		{name: "MOVHload", argLength: 2, reg: gpload, aux: "SymOff", asm: "LHA", typ: "Int16", faultOnNilArg0: true, symEffect: "Read", addrSinkArg0: true},
+		{name: "MOVHUload", argLength: 2, reg: gpload, aux: "SymOff", asm: "LHZ", typ: "UInt16", faultOnNilArg0: true, symEffect: "Read", addrSinkArg0: true},
+		{name: "MOVWload", argLength: 2, reg: gpload, aux: "SymOff", asm: "LWZ", typ: "UInt32", faultOnNilArg0: true, symEffect: "Read", addrSinkArg0: true},
+		{name: "MOVBstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "STB", typ: "Mem", faultOnNilArg0: true, symEffect: "Write", addrSinkArg0: true},
+		{name: "MOVHstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "STH", typ: "Mem", faultOnNilArg0: true, symEffect: "Write", addrSinkArg0: true},
+		{name: "MOVWstore", argLength: 3, reg: gpstore, aux: "SymOff", asm: "STW", typ: "Mem", faultOnNilArg0: true, symEffect: "Write", addrSinkArg0: true},
 	}
 
 	archs = append(archs, arch{

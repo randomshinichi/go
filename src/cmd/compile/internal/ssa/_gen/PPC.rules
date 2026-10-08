@@ -50,6 +50,25 @@
 (Rsh32x32 x y) => (SRAW x y)
 (Rsh32x64 x y) => (SRAW x y)
 
+// Lowering addresses, loads and stores. A 64-bit load or store has already been
+// split into two big-endian 32-bit accesses by _gen/dec64.rules, so every case
+// here is at most register width.
+(OffPtr [off] ptr) => (MOVWaddr [int32(off)] ptr)
+(Addr {sym} base) => (MOVWaddr {sym} base)
+(LocalAddr <t> {sym} base mem) && t.Elem().HasPointers() => (MOVWaddr {sym} (SPanchored base mem))
+(LocalAddr <t> {sym} base _) && !t.Elem().HasPointers() => (MOVWaddr {sym} base)
+
+(Load <t> ptr mem) && t.IsBoolean() => (MOVBUload ptr mem)
+(Load <t> ptr mem) && is8BitInt(t) && t.IsSigned() => (MOVBload ptr mem)
+(Load <t> ptr mem) && is8BitInt(t) && !t.IsSigned() => (MOVBUload ptr mem)
+(Load <t> ptr mem) && is16BitInt(t) && t.IsSigned() => (MOVHload ptr mem)
+(Load <t> ptr mem) && is16BitInt(t) && !t.IsSigned() => (MOVHUload ptr mem)
+(Load <t> ptr mem) && (is32BitInt(t) || isPtr(t)) => (MOVWload ptr mem)
+
+(Store {t} ptr val mem) && t.Size() == 1 => (MOVBstore ptr val mem)
+(Store {t} ptr val mem) && t.Size() == 2 => (MOVHstore ptr val mem)
+(Store {t} ptr val mem) && t.Size() == 4 && !t.IsFloat() => (MOVWstore ptr val mem)
+
 // Lowering constants and register moves.
 (Const32 [c]) => (MOVWconst [c])
 (ConstBool [t]) => (MOVWconst [b2i32(t)])
