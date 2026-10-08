@@ -70,6 +70,18 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpPPCCMPWUconst(v)
 	case OpPPCCMPWconst:
 		return rewriteValuePPC_OpPPCCMPWconst(v)
+	case OpPPCEqual:
+		return rewriteValuePPC_OpPPCEqual(v)
+	case OpPPCGreaterEqual:
+		return rewriteValuePPC_OpPPCGreaterEqual(v)
+	case OpPPCGreaterThan:
+		return rewriteValuePPC_OpPPCGreaterThan(v)
+	case OpPPCLessEqual:
+		return rewriteValuePPC_OpPPCLessEqual(v)
+	case OpPPCLessThan:
+		return rewriteValuePPC_OpPPCLessThan(v)
+	case OpPPCNotEqual:
+		return rewriteValuePPC_OpPPCNotEqual(v)
 	case OpRsh32Ux32:
 		return rewriteValuePPC_OpRsh32Ux32(v)
 	case OpRsh32Ux64:
@@ -78,6 +90,9 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpRsh32x32(v)
 	case OpRsh32x64:
 		return rewriteValuePPC_OpRsh32x64(v)
+	case OpStaticCall:
+		v.Op = OpPPCCALLstatic
+		return true
 	case OpStore:
 		return rewriteValuePPC_OpStore(v)
 	case OpSub32:
@@ -739,6 +754,276 @@ func rewriteValuePPC_OpPPCCMPWconst(v *Value) bool {
 	}
 	return false
 }
+func rewriteValuePPC_OpPPCEqual(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Equal (FlagEQ))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagEQ {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (Equal (FlagLT))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagLT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (Equal (FlagGT))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagGT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (Equal (InvertFlags x))
+	// result: (Equal x)
+	for {
+		if v_0.Op != OpPPCInvertFlags {
+			break
+		}
+		x := v_0.Args[0]
+		v.reset(OpPPCEqual)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpPPCGreaterEqual(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (GreaterEqual (FlagEQ))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagEQ {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (GreaterEqual (FlagLT))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagLT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (GreaterEqual (FlagGT))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagGT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (GreaterEqual (InvertFlags x))
+	// result: (LessEqual x)
+	for {
+		if v_0.Op != OpPPCInvertFlags {
+			break
+		}
+		x := v_0.Args[0]
+		v.reset(OpPPCLessEqual)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpPPCGreaterThan(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (GreaterThan (FlagEQ))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagEQ {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (GreaterThan (FlagLT))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagLT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (GreaterThan (FlagGT))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagGT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (GreaterThan (InvertFlags x))
+	// result: (LessThan x)
+	for {
+		if v_0.Op != OpPPCInvertFlags {
+			break
+		}
+		x := v_0.Args[0]
+		v.reset(OpPPCLessThan)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpPPCLessEqual(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (LessEqual (FlagEQ))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagEQ {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (LessEqual (FlagLT))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagLT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (LessEqual (FlagGT))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagGT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (LessEqual (InvertFlags x))
+	// result: (GreaterEqual x)
+	for {
+		if v_0.Op != OpPPCInvertFlags {
+			break
+		}
+		x := v_0.Args[0]
+		v.reset(OpPPCGreaterEqual)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpPPCLessThan(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (LessThan (FlagEQ))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagEQ {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (LessThan (FlagLT))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagLT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (LessThan (FlagGT))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagGT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (LessThan (InvertFlags x))
+	// result: (GreaterThan x)
+	for {
+		if v_0.Op != OpPPCInvertFlags {
+			break
+		}
+		x := v_0.Args[0]
+		v.reset(OpPPCGreaterThan)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpPPCNotEqual(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (NotEqual (FlagEQ))
+	// result: (MOVWconst [0])
+	for {
+		if v_0.Op != OpPPCFlagEQ {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(0)
+		return true
+	}
+	// match: (NotEqual (FlagLT))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagLT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (NotEqual (FlagGT))
+	// result: (MOVWconst [1])
+	for {
+		if v_0.Op != OpPPCFlagGT {
+			break
+		}
+		v.reset(OpPPCMOVWconst)
+		v.AuxInt = int32ToAuxInt(1)
+		return true
+	}
+	// match: (NotEqual (InvertFlags x))
+	// result: (NotEqual x)
+	for {
+		if v_0.Op != OpPPCInvertFlags {
+			break
+		}
+		x := v_0.Args[0]
+		v.reset(OpPPCNotEqual)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
 func rewriteValuePPC_OpRsh32Ux32(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
@@ -1101,6 +1386,96 @@ func rewriteBlockPPC(b *Block) bool {
 			return true
 		}
 	case BlockPPCNE:
+		// match: (NE (CMPWconst [0] (Equal cc)) yes no)
+		// result: (EQ cc yes no)
+		for b.Controls[0].Op == OpPPCCMPWconst {
+			v_0 := b.Controls[0]
+			if auxIntToInt32(v_0.AuxInt) != 0 {
+				break
+			}
+			v_0_0 := v_0.Args[0]
+			if v_0_0.Op != OpPPCEqual {
+				break
+			}
+			cc := v_0_0.Args[0]
+			b.resetWithControl(BlockPPCEQ, cc)
+			return true
+		}
+		// match: (NE (CMPWconst [0] (NotEqual cc)) yes no)
+		// result: (NE cc yes no)
+		for b.Controls[0].Op == OpPPCCMPWconst {
+			v_0 := b.Controls[0]
+			if auxIntToInt32(v_0.AuxInt) != 0 {
+				break
+			}
+			v_0_0 := v_0.Args[0]
+			if v_0_0.Op != OpPPCNotEqual {
+				break
+			}
+			cc := v_0_0.Args[0]
+			b.resetWithControl(BlockPPCNE, cc)
+			return true
+		}
+		// match: (NE (CMPWconst [0] (LessThan cc)) yes no)
+		// result: (LT cc yes no)
+		for b.Controls[0].Op == OpPPCCMPWconst {
+			v_0 := b.Controls[0]
+			if auxIntToInt32(v_0.AuxInt) != 0 {
+				break
+			}
+			v_0_0 := v_0.Args[0]
+			if v_0_0.Op != OpPPCLessThan {
+				break
+			}
+			cc := v_0_0.Args[0]
+			b.resetWithControl(BlockPPCLT, cc)
+			return true
+		}
+		// match: (NE (CMPWconst [0] (LessEqual cc)) yes no)
+		// result: (LE cc yes no)
+		for b.Controls[0].Op == OpPPCCMPWconst {
+			v_0 := b.Controls[0]
+			if auxIntToInt32(v_0.AuxInt) != 0 {
+				break
+			}
+			v_0_0 := v_0.Args[0]
+			if v_0_0.Op != OpPPCLessEqual {
+				break
+			}
+			cc := v_0_0.Args[0]
+			b.resetWithControl(BlockPPCLE, cc)
+			return true
+		}
+		// match: (NE (CMPWconst [0] (GreaterThan cc)) yes no)
+		// result: (GT cc yes no)
+		for b.Controls[0].Op == OpPPCCMPWconst {
+			v_0 := b.Controls[0]
+			if auxIntToInt32(v_0.AuxInt) != 0 {
+				break
+			}
+			v_0_0 := v_0.Args[0]
+			if v_0_0.Op != OpPPCGreaterThan {
+				break
+			}
+			cc := v_0_0.Args[0]
+			b.resetWithControl(BlockPPCGT, cc)
+			return true
+		}
+		// match: (NE (CMPWconst [0] (GreaterEqual cc)) yes no)
+		// result: (GE cc yes no)
+		for b.Controls[0].Op == OpPPCCMPWconst {
+			v_0 := b.Controls[0]
+			if auxIntToInt32(v_0.AuxInt) != 0 {
+				break
+			}
+			v_0_0 := v_0.Args[0]
+			if v_0_0.Op != OpPPCGreaterEqual {
+				break
+			}
+			cc := v_0_0.Args[0]
+			b.resetWithControl(BlockPPCGE, cc)
+			return true
+		}
 		// match: (NE (FlagEQ) yes no)
 		// result: (First no yes)
 		for b.Controls[0].Op == OpPPCFlagEQ {

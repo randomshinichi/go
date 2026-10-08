@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -47,6 +48,63 @@ var wordRecipes = []struct {
 	fn    string
 	clang string
 }{
+	// The minimal global-load repro: a signed immediate compare and a CR0.LT
+	// branch. Symbol immediates remain zero until a linker applies the reloc.
+	{"main.branch", `	lis 3,main.G@ha
+	addi 3,3,main.G@l
+	lwz 3,0(3)
+	cmpwi 3,0
+	bc 4,0,.+20
+	li 3,1
+	addi 4,1,16
+	stw 3,0(4)
+	blr
+	li 3,2
+	addi 4,1,16
+	stw 3,0(4)
+	blr
+`},
+	// Compare the same G/H bit patterns with signed and unsigned semantics.
+	// Canonicalization swaps the input order; CR0.GT now means G < H.
+	{"main.signed", `	lis 3,main.H@ha
+	addi 3,3,main.H@l
+	lwz 3,0(3)
+	lis 4,main.G@ha
+	addi 4,4,main.G@l
+	lwz 4,0(4)
+	cmpw 3,4
+	bc 4,1,.+20
+	li 3,1
+	addi 4,1,16
+	stw 3,0(4)
+	blr
+	li 3,2
+	addi 4,1,16
+	stw 3,0(4)
+	blr
+`},
+	{"main.unsigned", `	lis 3,main.G@ha
+	addi 3,3,main.G@l
+	lwz 3,0(3)
+	lis 4,main.H@ha
+	addi 4,4,main.H@l
+	lwz 4,0(4)
+	cmplw 4,3
+	bc 4,1,.+20
+	li 3,1
+	addi 4,1,16
+	stw 3,0(4)
+	blr
+	li 3,2
+	addi 4,1,16
+	stw 3,0(4)
+	blr
+`},
+	// Zero arguments avoid marshalling. BL/LR save and frame setup are separate:
+	// this is object emission evidence, not an executable Go call convention.
+	{"main.call", `	bl main.callee
+	blr
+`},
 	// 64-bit add: addc on the low words leaves the carry in XER[CA], adde on the
 	// high words adds it back. The high word lands at the lower address.
 	{"main.add", `	addi 3,1,32
@@ -121,6 +179,14 @@ var wordRecipes = []struct {
 
 const wordFixture = `package main
 
+var G int
+var H int
+func branch() int { if G < 0 { return 1 }; return 2 }
+func signed() int { if G < H { return 1 }; return 2 }
+func unsigned() int { if uint32(G) < uint32(H) { return 1 }; return 2 }
+func callee()
+func call() { callee() }
+
 func add(a, b uint64) uint64 { return a + b }
 func sub(a, b uint64) uint64 { return a - b }
 func mul(a, b uint64) uint64 { return a * b }
@@ -158,7 +224,13 @@ func TestEmittedWordsMatchClang(t *testing.T) {
 	for _, r := range wordRecipes {
 		t.Run(r.fn, func(t *testing.T) {
 			got := emittedWords(t, string(out), r.fn)
-			want := clangTextWords(t, clang, dir, r.clang)
+			ofile := clangAssemble(t, clang, dir, r.clang)
+			want := elf32beTextWords(t, ofile)
+			gotRelocs := emittedRelocs(string(out), r.fn)
+			wantRelocs := clangRelocs(t, ofile)
+			if !reflect.DeepEqual(gotRelocs, wantRelocs) {
+				t.Errorf("%s relocations: emitted %v, clang %v", r.fn, gotRelocs, wantRelocs)
+			}
 			if len(got) != len(want) {
 				t.Fatalf("%s emitted %d words, clang assembled %d", r.fn, len(got), len(want))
 			}
@@ -221,6 +293,11 @@ func emittedWords(t *testing.T, out, fn string) []uint32 {
 // of the .text section.
 func clangTextWords(t *testing.T, clang, dir, src string) []uint32 {
 	t.Helper()
+	return elf32beTextWords(t, clangAssemble(t, clang, dir, src))
+}
+
+func clangAssemble(t *testing.T, clang, dir, src string) string {
+	t.Helper()
 	sfile := filepath.Join(dir, "recipe.s")
 	if err := os.WriteFile(sfile, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -230,7 +307,7 @@ func clangTextWords(t *testing.T, clang, dir, src string) []uint32 {
 	if err != nil {
 		t.Fatalf("clang failed to assemble the recipe: %v\n%s", err, out)
 	}
-	return elf32beTextWords(t, ofile)
+	return ofile
 }
 
 // elf32beTextWords reads the .text section of a 32-bit big-endian ELF object.
