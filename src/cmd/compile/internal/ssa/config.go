@@ -251,6 +251,22 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize, softfloat boo
 		c.haveBswap32 = true
 		c.haveBswap16 = true
 		c.haveCondSelect = true
+	case "ppc":
+		// 32-bit PowerPC: the G3 scalar baseline (DESIGN.md §5). Big-endian,
+		// 32-bit registers, no register calling convention, and no hardware g
+		// register, so GetG has to be lowered to a load from the g save slot.
+		c.PtrSize = 4
+		c.RegSize = 4
+		c.BigEndian = true
+		c.lowerBlock = rewriteBlockPPC
+		c.lowerValue = rewriteValuePPC
+		c.registers = registersPPC[:]
+		c.gpRegMask = gpRegMaskPPC
+		c.fpRegMask = fpRegMaskPPC
+		c.specialRegMask = specialRegMaskPPC
+		c.FPReg = framepointerRegPPC
+		c.LinkReg = linkRegPPC
+		c.hasGReg = false
 	case "ppc64":
 		c.BigEndian = true
 		fallthrough

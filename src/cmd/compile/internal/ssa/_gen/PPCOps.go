@@ -1,0 +1,203 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package main
+
+import "strings"
+
+// Notes:
+//  - The ppc32 baseline has 32-bit general registers. A 64-bit Go value is split
+//    into a (hi, lo) pair of 32-bit registers by the generic dec64 decomposition
+//    before lowering runs (DESIGN.md §5 strategy D-3), so this table registers
+//    the 32-bit residue that decomposition leaves behind, not 64-bit forms.
+//  - XER[CA] is the carry bit. It is not a general-purpose register and it cannot
+//    be read or written by an ordinary instruction, so it is modelled the way ARM
+//    models CPSR.C: as a value of SSA type Flags, produced by an op that returns
+//    (result, Flags) and consumed as an explicit argument by the op that adds it
+//    in. Every op that writes CA is marked clobberFlags, so the flag allocator
+//    treats a register-allocated carry as destroyed by an op that does not
+//    produce it — that is what stops a carry-clobbering instruction from being
+//    scheduled between the addc and the adde of one 64-bit addition.
+//    The CA-clobbering forms of this table are addc, adde, subfc, subfe, sraw and
+//    srawi; only addc/subfc (through ADDC/SUBC/ADDEC/SUBEC) also *produce* a
+//    Flags value.
+
+// Suffixes encode the bit width of an instruction.
+// W (word)      = 32 bit
+// H (half word) = 16 bit
+// HU            = 16 bit unsigned
+// B (byte)      = 8 bit
+// BU            = 8 bit unsigned
+
+// regNamesPPC lists the registers the register allocator may use. r2 and r13 are
+// deliberately absent: their roles on Darwin ppc32 are open (DESIGN.md §11 Q-2),
+// and a backend must not allocate a register whose meaning it has not measured.
+// R0 is present as an architectural zero, not as a destination.
+var regNamesPPC = []string{
+	"R0", // architectural zero
+	"SP", // R1
+	"SB",
+	"R3",
+	"R4",
+	"R5",
+	"R6",
+	"R7",
+	"R8",
+	"R9",
+	"R10",
+	"R11",
+	"R12",
+	"R14",
+	"R15",
+	"R16",
+	"R17",
+	"R18",
+	"R19",
+	"R20",
+	"R21",
+	"R22",
+	"R23",
+	"R24",
+	"R25",
+	"R26",
+	"R27",
+	"R28",
+	"R29",
+	"g",   // R30
+	"R31", // assembler/linker temporary
+	"F0",
+	"F1",
+	"F2",
+	"F3",
+	"F4",
+	"F5",
+	"F6",
+	"F7",
+	"F8",
+	"F9",
+	"F10",
+	"F11",
+	"F12",
+	"F13",
+	"F14",
+	"F15",
+	"F16",
+	"F17",
+	"F18",
+	"F19",
+	"F20",
+	"F21",
+	"F22",
+	"F23",
+	"F24",
+	"F25",
+	"F26",
+	"F27",
+	"F28",
+	"F29",
+	"F30",
+	"F31",
+}
+
+func init() {
+	// Make map from reg names to reg integers.
+	if len(regNamesPPC) > 64 {
+		panic("too many registers")
+	}
+	num := map[string]int{}
+	for i, name := range regNamesPPC {
+		num[name] = i
+	}
+	buildReg := func(s string) regMask {
+		m := regMask(0)
+		for _, r := range strings.Split(s, " ") {
+			if n, ok := num[r]; ok {
+				m |= regMask(1) << uint(n)
+				continue
+			}
+			panic("register " + r + " not found")
+		}
+		return m
+	}
+
+	// Common individual register masks. R0, R31 and SB are not allocatable, and
+	// g is kept out of the general-purpose set so that it is only clobbered
+	// deliberately.
+	var (
+		gp         = buildReg("R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29")
+		gpg        = gp | buildReg("g")
+		fp         = buildReg("F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31")
+	)
+	// Common regInfo. The carry / flags operand of a 3-argument op is listed
+	// only when it occupies a register, exactly as ARM does for CPSR: an entry
+	// for a Flags argument would be meaningless because there is no register
+	// mask for XER.
+	var (
+		gp01           = regInfo{inputs: nil, outputs: []regMask{gp}}
+		gp11           = regInfo{inputs: []regMask{gpg}, outputs: []regMask{gp}}
+		gp21           = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp}}
+		gp21carry      = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, 0}}
+		gp2flags1      = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp}}
+		gp2flags1carry = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp, 0}}
+		gp22           = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, gp}}
+	)
+
+	ops := []opData{
+		// 32-bit arithmetic. ADD/SUB are the plain forms the residue needs;
+		// ADDC/SUBC/adde/subfe are the carry pair.
+		{name: "ADD", argLength: 2, reg: gp21, asm: "ADD", commutative: true},                            // arg0 + arg1
+		{name: "ADDC", argLength: 2, reg: gp21carry, asm: "ADDC", commutative: true, clobberFlags: true}, // arg0 + arg1, XER[CA] out (addc)
+		{name: "ADDE", argLength: 3, reg: gp2flags1, asm: "ADDE", clobberFlags: true},                    // arg0 + arg1 + XER[CA] (adde); arg2=flags
+		{name: "ADDEC", argLength: 3, reg: gp2flags1carry, asm: "ADDE", clobberFlags: true},              // as ADDE, with XER[CA] out
+		{name: "SUB", argLength: 2, reg: gp21, asm: "SUBF"},                                              // arg0 - arg1 (subf with operands swapped)
+		{name: "SUBC", argLength: 2, reg: gp21carry, asm: "SUBFC", clobberFlags: true},                   // arg0 - arg1, XER[CA] out (subfc)
+		{name: "SUBE", argLength: 3, reg: gp2flags1, asm: "SUBFE", clobberFlags: true},                   // arg0 - arg1 - borrow; arg2=flags
+		{name: "SUBEC", argLength: 3, reg: gp2flags1carry, asm: "SUBFE", clobberFlags: true},             // as SUBE, with XER[CA] out
+
+		{name: "MULLW", argLength: 2, reg: gp21, asm: "MULLW", commutative: true},  // arg0 * arg1, low 32
+		{name: "MULHW", argLength: 2, reg: gp21, asm: "MULHW", commutative: true},  // (arg0 * arg1) >> 32, signed
+		{name: "MULHWU", argLength: 2, reg: gp21, asm: "MULHWU", commutative: true}, // (arg0 * arg1) >> 32, unsigned
+		{name: "MULLU", argLength: 2, reg: gp22, asm: "MULLW", commutative: true},  // arg0 * arg1, high 32 in out0, low 32 in out1
+
+		{name: "NEG", argLength: 1, reg: gp11, asm: "NEG"}, // -arg0
+
+		// Logical.
+		{name: "AND", argLength: 2, reg: gp21, asm: "AND", commutative: true}, // arg0 & arg1
+		{name: "OR", argLength: 2, reg: gp21, asm: "OR", commutative: true},   // arg0 | arg1
+		{name: "XOR", argLength: 2, reg: gp21, asm: "XOR", commutative: true}, // arg0 ^ arg1
+
+		// Shifts. slw/srw use the low 6 bits of the count and produce zero when
+		// bit 5 is set, which is exactly Go's 32-bit shift-by-32-or-more rule;
+		// sraw/srawi and addic write XER[CA].
+		{name: "SLW", argLength: 2, reg: gp21, asm: "SLW"},                              // arg0 << (arg1 & 63), zero-filled
+		{name: "SRW", argLength: 2, reg: gp21, asm: "SRW"},                              // arg0 >> (arg1 & 63), zero-filled
+		{name: "SRAW", argLength: 2, reg: gp21, asm: "SRAW", clobberFlags: true},        // arg0 >> (arg1 & 63), sign-filled
+		{name: "SRAWI", argLength: 1, reg: gp11, asm: "SRAWI", aux: "Int32", clobberFlags: true},
+
+		// Bit and byte manipulation.
+		{name: "CNTLZW", argLength: 1, reg: gp11, asm: "CNTLZW"}, // count leading zeros
+		{name: "EXTSB", argLength: 1, reg: gp11, asm: "EXTSB"},   // sign-extend the low byte
+		{name: "EXTSH", argLength: 1, reg: gp11, asm: "EXTSH"},   // sign-extend the low half word
+
+		// Moves. MOVWconst may need more than one instruction for constants the
+		// 16-bit immediate field cannot hold; that expansion is the assembler's
+		// business (obj/ppc), not the register allocator's.
+		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32"},
+		{name: "MOVWreg", argLength: 1, reg: gp11, asm: "OR"}, // register-to-register move
+	}
+
+	archs = append(archs, arch{
+		name:            "PPC",
+		pkg:             "cmd/internal/obj/ppc",
+		genfile:         "../../ppc/ssa.go",
+		ops:             ops,
+		blocks:          nil,
+		regnames:        regNamesPPC,
+		gpregmask:       gp,
+		fpregmask:       fp,
+		specialregmask:  0,
+		framepointerreg: -1, // no hardware frame pointer on ppc32
+		linkreg:         -1, // LR is not a GPR the allocator sees
+	})
+}
