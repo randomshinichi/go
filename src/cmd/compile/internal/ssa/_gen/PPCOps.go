@@ -125,12 +125,12 @@ func init() {
 	// g is kept out of the general-purpose set so that it is only clobbered
 	// deliberately.
 	var (
-		gp         = buildReg("R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29")
-		gpg        = gp | buildReg("g")
-		sp         = buildReg("SP")
-		sb         = buildReg("SB")
-		gpspsb     = gp | sp | sb
-		fp         = buildReg("F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31")
+		gp     = buildReg("R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29")
+		gpg    = gp | buildReg("g")
+		sp     = buildReg("SP")
+		sb     = buildReg("SB")
+		gpspsb = gp | sp | sb
+		fp     = buildReg("F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31")
 	)
 	// Common regInfo. The carry / flags operand of a 3-argument op is listed
 	// only when it occupies a register, exactly as ARM does for CPSR: an entry
@@ -143,9 +143,9 @@ func init() {
 		gp21carry      = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, 0}}
 		gp2flags1      = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp}}
 		gp2flags1carry = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp, 0}}
-		gp1cr         = regInfo{inputs: []regMask{gpg}}
-		gp2cr         = regInfo{inputs: []regMask{gpg, gpg}}
-		callerSave    = regMask(gp | fp | gpg)
+		gp1cr          = regInfo{inputs: []regMask{gpg}}
+		gp2cr          = regInfo{inputs: []regMask{gpg, gpg}}
+		callerSave     = regMask(gp | fp | gpg)
 		gp22           = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, gp}}
 		gpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{gp}}
 		gpstore        = regInfo{inputs: []regMask{gpspsb, gp, 0}}
@@ -163,10 +163,10 @@ func init() {
 		{name: "SUBE", argLength: 3, reg: gp2flags1, asm: "SUBFE", clobberFlags: true},                   // arg0 - arg1 - borrow; arg2=flags
 		{name: "SUBEC", argLength: 3, reg: gp2flags1carry, asm: "SUBFE", clobberFlags: true},             // as SUBE, with XER[CA] out
 
-		{name: "MULLW", argLength: 2, reg: gp21, asm: "MULLW", commutative: true},  // arg0 * arg1, low 32
-		{name: "MULHW", argLength: 2, reg: gp21, asm: "MULHW", commutative: true},  // (arg0 * arg1) >> 32, signed
+		{name: "MULLW", argLength: 2, reg: gp21, asm: "MULLW", commutative: true},   // arg0 * arg1, low 32
+		{name: "MULHW", argLength: 2, reg: gp21, asm: "MULHW", commutative: true},   // (arg0 * arg1) >> 32, signed
 		{name: "MULHWU", argLength: 2, reg: gp21, asm: "MULHWU", commutative: true}, // (arg0 * arg1) >> 32, unsigned
-		{name: "MULLU", argLength: 2, reg: gp22, asm: "MULLW", commutative: true},  // arg0 * arg1, high 32 in out0, low 32 in out1
+		{name: "MULLU", argLength: 2, reg: gp22, asm: "MULLW", commutative: true},   // arg0 * arg1, high 32 in out0, low 32 in out1
 
 		{name: "NEG", argLength: 1, reg: gp11, asm: "NEG"}, // -arg0
 
@@ -175,12 +175,12 @@ func init() {
 		{name: "OR", argLength: 2, reg: gp21, asm: "OR", commutative: true},   // arg0 | arg1
 		{name: "XOR", argLength: 2, reg: gp21, asm: "XOR", commutative: true}, // arg0 ^ arg1
 
-		// Shifts. slw/srw use the low 6 bits of the count and produce zero when
-		// bit 5 is set, which is exactly Go's 32-bit shift-by-32-or-more rule;
+		// Shifts. slw/srw use only the low 6 count bits, with bit 5 forcing
+		// zero. PPC.rules guards the full Go count against wrapping at 64.
 		// sraw/srawi and addic write XER[CA].
-		{name: "SLW", argLength: 2, reg: gp21, asm: "SLW"},                              // arg0 << (arg1 & 63), zero-filled
-		{name: "SRW", argLength: 2, reg: gp21, asm: "SRW"},                              // arg0 >> (arg1 & 63), zero-filled
-		{name: "SRAW", argLength: 2, reg: gp21, asm: "SRAW", clobberFlags: true},        // arg0 >> (arg1 & 63), sign-filled
+		{name: "SLW", argLength: 2, reg: gp21, asm: "SLW"},                       // arg0 << (arg1 & 63), zero-filled
+		{name: "SRW", argLength: 2, reg: gp21, asm: "SRW"},                       // arg0 >> (arg1 & 63), zero-filled
+		{name: "SRAW", argLength: 2, reg: gp21, asm: "SRAW", clobberFlags: true}, // arg0 >> (arg1 & 63), sign-filled
 		{name: "SRAWI", argLength: 1, reg: gp11, asm: "SRAWI", aux: "Int32", clobberFlags: true},
 
 		// Bit and byte manipulation.
@@ -191,7 +191,7 @@ func init() {
 		// Moves. MOVWconst may need more than one instruction for constants the
 		// 16-bit immediate field cannot hold; that expansion is the assembler's
 		// business (obj/ppc), not the register allocator's.
-		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32"},
+		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32", typ: "Int32"},
 		{name: "MOVWreg", argLength: 1, reg: gp11, asm: "OR"}, // register-to-register move
 
 		// 32-bit compare. CMP/CMPU in the ppc64 table select 64-bit comparison
@@ -204,13 +204,14 @@ func init() {
 		{name: "FlagEQ"},
 		{name: "FlagLT"},
 		{name: "FlagGT"},
-		{name: "Equal", argLength: 1},
-		{name: "NotEqual", argLength: 1},
-		{name: "LessThan", argLength: 1},
-		{name: "LessEqual", argLength: 1},
-		{name: "GreaterThan", argLength: 1},
-		{name: "GreaterEqual", argLength: 1},
+		{name: "Equal", argLength: 1, reg: gp01, typ: "Bool"},
+		{name: "NotEqual", argLength: 1, reg: gp01, typ: "Bool"},
+		{name: "LessThan", argLength: 1, reg: gp01, typ: "Bool"},
+		{name: "LessEqual", argLength: 1, reg: gp01, typ: "Bool"},
+		{name: "GreaterThan", argLength: 1, reg: gp01, typ: "Bool"},
+		{name: "GreaterEqual", argLength: 1, reg: gp01, typ: "Bool"},
 
+		{name: "LoweredNilCheck", argLength: 2, reg: regInfo{inputs: []regMask{gpspsb | gpg}}, nilCheck: true, faultOnNilArg0: true},
 		{name: "LoweredGetClosurePtr", reg: regInfo{outputs: []regMask{buildReg("R11")}}, zeroWidth: true},
 		{name: "LoweredGetCallerSP", argLength: 1, reg: gp01, rematerializeable: true},
 		{name: "LoweredGetCallerPC", reg: gp01, rematerializeable: true},
@@ -233,10 +234,10 @@ func init() {
 	}
 
 	archs = append(archs, arch{
-		name:            "PPC",
-		pkg:             "cmd/internal/obj/ppc",
-		genfile:         "../../ppc/ssa.go",
-		ops:             ops,
+		name:    "PPC",
+		pkg:     "cmd/internal/obj/ppc",
+		genfile: "../../ppc/ssa.go",
+		ops:     ops,
 		blocks: []blockData{
 			{name: "EQ", controls: 1}, {name: "NE", controls: 1},
 			{name: "LT", controls: 1}, {name: "LE", controls: 1},
@@ -245,11 +246,11 @@ func init() {
 			{name: "FGT", controls: 1}, {name: "FGE", controls: 1},
 		},
 		ParamIntRegNames: "R3 R4 R5 R6 R7 R8 R9 R10",
-		regnames:        regNamesPPC,
-		gpregmask:       gp,
-		fpregmask:       fp,
-		specialregmask:  0,
-		framepointerreg: -1, // no hardware frame pointer on ppc32
-		linkreg:         -1, // LR is not a GPR the allocator sees
+		regnames:         regNamesPPC,
+		gpregmask:        gp,
+		fpregmask:        fp,
+		specialregmask:   0,
+		framepointerreg:  -1, // no hardware frame pointer on ppc32
+		linkreg:          -1, // LR is not a GPR the allocator sees
 	})
 }

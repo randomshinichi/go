@@ -84,8 +84,11 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		reg2(s, ppc.AEXTSB, v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCEXTSH:
 		reg2(s, ppc.AEXTSH, v.Reg(), v.Args[0].Reg())
-	case ssa.OpPPCMOVWreg:
-		// or rd, rs, rs is the register move.
+	case ssa.OpCopy, ssa.OpPPCMOVWreg:
+		if v.Type.IsMemory() || v.Reg() == v.Args[0].Reg() {
+			return
+		}
+		// or rd, rs, rs is the register move, including regalloc copies.
 		reg3(s, ppc.AOR, v.Reg(), v.Args[0].Reg(), v.Args[0].Reg())
 
 	// Shift by an immediate amount.
@@ -103,6 +106,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p := s.Prog(loadByType(v.Type))
 		ssagen.AddrAuto(&p.From, v.Args[0])
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		if v.Type.Size() == 1 && v.Type.IsSigned() {
+			reg2(s, ppc.AEXTSB, v.Reg(), v.Reg())
+		}
 	case ssa.OpStoreReg:
 		if v.Type.IsFlags() {
 			v.Fatalf("ppc32: the carry lives in XER[CA] and cannot be spilled: %v", v.LongString())
@@ -133,6 +139,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.From = obj.Addr{Type: obj.TYPE_MEM, Reg: v.Args[0].Reg()}
 		ssagen.AddAux(&p.From, v)
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		if v.Op == ssa.OpPPCMOVBload {
+			reg2(s, ppc.AEXTSB, v.Reg(), v.Reg())
+		}
 
 	case ssa.OpPPCMOVBstore, ssa.OpPPCMOVHstore, ssa.OpPPCMOVWstore:
 		p := s.Prog(v.Op.Asm())
@@ -165,12 +174,17 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPCLoweredGetCallerPC:
 		p := s.Prog(obj.AGETCALLERPC)
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
-	case ssa.OpPPCInvertFlags, ssa.OpPPCFlagEQ, ssa.OpPPCFlagLT, ssa.OpPPCFlagGT,
-		ssa.OpPPCEqual, ssa.OpPPCNotEqual, ssa.OpPPCLessThan, ssa.OpPPCLessEqual,
-		ssa.OpPPCGreaterThan, ssa.OpPPCGreaterEqual:
-		// Flags and comparison predicates have no GPR representation. The block
-		// selector consumes them directly when it emits bc.
+	case ssa.OpPPCLoweredNilCheck:
+		// A faulting byte load tests the address without requiring alignment.
+		// R31 is reserved to the assembler and never allocated to an SSA value.
+		p := s.Prog(ppc.ALBZ)
+		p.From = obj.Addr{Type: obj.TYPE_MEM, Reg: v.Args[0].Reg()}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R31}
+	case ssa.OpPPCInvertFlags, ssa.OpPPCFlagEQ, ssa.OpPPCFlagLT, ssa.OpPPCFlagGT:
 		return
+	case ssa.OpPPCEqual, ssa.OpPPCNotEqual, ssa.OpPPCLessThan, ssa.OpPPCLessEqual,
+		ssa.OpPPCGreaterThan, ssa.OpPPCGreaterEqual:
+		emitPredicate(s, v)
 	case ssa.OpPPCCALLstatic:
 		s.Call(v)
 	case ssa.OpPPCCALLtail:
@@ -204,9 +218,6 @@ func reg3(s *ssagen.State, as obj.As, rd, ra, rb int16) {
 func loadByType(t *types.Type) obj.As {
 	switch t.Size() {
 	case 1:
-		if t.IsSigned() {
-			return ppc.ALHA // lha sign-extends
-		}
 		return ppc.ALBZ
 	case 2:
 		if t.IsSigned() {
@@ -235,8 +246,7 @@ func storeByType(t *types.Type) obj.As {
 
 // emitMOVWconst writes a 32-bit constant into a register. addi/addis sign-extend
 // their 16-bit immediate, so a constant that does not fit needs the addis/ori
-// pair; the (c+0x8000)>>16 bias is what makes the pair exact for negative values
-// as well.
+// pair. ori combines unsigned low bits: unlike addi, it needs no high-half bias.
 func emitMOVWconst(s *ssagen.State, v *ssa.Value) {
 	c := int32(v.AuxInt)
 	r := v.Reg()
@@ -250,11 +260,47 @@ func emitMOVWconst(s *ssagen.State, v *ssa.Value) {
 	p := s.Prog(ppc.AADDIS)
 	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
 	p.Reg = ppc.REG_R0
-	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(uint32(c)+0x8000) >> 16}
+	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(int16(uint32(c) >> 16))}
 	p = s.Prog(ppc.AORI)
 	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
 	p.Reg = r
 	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(uint32(c) & 0xffff)}
+}
+
+// emitPredicate materializes a CR0 comparison when it survives block lowering,
+// for example a returned bool. None of these instructions changes CR0 or XER.
+func emitPredicate(s *ssagen.State, v *ssa.Value) {
+	bo, bi := int16(4), int64(2) // branch if Equal is false
+	switch v.Op {
+	case ssa.OpPPCNotEqual:
+		bo = 12
+	case ssa.OpPPCLessThan:
+		bi = 0
+	case ssa.OpPPCLessEqual:
+		bo, bi = 12, 1
+	case ssa.OpPPCGreaterThan:
+		bi = 1
+	case ssa.OpPPCGreaterEqual:
+		bo, bi = 12, 0
+	}
+	p := s.Prog(ppc.AADDI)
+	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+	p.Reg = ppc.REG_R0
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	branch := s.Prog(ppc.ABC)
+	branch.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(bo)}
+	branch.Reg = int16(bi)
+	branch.To.Type = obj.TYPE_BRANCH
+	p = s.Prog(ppc.AADDI)
+	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 1}
+	p.Reg = ppc.REG_R0
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	// A real instruction gives the local branch a target even at block end.
+	p = s.Prog(ppc.AOR)
+	p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	p.Reg = v.Reg()
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	branch.To.SetTarget(p)
 }
 
 func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
@@ -302,7 +348,7 @@ func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
 		no = b.Succs[1].Block()
 	}
 	kind := b.Kind
-	if len(b.Controls) > 0 && b.Controls[0].Op == ssa.OpPPCInvertFlags {
+	if b.Controls[0] != nil && b.Controls[0].Op == ssa.OpPPCInvertFlags {
 		switch kind {
 		case ssa.BlockPPCLT:
 			kind = ssa.BlockPPCGT
