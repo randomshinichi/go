@@ -26,29 +26,43 @@
 //     sraw, the subfc family and adde as the clobbering forms.
 
 // Lowering arithmetic.
-(Add32 x y) => (ADD x y)
+(Add(Ptr|32|16|8) x y) => (ADD x y)
 (Add32carry x y) => (ADDC x y)
 (Add32withcarry x y c) => (ADDE x y c)
 (Add32carrywithcarry x y c) => (ADDEC x y c)
-(Sub32 x y) => (SUB x y)
+(Sub(32|16|8) x y) => (SUB x y)
 (Sub32carry x y) => (SUBC x y)
 (Sub32withcarry x y c) => (SUBE x y c)
-(Mul32 x y) => (MULLW x y)
+(Mul(32|16|8) x y) => (MULLW x y)
+(Hmul32 x y) => (MULHW x y)
+(Hmul32u x y) => (MULHWU x y)
 (Mul32uhilo x y) => (MULLU x y)
-(And32 x y) => (AND x y)
-(Or32 x y) => (OR x y)
-(Xor32 x y) => (XOR x y)
-(Neg32 x) => (NEG x)
+(And(32|16|8|B) x y) => (AND x y)
+(Or(32|16|8|B) x y) => (OR x y)
+(Xor(32|16|8) x y) => (XOR x y)
+(Neg(32|16|8) x) => (NEG x)
+(Com(32|16|8) x) => (XOR x (MOVWconst [-1]))
+(Not x) => (XOR x (MOVWconst [1]))
 
-// Lowering shifts. slw and srw take the low six bits of the count and return
-// zero when bit 5 is set, which is the same answer Go specifies for a shift of 32
-// or more on a 32-bit type, so no extra count check is needed here.
-(Lsh32x32 x y) => (SLW x y)
-(Lsh32x64 x y) => (SLW x y)
-(Rsh32Ux32 x y) => (SRW x y)
-(Rsh32Ux64 x y) => (SRW x y)
-(Rsh32x32 x y) => (SRAW x y)
-(Rsh32x64 x y) => (SRAW x y)
+// PPC examines only the low six count bits. Guard the complete Go count:
+// counts >= 64 must not wrap back to a small machine shift.
+(Lsh32x32 x y) => (AND (SLW <typ.UInt32> x y) (NEG <typ.UInt32> (LessThan (CMPWUconst [32] y))))
+(Rsh32Ux32 x y) => (AND (SRW <typ.UInt32> x y) (NEG <typ.UInt32> (LessThan (CMPWUconst [32] y))))
+(Rsh32x32 x y) => (SRAW x (OR <typ.UInt32> y (NEG <typ.UInt32> (GreaterEqual (CMPWUconst [32] y)))))
+(Lsh32x(8|16) x y) => (Lsh32x32 x (ZeroExt(8|16)to32 y))
+(Rsh32Ux(8|16) x y) => (Rsh32Ux32 x (ZeroExt(8|16)to32 y))
+(Lsh(8|16)x32 x y) => (Lsh32x32 x y)
+(Rsh(8|16)Ux32 x y) => (Rsh32Ux32 (ZeroExt(8|16)to32 x) y)
+(Lsh(8|16)x(8|16) x y) => (Lsh32x32 x (ZeroExt(8|16)to32 y))
+(Lsh8x16 x y) => (Lsh32x32 x (ZeroExt16to32 y))
+// opt canonicalizes constant counts to Const64 after dec64 has run.
+(Lsh(8|16|32)x64 x (Const64 [c])) && uint64(c) < 32 => (SLW x (MOVWconst [int32(c)]))
+(Lsh(8|16|32)x64 _ (Const64 [c])) && uint64(c) >= 32 => (MOVWconst [0])
+(Rsh(8|16)Ux64 x (Const64 [c])) && uint64(c) < 32 => (SRW (ZeroExt(8|16)to32 x) (MOVWconst [int32(c)]))
+(Rsh32Ux64 x (Const64 [c])) && uint64(c) < 32 => (SRW x (MOVWconst [int32(c)]))
+(Rsh(8|16|32)Ux64 _ (Const64 [c])) && uint64(c) >= 32 => (MOVWconst [0])
+(Rsh32x64 x (Const64 [c])) && uint64(c) < 32 => (SRAWI x [int32(c)])
+(Rsh32x64 x (Const64 [c])) && uint64(c) >= 32 => (SRAWI x [31])
 
 // Lowering addresses, loads and stores. A 64-bit load or store has already been
 // split into two big-endian 32-bit accesses by _gen/dec64.rules, so every case
@@ -70,6 +84,7 @@
 (Store {t} ptr val mem) && t.Size() == 4 && !t.IsFloat() => (MOVWstore ptr val mem)
 
 // Lowering constants and register moves.
+(Const(8|16) [c]) => (MOVWconst [int32(c)])
 (Const32 [c]) => (MOVWconst [c])
 (ConstBool [t]) => (MOVWconst [b2i32(t)])
 (ConstNil) => (MOVWconst [0])
@@ -153,6 +168,32 @@
 (GreaterEqual (FlagGT)) => (MOVWconst [1])
 ((Equal|NotEqual|LessThan|GreaterThan|LessEqual|GreaterEqual) (InvertFlags x)) => ((Equal|NotEqual|GreaterThan|LessThan|GreaterEqual|LessEqual) x)
 
+// Small values may have unspecified high bits after arithmetic or truncation.
+// Mask/extend them before word comparisons and widenings.
+(ZeroExt8to(16|32) x) => (AND x (MOVWconst [255]))
+(ZeroExt16to32 x) => (AND x (MOVWconst [65535]))
+(SignExt8to(16|32) x) => (EXTSB x)
+(SignExt16to32 x) => (EXTSH x)
+(Trunc(16|32)to8 x) => (Copy x)
+(Trunc32to16 x) => (Copy x)
+(CvtBoolToUint8 x) => (Copy x)
+(Eq(8|16) x y) => (Equal (CMPW (ZeroExt(8|16)to32 x) (ZeroExt(8|16)to32 y)))
+(Neq(8|16) x y) => (NotEqual (CMPW (ZeroExt(8|16)to32 x) (ZeroExt(8|16)to32 y)))
+(Less(8|16) x y) => (LessThan (CMPW (SignExt(8|16)to32 x) (SignExt(8|16)to32 y)))
+(Leq(8|16) x y) => (LessEqual (CMPW (SignExt(8|16)to32 x) (SignExt(8|16)to32 y)))
+(Less(8|16)U x y) => (LessThan (CMPWU (ZeroExt(8|16)to32 x) (ZeroExt(8|16)to32 y)))
+(Leq(8|16)U x y) => (LessEqual (CMPWU (ZeroExt(8|16)to32 x) (ZeroExt(8|16)to32 y)))
+(Eq(Ptr|B) x y) => (Equal (CMPW x y))
+(Neq(Ptr|B) x y) => (NotEqual (CMPW x y))
+(IsNonNil x) => (NotEqual (CMPWconst [0] x))
+(IsInBounds x y) => (LessThan (CMPWU x y))
+(IsSliceInBounds x y) => (LessEqual (CMPWU x y))
+(Signmask x) => (SRAWI x [31])
+(Slicemask x) => (SRAWI (NEG <typ.Int32> x) [31])
+(Zeromask x) => (SRAWI (SUB <typ.Int32> (SRW <typ.UInt32> x (MOVWconst [1])) x) [31])
+(Avg32u x y) => (ADD (SRW <typ.UInt32> (SUB <typ.UInt32> x y) (MOVWconst [1])) y)
+(NilCheck ...) => (LoweredNilCheck ...)
+(GetClosurePtr ...) => (LoweredGetClosurePtr ...)
 (StaticCall ...) => (CALLstatic ...)
 (GetCallerSP ...) => (LoweredGetCallerSP ...)
 (GetCallerPC ...) => (LoweredGetCallerPC ...)
