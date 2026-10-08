@@ -143,6 +143,9 @@ func init() {
 		gp21carry      = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, 0}}
 		gp2flags1      = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp}}
 		gp2flags1carry = regInfo{inputs: []regMask{gp, gp}, outputs: []regMask{gp, 0}}
+		gp1cr         = regInfo{inputs: []regMask{gpg}}
+		gp2cr         = regInfo{inputs: []regMask{gpg, gpg}}
+		callerSave    = regMask(gp | fp | gpg)
 		gp22           = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, gp}}
 		gpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{gp}}
 		gpstore        = regInfo{inputs: []regMask{gpspsb, gp, 0}}
@@ -191,6 +194,31 @@ func init() {
 		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32"},
 		{name: "MOVWreg", argLength: 1, reg: gp11, asm: "OR"}, // register-to-register move
 
+		// 32-bit compare. CMP/CMPU in the ppc64 table select 64-bit comparison
+		// semantics and are not valid for this 32-bit-register backend.
+		{name: "CMPW", argLength: 2, reg: gp2cr, asm: "CMPW", typ: "Flags"},
+		{name: "CMPWU", argLength: 2, reg: gp2cr, asm: "CMPWU", typ: "Flags"},
+		{name: "CMPWconst", argLength: 1, reg: gp1cr, asm: "CMPW", aux: "Int32", typ: "Flags"},
+		{name: "CMPWUconst", argLength: 1, reg: gp1cr, asm: "CMPWU", aux: "Int32", typ: "Flags"},
+		{name: "InvertFlags", argLength: 1},
+		{name: "FlagEQ"},
+		{name: "FlagLT"},
+		{name: "FlagGT"},
+		{name: "Equal", argLength: 1},
+		{name: "NotEqual", argLength: 1},
+		{name: "LessThan", argLength: 1},
+		{name: "LessEqual", argLength: 1},
+		{name: "GreaterThan", argLength: 1},
+		{name: "GreaterEqual", argLength: 1},
+
+		{name: "LoweredGetClosurePtr", reg: regInfo{outputs: []regMask{buildReg("R11")}}, zeroWidth: true},
+		{name: "LoweredGetCallerSP", argLength: 1, reg: gp01, rematerializeable: true},
+		{name: "LoweredGetCallerPC", reg: gp01, rematerializeable: true},
+		{name: "CALLstatic", argLength: -1, reg: regInfo{clobbers: callerSave}, aux: "CallOff", clobberFlags: true, call: true},
+		{name: "CALLclosure", argLength: -1, reg: regInfo{inputs: []regMask{buildReg("R12"), buildReg("R11"), 0}, clobbers: callerSave}, aux: "CallOff", clobberFlags: true, call: true},
+		{name: "CALLinter", argLength: -1, reg: regInfo{inputs: []regMask{buildReg("R12")}, clobbers: callerSave}, aux: "CallOff", clobberFlags: true, call: true},
+		{name: "CALLtail", argLength: -1, reg: regInfo{clobbers: callerSave}, aux: "CallOff", clobberFlags: true, call: true, tailCall: true},
+
 		// Address formation and memory. The 64-bit forms are not here: the
 		// decomposition has already split them into two 32-bit accesses.
 		{name: "MOVWaddr", argLength: 1, reg: regInfo{inputs: []regMask{gpspsb}, outputs: []regMask{gp}}, aux: "SymOff", asm: "ADDI", rematerializeable: true, symEffect: "Addr"}, // arg0 + auxInt + aux.(*obj.LSym)
@@ -209,7 +237,14 @@ func init() {
 		pkg:             "cmd/internal/obj/ppc",
 		genfile:         "../../ppc/ssa.go",
 		ops:             ops,
-		blocks:          nil,
+		blocks: []blockData{
+			{name: "EQ", controls: 1}, {name: "NE", controls: 1},
+			{name: "LT", controls: 1}, {name: "LE", controls: 1},
+			{name: "GT", controls: 1}, {name: "GE", controls: 1},
+			{name: "FLT", controls: 1}, {name: "FLE", controls: 1},
+			{name: "FGT", controls: 1}, {name: "FGE", controls: 1},
+		},
+		ParamIntRegNames: "R3 R4 R5 R6 R7 R8 R9 R10",
 		regnames:        regNamesPPC,
 		gpregmask:       gp,
 		fpregmask:       fp,
