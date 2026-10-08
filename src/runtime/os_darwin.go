@@ -373,15 +373,8 @@ func unminit() {
 func mdestroy(mp *m) {
 }
 
-//go:nosplit
-func osyield_no_g() {
-	usleep_no_g(1)
-}
-
-//go:nosplit
-func osyield() {
-	usleep(1)
-}
+// osyield and osyield_no_g are in osyield_darwin.go and sys_darwin_ppc64.go:
+// on Mac OS X 10.5 usleep is not safe to call from a signal handler.
 
 const (
 	_NSIG        = 32

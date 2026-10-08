@@ -39,6 +39,27 @@ func pthread_setspecific_trampoline()
 //go:cgo_import_dynamic libc_pthread_key_create pthread_key_create "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_pthread_setspecific pthread_setspecific "/usr/lib/libSystem.B.dylib"
 
+// osyield is called from signal handlers: cpuprof.add spins on
+// prof.signalLock with it when two SIGPROF handlers run at once. Elsewhere
+// on darwin it is usleep(1), but Leopard's usleep is not async-signal-safe:
+// nanosleep calls _pthread_testcancel, which takes the calling thread's own
+// pthread spinlock. A handler that interrupted that locked region and then
+// calls usleep spins forever (measured on the G5: hung 3 of 3 times within
+// 2 s). sched_yield is the bare swtch_pri Mach trap there and takes no lock.
+
+//go:nosplit
+func osyield() {
+	libcCall(unsafe.Pointer(abi.FuncPCABI0(sched_yield_trampoline)), nil)
+}
+
+//go:nosplit
+func osyield_no_g() {
+	asmcgocall_no_g(unsafe.Pointer(abi.FuncPCABI0(sched_yield_trampoline)), nil)
+}
+func sched_yield_trampoline()
+
+//go:cgo_import_dynamic libc_sched_yield sched_yield "/usr/lib/libSystem.B.dylib"
+
 // Used by the CPU profiler's thread sampler (cpuprof_darwin_ppc64.go).
 
 //go:nosplit
