@@ -28,6 +28,10 @@ const (
 	RISCV64
 	S390X
 	WASM
+	// PPC is the 32-bit PowerPC family. It is appended after WASM rather than
+	// inserted before PPC64 so that the numeric values of the existing families
+	// do not move.
+	PPC
 )
 
 // PtrSize is the size of a pointer in bytes - unsafe.Sizeof(uintptr(0)) but as an ideal constant.

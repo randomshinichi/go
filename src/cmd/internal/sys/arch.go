@@ -24,6 +24,7 @@ const (
 	RISCV64 = goarch.RISCV64
 	S390X   = goarch.S390X
 	Wasm    = goarch.WASM
+	PPC     = goarch.PPC
 )
 
 // Arch represents an individual architecture.
@@ -202,6 +203,28 @@ var ArchMIPS64LE = &Arch{
 	FixedFrameSize: 8, // LR
 }
 
+// ArchPPC describes 32-bit PowerPC: big-endian, 4-byte pointers and registers,
+// fixed 4-byte instructions. Alignment 4 and CanMergeLoads false are the
+// conservative start agreed in the ppc32 design (§3): whether misaligned
+// lwz/lfd are cheap on a 750/74xx is an open question (Q-7).
+//
+// FixedFrameSize is unresolved (Q-3, Darwin ppc32 linkage area). The value here
+// is the ppc64 derivation (link register save plus the compiler, link editor
+// and TOC save words) expressed in 32-bit words; it must be replaced by the
+// measured Darwin ppc32 layout before a ppc32 runtime or backend consumes it.
+var ArchPPC = &Arch{
+	Name:           "ppc",
+	Family:         PPC,
+	ByteOrder:      binary.BigEndian,
+	PtrSize:        4,
+	RegSize:        4,
+	MinLC:          4,
+	Alignment:      4,
+	CanMergeLoads:  false,
+	HasLR:          true,
+	FixedFrameSize: 4 * 4,
+}
+
 var ArchPPC64 = &Arch{
 	Name:          "ppc64",
 	Family:        PPC64,
@@ -279,6 +302,7 @@ var Archs = [...]*Arch{
 	ArchMIPSLE,
 	ArchMIPS64,
 	ArchMIPS64LE,
+	ArchPPC,
 	ArchPPC64,
 	ArchPPC64LE,
 	ArchRISCV64,
