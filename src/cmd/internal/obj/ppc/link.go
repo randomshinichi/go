@@ -8,6 +8,7 @@ import (
 	"cmd/internal/obj"
 	"cmd/internal/sys"
 	"encoding/binary"
+	"fmt"
 )
 
 // Linkppc is the assembler interface for GOARCH=ppc. It is a sibling of
@@ -62,12 +63,14 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 		return // external function or section symbol
 	}
 
+	// autosize is the local frame size the compiler put on the TEXT, exactly as
+	// ppc64 reads it. It is what turns a name's own offset into an SP-relative
+	// displacement (see resolveOffset).
+	autosize := p.To.Offset
+
 	words := make([]uint32, 0, 16)
 	for q := p.Link; q != nil; q = q.Link {
-		if q.As == obj.ATEXT {
-			continue
-		}
-		w, ok := encodeProg(ctxt, q)
+		w, ok := encodeProg(ctxt, q, autosize)
 		if !ok {
 			return // diag already issued
 		}
@@ -87,9 +90,41 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 	}
 }
 
+// resolveOffset turns an operand's displacement into the byte offset the
+// instruction carries.
+//
+// A NAME_AUTO or NAME_PARAM reference is a reference into the current function's
+// stack frame; its final address is SP-relative and needs no relocation, because
+// the frame is laid out before the instruction is encoded. The compiler's offset
+// is relative to the frame base, so the frame size is added for a local and the
+// fixed linkage area as well for a parameter -- the same arithmetic ppc64 and
+// arm use, and inheriting the same open question about what FixedFrameSize is on
+// Darwin ppc32 (DESIGN.md §11 Q-3).
+//
+// Anything else that carries a symbol (NAME_EXTERN, NAME_STATIC, NAME_GOTREF,
+// TLS) needs a relocation record, and where a ppc32 symbol reference has to be
+// split (lis/ori, or a pc-relative form) depends on the 32-bit Mach-O relocation
+// set, which the Mach-O lane owns (Q-4). Emitting the instruction without its
+// relocation would be a silently wrong address, so those are refused by name.
+func resolveOffset(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, autosize int64) (int64, error) {
+	switch a.Name {
+	case obj.NAME_NONE:
+		if a.Sym != nil {
+			return 0, fmt.Errorf("%v: %v has a symbol but no name to resolve it with", p, Mnemonic(Inst(p.As)))
+		}
+		return a.Offset, nil
+	case obj.NAME_AUTO:
+		return autosize + a.Offset, nil
+	case obj.NAME_PARAM:
+		return autosize + a.Offset + ctxt.Arch.FixedFrameSize, nil
+	}
+	return 0, fmt.Errorf("%v: %v refers to %s (%v), and the ppc32 relocation path does not exist yet (brief 3.4)",
+		p, Mnemonic(Inst(p.As)), a.Sym, a.Name)
+}
+
 // encodeProg returns the words for one Prog, or ok=false after issuing a
 // diagnostic. A nil, true result is a pseudo-instruction that occupies no space.
-func encodeProg(ctxt *obj.Link, p *obj.Prog) (w []uint32, ok bool) {
+func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok bool) {
 	switch p.As {
 	case obj.ATEXT, obj.ANOP, obj.AFUNCDATA, obj.APCDATA:
 		return nil, true
@@ -98,26 +133,19 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog) (w []uint32, ok bool) {
 		return nil, false
 	}
 
-	bad := func(format string, args ...any) ([]uint32, bool) {
-		ctxt.Diag("ppc32: "+format, args...)
+	bad := func(err error) ([]uint32, bool) {
+		ctxt.Diag("ppc32: %v", err)
 		return nil, false
-	}
-
-	// A symbolic operand needs a relocation record, and where a ppc32 symbol
-	// reference has to be split (lis/ori, or a pc-relative form) depends on the
-	// 32-bit Mach-O relocation set, which the Mach-O lane owns (DESIGN.md §11
-	// Q-4). Emitting the instruction without its relocation would be a silently
-	// wrong address, so these are refused by name instead.
-	if a := symOperand(p); a != nil {
-		return bad("%v: %v refers to symbol %s and the ppc32 relocation path does not exist yet (brief 3.4)", p, Mnemonic(Inst(p.As)), a.Sym)
 	}
 
 	// Operand convention, shared with cmd/compile/internal/ppc/ssa.go:
 	//
 	//	op rd,ra,rb   To=rd, From.Reg=ra, Reg=rb
 	//	op rd,ra      To=rd, From.Reg=ra
-	//	op rd,ra,si   To=rd, Reg=ra, From={TYPE_CONST, Offset=si}
+	//	op rd,ra,si   To=rd, Reg=ra, From={TYPE_CONST|TYPE_ADDR, Offset=si}
 	//	op ra,rs,ui   To=ra, Reg=rs, From={TYPE_CONST, Offset=ui}
+	//	op rd,d(ra)   To=rd, From={TYPE_MEM, Reg=ra, Offset=d, Name, Sym}
+	//	op rs,d(ra)   To={TYPE_MEM, Reg=ra, Offset=d, Name, Sym}, From=rs
 	//
 	// `rd`/`rs` name one field in asm.go's table; which spelling a form uses is
 	// the form's business, not the assembler's.
@@ -127,53 +155,70 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog) (w []uint32, ok bool) {
 	rb := func() int32 { return int32(p.Reg - REG_R0) }
 	reg := func() int32 { return int32(p.Reg - REG_R0) }
 
+	emit := func(args ...int32) ([]uint32, bool) {
+		enc, err := Encode(Inst(p.As), args...)
+		if err != nil {
+			return bad(err)
+		}
+		return []uint32{enc}, true
+	}
+
 	switch p.As {
 	// Three-register forms: To=rd, From=ra, Reg=rb.
 	case AADD, AADDC, AADDE, ASUBF, ASUBFC, ASUBFE,
 		AMULLW, AMULHW, AMULHWU,
 		AAND, AANDC, AOR, AORC, AXOR, ANAND, ANOR, AEQV,
 		ASLW, ASRW, ASRAW, AROTLW:
-		enc, err := Encode(Inst(p.As), rd(), ra(), rb())
-		if err != nil {
-			return bad("%v: %v", p, err)
-		}
-		return []uint32{enc}, true
+		return emit(rd(), ra(), rb())
 
 	// Two-register forms: To=rd, From=ra.
 	case ANEG, ACNTLZW, AEXTSB, AEXTSH:
-		enc, err := Encode(Inst(p.As), rd(), ra())
-		if err != nil {
-			return bad("%v: %v", p, err)
-		}
-		return []uint32{enc}, true
+		return emit(rd(), ra())
 
 	// Register-immediate forms rd,ra,si: To=rd, Reg=ra, From.Offset=si. A stack
-	// or address name arrives as a TYPE_ADDR, whose offset is the whole operand.
+	// name arrives as TYPE_ADDR; an ordinary constant as TYPE_CONST.
 	case AADDI, AADDIC, AADDIS:
 		if p.From.Type != obj.TYPE_CONST && p.From.Type != obj.TYPE_ADDR {
-			return bad("%v: %v needs a constant operand", p, Mnemonic(Inst(p.As)))
+			return bad(fmt.Errorf("%v: %v needs a constant operand", p, Mnemonic(Inst(p.As))))
 		}
-		enc, err := Encode(Inst(p.As), rd(), reg(), int32(p.From.Offset))
+		off, err := resolveOffset(ctxt, p, &p.From, autosize)
 		if err != nil {
-			return bad("%v: %v", p, err)
+			return bad(err)
 		}
-		return []uint32{enc}, true
+		return emit(rd(), reg(), int32(off))
 
 	// Immediate forms that write their first operand: To=ra, Reg=rs,
 	// From.Offset=the immediate (ui or sh).
 	case AORI, AXORI, AORIS, AXORIS, AANDI_, AANDIS_, ASRAWI:
-		enc, err := Encode(Inst(p.As), rd(), rs(), int32(p.From.Offset))
-		if err != nil {
-			return bad("%v: %v", p, err)
+		return emit(rd(), rs(), int32(p.From.Offset))
+
+	// Loads: To=rd, From=d(ra).
+	case ALWZ, ALBZ, ALHZ, ALHA:
+		if p.From.Type != obj.TYPE_MEM {
+			return bad(fmt.Errorf("%v: %v needs a memory operand", p, Mnemonic(Inst(p.As))))
 		}
-		return []uint32{enc}, true
+		d, err := resolveOffset(ctxt, p, &p.From, autosize)
+		if err != nil {
+			return bad(err)
+		}
+		return emit(rd(), int32(d), ra())
+
+	// Stores: To=d(ra), From=rs.
+	case ASTW, ASTB, ASTH:
+		if p.To.Type != obj.TYPE_MEM {
+			return bad(fmt.Errorf("%v: %v needs a memory destination", p, Mnemonic(Inst(p.As))))
+		}
+		d, err := resolveOffset(ctxt, p, &p.To, autosize)
+		if err != nil {
+			return bad(err)
+		}
+		return emit(int32(p.From.Reg-REG_R0), int32(d), int32(p.To.Reg-REG_R0))
 
 	case ABLR:
-		enc, _ := Encode(ABLR)
-		return []uint32{enc}, true
+		return emit()
 	}
 
-	return bad("no ppc32 encoding for %v (as %v)", p, p.As)
+	return bad(fmt.Errorf("no ppc32 encoding for %v (as %v)", p, p.As))
 }
 
 // symOperand returns the operand carrying a symbol, if any. One symbol per Prog
