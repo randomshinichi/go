@@ -12,9 +12,10 @@ import (
 	"cmd/internal/obj/ppc"
 )
 
-// zerorange zeroes cnt bytes of stack starting at SP+off. R0 reads as the
-// literal zero in the RA position of a store, so no scratch register is needed
-// and the r0 argument is unused, exactly as on ppc64.
+// zerorange zeroes cnt bytes starting at SP+FixedFrameSize+off. Go keeps
+// R0's contents zero (stores read RS, not the special RA=0 address field).
+// obj/ppc restores that invariant after using R0 to save LR. PadFrame runs
+// before these offsets are computed, so allocation padding cannot move them.
 func zerorange(pp *objw.Progs, p *obj.Prog, off, cnt int64, _ *uint32) *obj.Prog {
 	if cnt == 0 {
 		return p

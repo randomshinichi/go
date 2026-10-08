@@ -208,10 +208,12 @@ var ArchMIPS64LE = &Arch{
 // conservative start agreed in the ppc32 design (§3): whether misaligned
 // lwz/lfd are cheap on a 750/74xx is an open question (Q-7).
 //
-// FixedFrameSize is unresolved (Q-3, Darwin ppc32 linkage area). The value here
-// is the ppc64 derivation (link register save plus the compiler, link editor
-// and TOC save words) expressed in 32-bit words; it must be replaced by the
-// measured Darwin ppc32 layout before a ppc32 runtime or backend consumes it.
+// FixedFrameSize is the Darwin ppc32 linkage area measured on hardware:
+// parameters begin at SP+24, with the saved LR at SP+8 (see
+// docs/darwin-ppc32-abi-measured.md). Go uses stack arguments and caller-saved
+// registers; locals and outgoing arguments are additional, not fixed overhead.
+// Total allocated frames must be rounded to 16 bytes. This is a Go-internal
+// convention on every OS, not the Linux SysV C convention (parameter base +16).
 var ArchPPC = &Arch{
 	Name:           "ppc",
 	Family:         PPC,
@@ -222,7 +224,7 @@ var ArchPPC = &Arch{
 	Alignment:      4,
 	CanMergeLoads:  false,
 	HasLR:          true,
-	FixedFrameSize: 4 * 4,
+	FixedFrameSize: 24,
 }
 
 var ArchPPC64 = &Arch{

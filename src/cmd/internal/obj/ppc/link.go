@@ -37,10 +37,93 @@ var unaryDst = map[obj.As]bool{
 	AMFCTR: true,
 }
 
-// Frame/prologue processing is not implemented yet. Object emission below
-// records absolute symbol-address and direct-call relocations, but applying
-// those relocations belongs to the ppc32 linker.
-func preprocess(*obj.Link, *obj.LSym, obj.ProgAlloc) {}
+// preprocess implements the Go stack ABI. Allocatable GPRs/FPRs are
+// caller-saved (DESIGN D-2); SSA spills values live across calls into locals.
+// There is no C callee-save block and no register argument shadow area.
+// Stack growth is a separate runtime milestone: these frames do not split.
+func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
+	text := s.Func().Text
+	if text == nil {
+		return
+	}
+	locals := text.To.Offset
+	if locals < 0 || locals > 32752 {
+		ctxt.Diag("ppc32: TEXT frame size %d outside supported D-form frame range", locals)
+		return
+	}
+	leaf := true
+	for p := text.Link; p != nil; p = p.Link {
+		switch p.As {
+		case obj.ACALL, ABL, obj.ADUFFCOPY, obj.ADUFFZERO:
+			leaf = false
+		}
+	}
+	frame := int64(0)
+	if locals != 0 || !leaf {
+		frame = (locals + ctxt.Arch.FixedFrameSize + 15) &^ 15
+	}
+	// Stack operands currently use signed D-form displacements; refuse a
+	// larger frame rather than truncate its allocation or unwind metadata.
+	if frame > 32752 {
+		ctxt.Diag("ppc32: frame %d exceeds supported D-form frame range", frame)
+		return
+	}
+	if s.NoFrame() && frame != 0 {
+		ctxt.Diag("ppc32: NOFRAME function requires an allocated frame")
+		return
+	}
+	s.Func().Locals = int32(locals)
+	if args, ok := text.To.Val.(int32); ok {
+		s.Func().Args = args
+	}
+	text.To.Offset = frame
+	s.Set(obj.AttrLeaf, leaf)
+
+	reg := func(r int16) obj.Addr { return obj.Addr{Type: obj.TYPE_REG, Reg: r} }
+	mem := func(off int64) obj.Addr { return obj.Addr{Type: obj.TYPE_MEM, Reg: REGSP, Offset: off} }
+	appendOp := func(p *obj.Prog, as obj.As, from, to obj.Addr) *obj.Prog {
+		q := obj.Appendp(p, newprog)
+		q.As, q.From, q.To = as, from, to
+		return q
+	}
+	p := text
+	if !leaf {
+		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
+		// Save in the caller's linkage area BEFORE moving SP, as measured.
+		p = appendOp(p, ASTW, reg(REG_R0), mem(8))
+		// Go treats R0 as zero for stores (not merely the RA=0 address rule).
+		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
+		p.Reg = REG_R0
+	}
+	if frame != 0 {
+		p = appendOp(p, ASTWU, reg(REGSP), mem(-frame))
+		p.Spadj = int32(frame)
+	}
+	for p := text.Link; p != nil; p = p.Link {
+		if p.As != ABLR && p.As != obj.ARET {
+			continue
+		}
+		if p.To.Sym != nil || p.From.Type != obj.TYPE_NONE {
+			ctxt.Diag("ppc32: unsupported return target or BECOME: %v", p)
+			continue
+		}
+		if frame == 0 {
+			p.As = ABLR
+			continue
+		}
+		// Rewrite in place so branches to a return also execute its epilogue.
+		p.As, p.From, p.To = AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REGSP)
+		p.Reg = REGSP
+		p.Spadj = -int32(frame)
+		if !leaf {
+			p = appendOp(p, ALWZ, mem(8), reg(REG_R31))
+			p = appendOp(p, AMTLR, reg(REG_R31), obj.Addr{})
+		}
+		p = appendOp(p, ABLR, obj.Addr{}, obj.Addr{})
+		// Balance the linear PC/SP table after the return (ppc64 does likewise).
+		p.Spadj = int32(frame)
+	}
+}
 
 func progedit(*obj.Link, *obj.Prog, obj.ProgAlloc) {}
 
@@ -118,8 +201,8 @@ func isSymbolAddress(p *obj.Prog) bool {
 // the frame is laid out before the instruction is encoded. The compiler's offset
 // is relative to the frame base, so the frame size is added for a local and the
 // fixed linkage area as well for a parameter -- the same arithmetic ppc64 and
-// arm use, and inheriting the same open question about what FixedFrameSize is on
-// Darwin ppc32 (DESIGN.md §11 Q-3).
+// arm use. FixedFrameSize is the measured 24-byte linkage area; autosize is
+// the total allocated, 16-byte-aligned frame, or zero for a frameless leaf.
 //
 // Symbol operands are not displacements. Only the absolute address pair in
 // encodeProg is supported; other external, GOT and TLS accesses are refused
@@ -235,7 +318,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		return emit(rd(), int32(d), ra())
 
 	// Stores: To=d(ra), From=rs.
-	case ASTW, ASTB, ASTH:
+	case ASTW, ASTWU, ASTB, ASTH:
 		if p.To.Type != obj.TYPE_MEM {
 			return bad(fmt.Errorf("%v: %v needs a memory destination", p, Mnemonic(Inst(p.As))))
 		}
@@ -284,6 +367,10 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		}
 		return emit(int32(p.From.Offset), int32(p.Reg), int32(disp))
 
+	case AMFLR:
+		return emit(rd())
+	case AMTLR:
+		return emit(ra())
 	case ABLR:
 		return emit()
 	}
