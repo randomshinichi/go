@@ -56,7 +56,7 @@ func wideleaf(x uint64) uint64 { return x+0x100000001 }
 func wide(x uint64) uint64 { return wideleaf(x)+x }
 //go:noinline
 //go:nosplit
-func spilled(x int) int { y:=x*7; z:=middle(x); return y+z }
+func spilled(x int) int { y:=middle(x); z:=middle(x+1); return y+z }
 //go:noinline
 //go:nosplit
 func branchCall(x int) int { if x<0 { return middle(x) }; return middle(x)+1 }
@@ -98,6 +98,18 @@ func TestGoStackCallsQEMU(t *testing.T) {
 		t.Fatalf("compile: %v\n%s", err, out)
 	}
 
+	// The first call result cannot be recomputed or left in the outgoing
+	// result slot (the second call overwrites it). Pin a real local spill and
+	// reload at SP+44: raw outgoing8+local4 pads to24, total48, local y=-4.
+	var store, reload bool
+	for _, w := range emittedWords(t, string(out), "main.spilled") {
+		store = store || w&0xfc1fffff == 0x9001002c
+		reload = reload || w&0xfc1fffff == 0x8001002c
+	}
+	if !store || !reload {
+		t.Fatal("live-across-call fixture no longer exercises a local spill/reload")
+	}
+
 	for _, tc := range []struct {
 		name, entry, setup, check string
 		want                      int
@@ -105,7 +117,7 @@ func TestGoStackCallsQEMU(t *testing.T) {
 	}{
 		{"nested", "outer", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 71, false},
 		{"twelve-stack-args", "many", "", "lwz 3,24(1)\n", 78, false},
-		{"live-gpr-spill", "spilled", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 53, false},
+		{"live-gpr-spill", "spilled", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 39, false},
 		{"branch-negative", "branchCall", "li 3,-5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 244, false},
 		{"branch-positive", "branchCall", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 19, false},
 		// x=0x00000001_ffffffff, result=2*x+0x100000001=0x4_ffffffff.
@@ -169,8 +181,8 @@ func TestGoStackCallsQEMU(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.mutant {
-				if rc == tc.want {
-					t.Fatalf("wrong LR-slot control returned honest value %d", rc)
+				if rc != -1 || !strings.Contains(string(output), "target signal 11") {
+					t.Fatalf("wrong LR-slot control did not cause expected target SIGSEGV: exit=%d\n%s", rc, output)
 				}
 				t.Logf("wrong LR slot rejected: exit=%d, modified %d restores", rc, mutated)
 			} else {
