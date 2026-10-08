@@ -92,6 +92,12 @@ func (ctxt *Link) computeTLSOffset() {
 		ctxt.Tlsoffset = -1 * ctxt.Arch.PtrSize
 
 	case objabi.Hdarwin:
+		if ctxt.Arch.Family == sys.PPC {
+			// The Darwin ppc32 TLS mechanism is unmeasured. Keep an explicit
+			// invalid state; TLS relocations are rejected in relocsym below.
+			ctxt.Tlsoffset = -1 << 63
+			break
+		}
 		/*
 		 * OS X system constants - offset from 0(GS) to our TLS.
 		 */
