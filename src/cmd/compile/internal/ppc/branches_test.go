@@ -61,7 +61,7 @@ func TestComparisonBranchesQEMU(t *testing.T) {
 			}
 			// Drop only the two relocated global-address/load prefixes.
 			var asm strings.Builder
-			fmt.Fprintf(&asm, "addi 1,1,-32\nli 3,%d\nli 4,%d\nbl fragment\nlwz 3,16(1)\nli 0,1\nsc\nfragment:\n", tc.r3, tc.r4)
+			fmt.Fprintf(&asm, "addi 1,1,-32\nli 3,%d\nli 4,%d\nbl fragment\nlwz 3,24(1)\nli 0,1\nsc\nfragment:\n", tc.r3, tc.r4)
 			for _, w := range words[6:] {
 				fmt.Fprintf(&asm, ".long 0x%08x\n", w)
 			}

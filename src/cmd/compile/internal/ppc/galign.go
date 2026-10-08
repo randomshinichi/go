@@ -21,6 +21,16 @@ func Init(arch *ssagen.ArchInfo) {
 
 	arch.ZeroRange = zerorange
 	arch.Ginsnop = ginsnop
+	// Pad locals/outgoing arguments before stack zeroing computes its offsets.
+	// A zero-sized leaf remains frameless; obj/ppc supplies a minimum frame
+	// for non-leaves even when they have no outgoing arguments.
+	arch.PadFrame = func(frame int64) int64 {
+		if frame == 0 {
+			return 0
+		}
+		fixed := arch.LinkArch.Arch.FixedFrameSize
+		return (frame+fixed+15)&^15 - fixed
+	}
 
 	arch.SSAMarkMoves = func(s *ssagen.State, b *ssa.Block) {}
 	arch.SSAGenValue = ssaGenValue

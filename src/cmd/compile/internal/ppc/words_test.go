@@ -22,11 +22,10 @@ package ppc
 //     the two cross products for mul. Writing them out is what makes the test
 //     able to catch a change in the lowering; deriving them from the same
 //     compiler under test would not.
-//   - the displacements (20, 28, 16, 24, 32) are the compiler's frame offsets
-//     resolved by obj/ppc's assembler as autosize + offset (+ FixedFrameSize for
-//     a parameter). They pin the current frame convention, which is still open
-//     (DESIGN.md §11 Q-3): if that changes, these numbers change with it, on
-//     purpose, and the change is visible here.
+//   - the displacements are derived from the measured 24-byte linkage area
+//     (docs/darwin-ppc32-abi-measured.md), plus declaration-order stack slots.
+//     Frameless leaf arguments begin at 24; two uint64 args put the result at
+//     40. Non-leaves additionally allocate a 16-byte-aligned total frame.
 
 import (
 	"encoding/binary"
@@ -56,11 +55,11 @@ var wordRecipes = []struct {
 	cmpwi 3,0
 	bc 4,0,.+20
 	li 3,1
-	addi 4,1,16
+	addi 4,1,24
 	stw 3,0(4)
 	blr
 	li 3,2
-	addi 4,1,16
+	addi 4,1,24
 	stw 3,0(4)
 	blr
 `},
@@ -75,11 +74,11 @@ var wordRecipes = []struct {
 	cmpw 3,4
 	bc 4,1,.+20
 	li 3,1
-	addi 4,1,16
+	addi 4,1,24
 	stw 3,0(4)
 	blr
 	li 3,2
-	addi 4,1,16
+	addi 4,1,24
 	stw 3,0(4)
 	blr
 `},
@@ -92,28 +91,34 @@ var wordRecipes = []struct {
 	cmplw 4,3
 	bc 4,1,.+20
 	li 3,1
-	addi 4,1,16
+	addi 4,1,24
 	stw 3,0(4)
 	blr
 	li 3,2
-	addi 4,1,16
+	addi 4,1,24
 	stw 3,0(4)
 	blr
 `},
-	// Zero arguments avoid marshalling. BL/LR save and frame setup are separate:
-	// this is object emission evidence, not an executable Go call convention.
-	{"main.call", `	bl main.callee
+	// A zero-argument non-leaf still needs linkage space: align(24,16)=32.
+	{"main.call", `	mflr 0
+	stw 0,8(1)
+	li 0,0
+	stwu 1,-32(1)
+	bl main.callee
+	addi 1,1,32
+	lwz 31,8(1)
+	mtlr 31
 	blr
 `},
 	// 64-bit add: addc on the low words leaves the carry in XER[CA], adde on the
 	// high words adds it back. The high word lands at the lower address.
-	{"main.add", `	addi 3,1,32
+	{"main.add", `	addi 3,1,40
 	addi 4,3,4
-	lwz 5,20(1)
-	lwz 6,28(1)
+	lwz 5,28(1)
+	lwz 6,36(1)
 	addc 5,5,6
-	lwz 6,16(1)
-	lwz 7,24(1)
+	lwz 6,24(1)
+	lwz 7,32(1)
 	adde 6,6,7
 	stw 6,0(3)
 	stw 5,0(4)
@@ -121,13 +126,13 @@ var wordRecipes = []struct {
 `},
 	// 64-bit sub: subfc leaves the inverted borrow, subfe consumes it, which is
 	// why subf's operands are the other way round from add's.
-	{"main.sub", `	addi 3,1,32
+	{"main.sub", `	addi 3,1,40
 	addi 4,3,4
-	lwz 5,20(1)
-	lwz 6,28(1)
+	lwz 5,28(1)
+	lwz 6,36(1)
 	subfc 5,6,5
-	lwz 6,16(1)
-	lwz 7,24(1)
+	lwz 6,24(1)
+	lwz 7,32(1)
 	subfe 6,7,6
 	stw 6,0(3)
 	stw 5,0(4)
@@ -136,15 +141,15 @@ var wordRecipes = []struct {
 	// 64-bit mul: the low word is mullw, and the high word is
 	// hi(alo*blo) + alo*bhi + ahi*blo. The two cross products and the two adds
 	// are the terms a hand-written split multiply forgets.
-	{"main.mul", `	addi 3,1,32
+	{"main.mul", `	addi 3,1,40
 	addi 4,3,4
-	lwz 5,20(1)
-	lwz 6,28(1)
+	lwz 5,28(1)
+	lwz 6,36(1)
 	mullw 8,5,6
 	mulhwu 7,5,6
-	lwz 9,24(1)
+	lwz 9,32(1)
 	mullw 5,9,5
-	lwz 9,16(1)
+	lwz 9,24(1)
 	mullw 6,6,9
 	add 5,5,6
 	add 5,7,5
@@ -154,23 +159,23 @@ var wordRecipes = []struct {
 `},
 	// 32-bit subtract: the plain unsigned form, which is one subf with the
 	// operands the other way round from how the source reads.
-	{"main.sub32", `	lwz 3,16(1)
-	lwz 4,20(1)
+	{"main.sub32", `	lwz 3,24(1)
+	lwz 4,28(1)
 	subf 3,4,3
-	addi 4,1,24
+	addi 4,1,32
 	stw 3,0(4)
 	blr
 `},
 	// 64-bit or: the halves are independent, so this one is covered to show that
 	// the split itself is not doing anything clever.
-	{"main.or", `	addi 3,1,32
+	{"main.or", `	addi 3,1,40
 	addi 4,3,4
-	lwz 5,24(1)
-	lwz 6,16(1)
+	lwz 5,32(1)
+	lwz 6,24(1)
 	or 5,5,6
 	stw 5,0(3)
-	lwz 3,28(1)
-	lwz 5,20(1)
+	lwz 3,36(1)
+	lwz 5,28(1)
 	or 3,3,5
 	stw 3,0(4)
 	blr
