@@ -197,9 +197,9 @@ func init() {
 		// 32-bit compare. CMP/CMPU in the ppc64 table select 64-bit comparison
 		// semantics and are not valid for this 32-bit-register backend.
 		{name: "CMPW", argLength: 2, reg: gp2cr, asm: "CMPW", typ: "Flags"},
-		{name: "CMPWU", argLength: 2, reg: gp2cr, asm: "CMPWU", typ: "Flags"},
+		{name: "CMPWU", argLength: 2, reg: gp2cr, asm: "CMPLW", typ: "Flags"},
 		{name: "CMPWconst", argLength: 1, reg: gp1cr, asm: "CMPW", aux: "Int32", typ: "Flags"},
-		{name: "CMPWUconst", argLength: 1, reg: gp1cr, asm: "CMPWU", aux: "Int32", typ: "Flags"},
+		{name: "CMPWUconst", argLength: 1, reg: gp1cr, asm: "CMPLWI", aux: "Int32", typ: "Flags"},
 		{name: "InvertFlags", argLength: 1},
 		{name: "FlagEQ"},
 		{name: "FlagLT"},

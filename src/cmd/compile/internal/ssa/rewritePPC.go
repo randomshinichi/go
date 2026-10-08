@@ -532,7 +532,7 @@ func rewriteValuePPC_OpPPCCMPW(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	// match: (CMPW (MOVWconst [c]) y)
-	// cond: is16Bit(c)
+	// cond: is16Bit(int64(c))
 	// result: (InvertFlags (CMPWconst y [int32(c)]))
 	for {
 		if v_0.Op != OpPPCMOVWconst {
@@ -540,7 +540,7 @@ func rewriteValuePPC_OpPPCCMPW(v *Value) bool {
 		}
 		c := auxIntToInt32(v_0.AuxInt)
 		y := v_1
-		if !(is16Bit(c)) {
+		if !(is16Bit(int64(c))) {
 			break
 		}
 		v.reset(OpPPCInvertFlags)
@@ -551,7 +551,7 @@ func rewriteValuePPC_OpPPCCMPW(v *Value) bool {
 		return true
 	}
 	// match: (CMPW x (MOVWconst [c]))
-	// cond: is16Bit(c)
+	// cond: is16Bit(int64(c))
 	// result: (CMPWconst x [int32(c)])
 	for {
 		x := v_0
@@ -559,7 +559,7 @@ func rewriteValuePPC_OpPPCCMPW(v *Value) bool {
 			break
 		}
 		c := auxIntToInt32(v_1.AuxInt)
-		if !(is16Bit(c)) {
+		if !(is16Bit(int64(c))) {
 			break
 		}
 		v.reset(OpPPCCMPWconst)
@@ -589,7 +589,7 @@ func rewriteValuePPC_OpPPCCMPWU(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	// match: (CMPWU (MOVWconst [c]) y)
-	// cond: isU16Bit(c)
+	// cond: isU16Bit(int64(c))
 	// result: (InvertFlags (CMPWUconst y [int32(c)]))
 	for {
 		if v_0.Op != OpPPCMOVWconst {
@@ -597,7 +597,7 @@ func rewriteValuePPC_OpPPCCMPWU(v *Value) bool {
 		}
 		c := auxIntToInt32(v_0.AuxInt)
 		y := v_1
-		if !(isU16Bit(c)) {
+		if !(isU16Bit(int64(c))) {
 			break
 		}
 		v.reset(OpPPCInvertFlags)
@@ -608,7 +608,7 @@ func rewriteValuePPC_OpPPCCMPWU(v *Value) bool {
 		return true
 	}
 	// match: (CMPWU x (MOVWconst [c]))
-	// cond: isU16Bit(c)
+	// cond: isU16Bit(int64(c))
 	// result: (CMPWUconst x [int32(c)])
 	for {
 		x := v_0
@@ -616,7 +616,7 @@ func rewriteValuePPC_OpPPCCMPWU(v *Value) bool {
 			break
 		}
 		c := auxIntToInt32(v_1.AuxInt)
-		if !(isU16Bit(c)) {
+		if !(isU16Bit(int64(c))) {
 			break
 		}
 		v.reset(OpPPCCMPWUconst)
