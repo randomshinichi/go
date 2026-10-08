@@ -39,6 +39,29 @@ func pthread_setspecific_trampoline()
 //go:cgo_import_dynamic libc_pthread_key_create pthread_key_create "/usr/lib/libSystem.B.dylib"
 //go:cgo_import_dynamic libc_pthread_setspecific pthread_setspecific "/usr/lib/libSystem.B.dylib"
 
+// Used by the CPU profiler's thread sampler (cpuprof_darwin_ppc64.go).
+
+//go:nosplit
+//go:cgo_unsafe_args
+func pthread_mach_thread_np(t pthread) (port uint32) {
+	libcCall(unsafe.Pointer(abi.FuncPCABI0(pthread_mach_thread_np_trampoline)), unsafe.Pointer(&t))
+	return
+}
+func pthread_mach_thread_np_trampoline()
+
+//go:nosplit
+//go:cgo_unsafe_args
+func thread_info(thread uint32, flavor uint32, info *threadBasicInfo, count *uint32) int32 {
+	ret := libcCall(unsafe.Pointer(abi.FuncPCABI0(thread_info_trampoline)), unsafe.Pointer(&thread))
+	KeepAlive(info)
+	KeepAlive(count)
+	return ret
+}
+func thread_info_trampoline()
+
+//go:cgo_import_dynamic libc_pthread_mach_thread_np pthread_mach_thread_np "/usr/lib/libSystem.B.dylib"
+//go:cgo_import_dynamic libc_thread_info thread_info "/usr/lib/libSystem.B.dylib"
+
 // tlsinit allocates a thread-local storage slot for g and records its byte
 // offset from the thread pointer (R13) in runtime.tls_g.
 //

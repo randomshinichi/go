@@ -453,6 +453,25 @@ TEXT runtime·pthread_kill_trampoline(SB),NOSPLIT,$80
 	BL	libc_pthread_kill(SB)
 	RET
 
+// mach_port_t pthread_mach_thread_np(pthread_t): a 32-bit port name.
+TEXT runtime·pthread_mach_thread_np_trampoline(SB),NOSPLIT,$80
+	MOVD	R3, R14		// R14 is callee-save in C
+	MOVD	0(R3), R3	// arg 1 thread
+	BL	libc_pthread_mach_thread_np(SB)
+	MOVW	R3, 8(R14)	// return value
+	RET
+
+// kern_return_t thread_info(thread_act_t, thread_flavor_t, thread_info_t,
+// mach_msg_type_number_t *): port, flavor and count are 32-bit, and
+// THREAD_BASIC_INFO fills ten 32-bit words (measured on the G5).
+TEXT runtime·thread_info_trampoline(SB),NOSPLIT,$80
+	MOVWZ	4(R3), R4	// arg 2 flavor
+	MOVD	8(R3), R5	// arg 3 info
+	MOVD	16(R3), R6	// arg 4 count
+	MOVWZ	0(R3), R3	// arg 1 thread
+	BL	libc_thread_info(SB)
+	RET
+
 TEXT runtime·pthread_key_create_trampoline(SB),NOSPLIT,$80
 	MOVD	8(R3), R4	// arg 2 destructor
 	MOVD	0(R3), R3	// arg 1 *key
