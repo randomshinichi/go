@@ -143,6 +143,39 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPCMOVWconst:
 		emitMOVWconst(s, v)
 
+	case ssa.OpPPCCMPW, ssa.OpPPCCMPWU:
+		p := s.Prog(v.Op.Asm())
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[1].Reg()}
+	case ssa.OpPPCCMPWconst, ssa.OpPPCCMPWUconst:
+		p := s.Prog(v.Op.Asm())
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
+	case ssa.OpPPCLoweredGetClosurePtr:
+		// Darwin ppc32 closure context is passed in R11.
+		p := s.Prog(ppc.AOR)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R11}
+		p.Reg = ppc.REG_R11
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R11}
+	case ssa.OpPPCLoweredGetCallerSP:
+		p := s.Prog(ppc.AADDI)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: -base.Ctxt.Arch.FixedFrameSize}
+		p.Reg = ppc.REGSP
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	case ssa.OpPPCLoweredGetCallerPC:
+		p := s.Prog(obj.AGETCALLERPC)
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	case ssa.OpPPCInvertFlags, ssa.OpPPCFlagEQ, ssa.OpPPCFlagLT, ssa.OpPPCFlagGT,
+		ssa.OpPPCEqual, ssa.OpPPCNotEqual, ssa.OpPPCLessThan, ssa.OpPPCLessEqual,
+		ssa.OpPPCGreaterThan, ssa.OpPPCGreaterEqual:
+		v.Fatalf("ppc32: comparison pseudo-op %v was not rewritten", v.Op)
+	case ssa.OpPPCCALLstatic:
+		s.Call(v)
+	case ssa.OpPPCCALLtail:
+		s.TailCall(v)
+	case ssa.OpPPCCALLclosure, ssa.OpPPCCALLinter:
+		v.Fatalf("ppc32: indirect call emission is not yet supported by obj/ppc")
+
 	default:
 		v.Fatalf("unhandled op %v", v.Op)
 	}

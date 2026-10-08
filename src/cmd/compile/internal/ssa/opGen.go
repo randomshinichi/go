@@ -129,6 +129,17 @@ const (
 	BlockMIPS64FPT
 	BlockMIPS64FPF
 
+	BlockPPCEQ
+	BlockPPCNE
+	BlockPPCLT
+	BlockPPCLE
+	BlockPPCGT
+	BlockPPCGE
+	BlockPPCFLT
+	BlockPPCFLE
+	BlockPPCFGT
+	BlockPPCFGE
+
 	BlockPPC64EQ
 	BlockPPC64NE
 	BlockPPC64LT
@@ -285,6 +296,17 @@ var blockString = [...]string{
 	BlockMIPS64GEZ: "GEZ",
 	BlockMIPS64FPT: "FPT",
 	BlockMIPS64FPF: "FPF",
+
+	BlockPPCEQ:  "EQ",
+	BlockPPCNE:  "NE",
+	BlockPPCLT:  "LT",
+	BlockPPCLE:  "LE",
+	BlockPPCGT:  "GT",
+	BlockPPCGE:  "GE",
+	BlockPPCFLT: "FLT",
+	BlockPPCFLE: "FLE",
+	BlockPPCFGT: "FGT",
+	BlockPPCFGE: "FGE",
 
 	BlockPPC64EQ:  "EQ",
 	BlockPPC64NE:  "NE",
@@ -4955,6 +4977,27 @@ const (
 	OpPPCEXTSH
 	OpPPCMOVWconst
 	OpPPCMOVWreg
+	OpPPCCMPW
+	OpPPCCMPWU
+	OpPPCCMPWconst
+	OpPPCCMPWUconst
+	OpPPCInvertFlags
+	OpPPCFlagEQ
+	OpPPCFlagLT
+	OpPPCFlagGT
+	OpPPCEqual
+	OpPPCNotEqual
+	OpPPCLessThan
+	OpPPCLessEqual
+	OpPPCGreaterThan
+	OpPPCGreaterEqual
+	OpPPCLoweredGetClosurePtr
+	OpPPCLoweredGetCallerSP
+	OpPPCLoweredGetCallerPC
+	OpPPCCALLstatic
+	OpPPCCALLclosure
+	OpPPCCALLinter
+	OpPPCCALLtail
 	OpPPCMOVWaddr
 	OpPPCMOVBload
 	OpPPCMOVBUload
@@ -76625,6 +76668,178 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:   "CMPW",
+		argLen: 2,
+		asm:    ppc.ACMPW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+				{1, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+		},
+	},
+	{
+		name:   "CMPWU",
+		argLen: 2,
+		asm:    ppc.ACMPWU,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+				{1, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+		},
+	},
+	{
+		name:    "CMPWconst",
+		auxType: auxInt32,
+		argLen:  1,
+		asm:     ppc.ACMPW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+		},
+	},
+	{
+		name:    "CMPWUconst",
+		auxType: auxInt32,
+		argLen:  1,
+		asm:     ppc.ACMPWU,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+		},
+	},
+	{
+		name:   "InvertFlags",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:   "FlagEQ",
+		argLen: 0,
+		reg:    regInfo{},
+	},
+	{
+		name:   "FlagLT",
+		argLen: 0,
+		reg:    regInfo{},
+	},
+	{
+		name:   "FlagGT",
+		argLen: 0,
+		reg:    regInfo{},
+	},
+	{
+		name:   "Equal",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:   "NotEqual",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:   "LessThan",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:   "LessEqual",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:   "GreaterThan",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:   "GreaterEqual",
+		argLen: 1,
+		reg:    regInfo{},
+	},
+	{
+		name:      "LoweredGetClosurePtr",
+		argLen:    0,
+		zeroWidth: true,
+		reg: regInfo{
+			outputs: []outputInfo{
+				{0, 2048}, // R11
+			},
+		},
+	},
+	{
+		name:              "LoweredGetCallerSP",
+		argLen:            1,
+		rematerializeable: true,
+		reg: regInfo{
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:              "LoweredGetCallerPC",
+		argLen:            0,
+		rematerializeable: true,
+		reg: regInfo{
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:         "CALLstatic",
+		auxType:      auxCallOff,
+		argLen:       -1,
+		clobberFlags: true,
+		call:         true,
+		reg: regInfo{
+			clobbers: 9223372035781033976, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
+		},
+	},
+	{
+		name:         "CALLclosure",
+		auxType:      auxCallOff,
+		argLen:       -1,
+		clobberFlags: true,
+		call:         true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 4096}, // R12
+				{1, 2048}, // R11
+			},
+			clobbers: 9223372035781033976, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
+		},
+	},
+	{
+		name:         "CALLinter",
+		auxType:      auxCallOff,
+		argLen:       -1,
+		clobberFlags: true,
+		call:         true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 4096}, // R12
+			},
+			clobbers: 9223372035781033976, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
+		},
+	},
+	{
+		name:         "CALLtail",
+		auxType:      auxCallOff,
+		argLen:       -1,
+		clobberFlags: true,
+		call:         true,
+		tailCall:     true,
+		reg: regInfo{
+			clobbers: 9223372035781033976, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
+		},
+	},
+	{
 		name:              "MOVWaddr",
 		auxType:           auxSymOff,
 		argLen:            1,
@@ -97929,7 +98144,7 @@ var registersPPC = [...]Register{
 	{61, ppc.REG_F30, "F30"},
 	{62, ppc.REG_F31, "F31"},
 }
-var paramIntRegPPC = []int8(nil)
+var paramIntRegPPC = []int8{3, 4, 5, 6, 7, 8, 9, 10}
 var paramFloatRegPPC = []int8(nil)
 var gpRegMaskPPC = regMask(536870904)
 var fpRegMaskPPC = regMask(9223372034707292160)
