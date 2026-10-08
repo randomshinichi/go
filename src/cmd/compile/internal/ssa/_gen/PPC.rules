@@ -1,0 +1,57 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Lowering rules for GOARCH=ppc (32-bit PowerPC, the scalar G3 baseline).
+//
+// The 64-bit operations are not lowered here. The generic dec64 decomposition
+// (decompose.go / _gen/dec64.rules) has already turned every 64-bit value into a
+// (hi, lo) pair of 32-bit values before this file runs, including the arithmetic
+// for Add64/Sub64/Mul64/shifts and the big-endian load and store split, so the
+// rules below only have to give the 32-bit residue a machine form.
+//
+// The carry is the part that is not mechanical. XER[CA] is a single machine bit
+// that the pair (addc, adde) shares through, and no instruction can read or write
+// it directly, so:
+//
+//   - Add32carry becomes ADDC, whose second result is the carry as an SSA value
+//     of type Flags;
+//   - Add32withcarry takes that Flags value as an explicit third argument and
+//     becomes ADDE. The Flags argument is a real data dependence, so a scheduler
+//     cannot move an unrelated instruction between the addc and the adde; and
+//   - every op that writes CA is marked clobberFlags in _gen/PPCOps.go, so the
+//     flag allocator treats a carry as destroyed by an instruction that does not
+//     produce it, and recomputes it (flagalloc's copyFlags) if one lands in
+//     between. That is the whole XER[CA] model; DESIGN.md §5 names addic, srawi,
+//     sraw, the subfc family and adde as the clobbering forms.
+
+// Lowering arithmetic.
+(Add32 x y) => (ADD x y)
+(Add32carry x y) => (ADDC x y)
+(Add32withcarry x y c) => (ADDE x y c)
+(Add32carrywithcarry x y c) => (ADDEC x y c)
+(Sub32 x y) => (SUB x y)
+(Sub32carry x y) => (SUBC x y)
+(Sub32withcarry x y c) => (SUBE x y c)
+(Mul32 x y) => (MULLW x y)
+(Mul32uhilo x y) => (MULLU x y)
+(And32 x y) => (AND x y)
+(Or32 x y) => (OR x y)
+(Xor32 x y) => (XOR x y)
+(Neg32 x) => (NEG x)
+
+// Lowering shifts. slw and srw take the low six bits of the count and return
+// zero when bit 5 is set, which is the same answer Go specifies for a shift of 32
+// or more on a 32-bit type, so no extra count check is needed here.
+(Lsh32x32 x y) => (SLW x y)
+(Lsh32x64 x y) => (SLW x y)
+(Rsh32Ux32 x y) => (SRW x y)
+(Rsh32Ux64 x y) => (SRW x y)
+(Rsh32x32 x y) => (SRAW x y)
+(Rsh32x64 x y) => (SRAW x y)
+
+// Lowering constants and register moves.
+(Const32 [c]) => (MOVWconst [c])
+(ConstBool [t]) => (MOVWconst [b2i32(t)])
+(ConstNil) => (MOVWconst [0])
+(Copy x) => (MOVWreg x)
