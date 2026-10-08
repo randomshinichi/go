@@ -5,8 +5,10 @@
 package ppc
 
 import (
+	"cmd/compile/internal/base"
 	"cmd/compile/internal/ssa"
 	"cmd/compile/internal/ssagen"
+	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 	"cmd/internal/obj/ppc"
 )
@@ -24,187 +26,119 @@ import (
 
 func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	switch v.Op {
+	// Three-register forms: add, addc, adde, subf, subfc, subfe, mullw, mulhw,
+	// mulhwu, and, or, xor, slw, srw, sraw.
 	case ssa.OpPPCADD:
-		// add rd, ra, rb
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AADD)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
+		reg3(s, ppc.AADD, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCADDC:
-		// addc rd, ra, rb : rd = ra + rb, XER[CA] = carry out.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AADDC)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
+		// Two outputs (value, carry), so the value half is v.Reg0(); the carry
+		// half lives in XER[CA] and has no register. adde reads CA back.
+		reg3(s, ppc.AADDC, v.Reg0(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCADDE:
-		// adde rd, ra, rb : rd = ra + rb + XER[CA]. v.Args[2] is the Flags value
-		// that addc (or an earlier adde) left in XER[CA]; it has no register.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AADDE)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
+		reg3(s, ppc.AADDE, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCADDEC:
-		// As ADDE, and the carry out is this value's second result.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AADDE)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
+		reg3(s, ppc.AADDE, v.Reg0(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCSUB:
-		// subf rd, ra, rb computes rb - ra, so arg0 and arg1 swap places.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASUBF)
-		p.To.Reg = r
-		p.From.Reg = r2
-		p.Reg = r1
-
+		// subf rd, ra, rb computes rb - ra, so arg0 and arg1 change places.
+		reg3(s, ppc.ASUBF, v.Reg(), v.Args[1].Reg(), v.Args[0].Reg())
 	case ssa.OpPPCSUBC:
-		// subfc rd, ra, rb = rb - ra, with XER[CA] = no-borrow.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASUBFC)
-		p.To.Reg = r
-		p.From.Reg = r2
-		p.Reg = r1
-
+		reg3(s, ppc.ASUBFC, v.Reg0(), v.Args[1].Reg(), v.Args[0].Reg())
 	case ssa.OpPPCSUBE:
 		// subfe rd, ra, rb = rb - ra - (1 - XER[CA]), which is x - y - borrow
-		// when the preceding subfc computed x - y.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASUBFE)
-		p.To.Reg = r
-		p.From.Reg = r2
-		p.Reg = r1
-
+		// when the preceding subfc computed x - y and left CA = no-borrow.
+		reg3(s, ppc.ASUBFE, v.Reg(), v.Args[1].Reg(), v.Args[0].Reg())
 	case ssa.OpPPCSUBEC:
-		// As SUBE, and the borrow out is this value's second result.
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASUBFE)
-		p.To.Reg = r
-		p.From.Reg = r2
-		p.Reg = r1
-
+		reg3(s, ppc.ASUBFE, v.Reg0(), v.Args[1].Reg(), v.Args[0].Reg())
 	case ssa.OpPPCMULLW:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AMULLW)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
+		reg3(s, ppc.AMULLW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCMULHW:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AMULHW)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
+		reg3(s, ppc.AMULHW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCMULHWU:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AMULHWU)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
+		reg3(s, ppc.AMULHWU, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCAND:
+		reg3(s, ppc.AAND, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCOR:
+		reg3(s, ppc.AOR, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCXOR:
+		reg3(s, ppc.AXOR, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCSLW:
+		reg3(s, ppc.ASLW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCSRW:
+		reg3(s, ppc.ASRW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCSRAW:
+		reg3(s, ppc.ASRAW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
 
 	case ssa.OpPPCMULLU:
 		// No single G3 instruction produces both halves of a 32x32 product, so
-		// this op is two instructions: mulhwu for the high half, mullw for the
-		// low one. v.Reg0() is the high half, v.Reg1() the low half.
-		r1, r2 := v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AMULLW)
-		p.To.Reg = v.Reg1()
-		p.From.Reg = r1
-		p.Reg = r2
-		p = s.Prog(ppc.AMULHWU)
-		p.To.Reg = v.Reg0()
-		p.From.Reg = r1
-		p.Reg = r2
+		// this op is two instructions: mullw for the low half into v.Reg1(),
+		// mulhwu for the high half into v.Reg0().
+		reg3(s, ppc.AMULLW, v.Reg1(), v.Args[0].Reg(), v.Args[1].Reg())
+		reg3(s, ppc.AMULHWU, v.Reg0(), v.Args[0].Reg(), v.Args[1].Reg())
 
+	// Two-register forms.
 	case ssa.OpPPCNEG:
-		r, r1 := v.Reg(), v.Args[0].Reg()
-		p := s.Prog(ppc.ANEG)
-		p.To.Reg = r
-		p.From.Reg = r1
-
-	case ssa.OpPPCAND:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AAND)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
-	case ssa.OpPPCOR:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AOR)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
-	case ssa.OpPPCXOR:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.AXOR)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
-	case ssa.OpPPCSLW:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASLW)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
-	case ssa.OpPPCSRW:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASRW)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
-	case ssa.OpPPCSRAW:
-		r, r1, r2 := v.Reg(), v.Args[0].Reg(), v.Args[1].Reg()
-		p := s.Prog(ppc.ASRAW)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r2
-
-	case ssa.OpPPCSRAWI:
-		r, r1 := v.Reg(), v.Args[0].Reg()
-		p := s.Prog(ppc.ASRAWI)
-		p.To.Reg = r
-		p.Reg = r1
-		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
-
+		reg2(s, ppc.ANEG, v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCCNTLZW:
-		r, r1 := v.Reg(), v.Args[0].Reg()
-		p := s.Prog(ppc.ACNTLZW)
-		p.To.Reg = r
-		p.From.Reg = r1
-
+		reg2(s, ppc.ACNTLZW, v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCEXTSB:
-		r, r1 := v.Reg(), v.Args[0].Reg()
-		p := s.Prog(ppc.AEXTSB)
-		p.To.Reg = r
-		p.From.Reg = r1
-
+		reg2(s, ppc.AEXTSB, v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCEXTSH:
-		r, r1 := v.Reg(), v.Args[0].Reg()
-		p := s.Prog(ppc.AEXTSH)
-		p.To.Reg = r
-		p.From.Reg = r1
-
+		reg2(s, ppc.AEXTSH, v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCMOVWreg:
 		// or rd, rs, rs is the register move.
-		r, r1 := v.Reg(), v.Args[0].Reg()
-		p := s.Prog(ppc.AOR)
-		p.To.Reg = r
-		p.From.Reg = r1
-		p.Reg = r1
+		reg3(s, ppc.AOR, v.Reg(), v.Args[0].Reg(), v.Args[0].Reg())
+
+	// Shift by an immediate amount.
+	case ssa.OpPPCSRAWI:
+		p := s.Prog(ppc.ASRAWI)
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		p.Reg = v.Args[0].Reg()
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
+
+	// Spill and reload, inserted by the register allocator.
+	case ssa.OpLoadReg:
+		if v.Type.IsFlags() {
+			v.Fatalf("ppc32: the carry lives in XER[CA] and cannot be spilled: %v", v.LongString())
+		}
+		p := s.Prog(loadByType(v.Type))
+		ssagen.AddrAuto(&p.From, v.Args[0])
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	case ssa.OpStoreReg:
+		if v.Type.IsFlags() {
+			v.Fatalf("ppc32: the carry lives in XER[CA] and cannot be spilled: %v", v.LongString())
+		}
+		p := s.Prog(storeByType(v.Type))
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+		ssagen.AddrAuto(&p.To, v)
+
+	// Address formation and memory.
+	case ssa.OpPPCMOVWaddr:
+		// addi rd, base, off puts the offset in the immediate field. A symbol
+		// needs the relocation path that brief 3.4 owns; obj/ppc's assembler
+		// refuses one rather than emitting a wrong address.
+		p := s.Prog(ppc.AADDI)
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		p.Reg = v.Args[0].Reg()
+		p.From.Type = obj.TYPE_ADDR
+		ssagen.AddAux(&p.From, v)
+		if p.From.Sym == nil && p.From.Name == 0 {
+			// No name to resolve, so this is an ordinary addi immediate; obj's
+			// operand checker requires TYPE_ADDR to carry a name or a symbol.
+			p.From.Type = obj.TYPE_CONST
+		}
+
+	case ssa.OpPPCMOVBload, ssa.OpPPCMOVBUload, ssa.OpPPCMOVHload,
+		ssa.OpPPCMOVHUload, ssa.OpPPCMOVWload:
+		p := s.Prog(v.Op.Asm())
+		p.From = obj.Addr{Type: obj.TYPE_MEM, Reg: v.Args[0].Reg()}
+		ssagen.AddAux(&p.From, v)
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+
+	case ssa.OpPPCMOVBstore, ssa.OpPPCMOVHstore, ssa.OpPPCMOVWstore:
+		p := s.Prog(v.Op.Asm())
+		p.To = obj.Addr{Type: obj.TYPE_MEM, Reg: v.Args[0].Reg()}
+		ssagen.AddAux(&p.To, v)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[1].Reg()}
 
 	case ssa.OpPPCMOVWconst:
 		emitMOVWconst(s, v)
@@ -212,6 +146,56 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	default:
 		v.Fatalf("unhandled op %v", v.Op)
 	}
+}
+
+// reg2 and reg3 emit a two- and a three-register form in the operand convention
+// obj/ppc's assembler reads back (obj/ppc/link.go): To=rd, From=ra, Reg=rb.
+func reg2(s *ssagen.State, as obj.As, rd, ra int16) {
+	p := s.Prog(as)
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: rd}
+	p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ra}
+}
+
+func reg3(s *ssagen.State, as obj.As, rd, ra, rb int16) {
+	p := s.Prog(as)
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: rd}
+	p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ra}
+	p.Reg = rb
+}
+
+// loadByType and storeByType name the instruction that moves a value of type t
+// between a register and a spill slot. A 64-bit value is already two 32-bit
+// halves by the time these are called.
+func loadByType(t *types.Type) obj.As {
+	switch t.Size() {
+	case 1:
+		if t.IsSigned() {
+			return ppc.ALHA // lha sign-extends
+		}
+		return ppc.ALBZ
+	case 2:
+		if t.IsSigned() {
+			return ppc.ALHA
+		}
+		return ppc.ALHZ
+	case 4:
+		return ppc.ALWZ
+	}
+	base.Fatalf("ppc32: loadByType: unsupported type %v", t)
+	return 0
+}
+
+func storeByType(t *types.Type) obj.As {
+	switch t.Size() {
+	case 1:
+		return ppc.ASTB
+	case 2:
+		return ppc.ASTH
+	case 4:
+		return ppc.ASTW
+	}
+	base.Fatalf("ppc32: storeByType: unsupported type %v", t)
+	return 0
 }
 
 // emitMOVWconst writes a 32-bit constant into a register. addi/addis sign-extend
@@ -223,17 +207,17 @@ func emitMOVWconst(s *ssagen.State, v *ssa.Value) {
 	r := v.Reg()
 	if c >= -32768 && c <= 32767 {
 		p := s.Prog(ppc.AADDI)
-		p.To.Reg = r
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
 		p.Reg = ppc.REG_R0
 		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(c)}
 		return
 	}
 	p := s.Prog(ppc.AADDIS)
-	p.To.Reg = r
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
 	p.Reg = ppc.REG_R0
 	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(uint32(c)+0x8000) >> 16}
 	p = s.Prog(ppc.AORI)
-	p.To.Reg = r
+	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
 	p.Reg = r
 	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(uint32(c) & 0xffff)}
 }

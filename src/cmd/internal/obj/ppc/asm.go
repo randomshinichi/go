@@ -5,6 +5,7 @@
 package ppc
 
 import (
+	"cmd/internal/obj"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -223,6 +224,32 @@ func init() {
 	for i := range forms {
 		anames[i+1] = strings.ToUpper(forms[i].mnem)
 	}
+
+	// obj indexes a registered opcode list by (As - lo), so the list has to
+	// begin where AXXX begins; Anames() is indexed from AXXX, hence the gap.
+	objAnames := make([]string, int(obj.A_ARCHSPECIFIC)+len(anames))
+	copy(objAnames[int(obj.A_ARCHSPECIFIC):], anames)
+	obj.RegisterOpcode(obj.ABasePPC, objAnames)
+	obj.RegisterRegister(obj.RBasePPC, obj.RBasePPC+64, Rconv)
+}
+
+// Rconv names a ppc32 register for the assembler's dumps. Registers outside the
+// two 32-entry classes the baseline defines are not named.
+func Rconv(r int) string {
+	if r == 0 {
+		return "NONE"
+	}
+	switch {
+	case r == REGSP:
+		return "SP"
+	case r == REGG:
+		return "g"
+	case REG_R0 <= r && r <= REG_R31:
+		return fmt.Sprintf("R%d", r-REG_R0)
+	case REG_F0 <= r && r <= REG_F31:
+		return fmt.Sprintf("F%d", r-REG_F0)
+	}
+	return fmt.Sprintf("Rgok(%d)", r-obj.RBasePPC)
 }
 
 // Anames are the assembler mnemonics, indexed by op-AXXX, so that obj.As

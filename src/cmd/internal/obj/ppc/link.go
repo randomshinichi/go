@@ -103,6 +103,15 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog) (w []uint32, ok bool) {
 		return nil, false
 	}
 
+	// A symbolic operand needs a relocation record, and where a ppc32 symbol
+	// reference has to be split (lis/ori, or a pc-relative form) depends on the
+	// 32-bit Mach-O relocation set, which the Mach-O lane owns (DESIGN.md §11
+	// Q-4). Emitting the instruction without its relocation would be a silently
+	// wrong address, so these are refused by name instead.
+	if a := symOperand(p); a != nil {
+		return bad("%v: %v refers to symbol %s and the ppc32 relocation path does not exist yet (brief 3.4)", p, Mnemonic(Inst(p.As)), a.Sym)
+	}
+
 	// Operand convention, shared with cmd/compile/internal/ppc/ssa.go:
 	//
 	//	op rd,ra,rb   To=rd, From.Reg=ra, Reg=rb
@@ -138,9 +147,10 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog) (w []uint32, ok bool) {
 		}
 		return []uint32{enc}, true
 
-	// Register-immediate forms rd,ra,si: To=rd, Reg=ra, From.Offset=si.
+	// Register-immediate forms rd,ra,si: To=rd, Reg=ra, From.Offset=si. A stack
+	// or address name arrives as a TYPE_ADDR, whose offset is the whole operand.
 	case AADDI, AADDIC, AADDIS:
-		if p.From.Type != obj.TYPE_CONST {
+		if p.From.Type != obj.TYPE_CONST && p.From.Type != obj.TYPE_ADDR {
 			return bad("%v: %v needs a constant operand", p, Mnemonic(Inst(p.As)))
 		}
 		enc, err := Encode(Inst(p.As), rd(), reg(), int32(p.From.Offset))
@@ -164,4 +174,15 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog) (w []uint32, ok bool) {
 	}
 
 	return bad("no ppc32 encoding for %v (as %v)", p, p.As)
+}
+
+// symOperand returns the operand carrying a symbol, if any. One symbol per Prog
+// is all the ppc32 baseline forms can have.
+func symOperand(p *obj.Prog) *obj.Addr {
+	for _, a := range []*obj.Addr{&p.From, &p.To} {
+		if a.Sym != nil {
+			return a
+		}
+	}
+	return nil
 }

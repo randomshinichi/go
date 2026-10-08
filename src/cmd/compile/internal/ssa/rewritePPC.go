@@ -12,6 +12,8 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpAdd32carrywithcarry(v)
 	case OpAdd32withcarry:
 		return rewriteValuePPC_OpAdd32withcarry(v)
+	case OpAddr:
+		return rewriteValuePPC_OpAddr(v)
 	case OpAnd32:
 		return rewriteValuePPC_OpAnd32(v)
 	case OpConst32:
@@ -22,6 +24,10 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpConstNil(v)
 	case OpCopy:
 		return rewriteValuePPC_OpCopy(v)
+	case OpLoad:
+		return rewriteValuePPC_OpLoad(v)
+	case OpLocalAddr:
+		return rewriteValuePPC_OpLocalAddr(v)
 	case OpLsh32x32:
 		return rewriteValuePPC_OpLsh32x32(v)
 	case OpLsh32x64:
@@ -32,6 +38,8 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpMul32uhilo(v)
 	case OpNeg32:
 		return rewriteValuePPC_OpNeg32(v)
+	case OpOffPtr:
+		return rewriteValuePPC_OpOffPtr(v)
 	case OpOr32:
 		return rewriteValuePPC_OpOr32(v)
 	case OpRsh32Ux32:
@@ -42,6 +50,8 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpRsh32x32(v)
 	case OpRsh32x64:
 		return rewriteValuePPC_OpRsh32x64(v)
+	case OpStore:
+		return rewriteValuePPC_OpStore(v)
 	case OpSub32:
 		return rewriteValuePPC_OpSub32(v)
 	case OpSub32carry:
@@ -109,6 +119,19 @@ func rewriteValuePPC_OpAdd32withcarry(v *Value) bool {
 		return true
 	}
 }
+func rewriteValuePPC_OpAddr(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Addr {sym} base)
+	// result: (MOVWaddr {sym} base)
+	for {
+		sym := auxToSym(v.Aux)
+		base := v_0
+		v.reset(OpPPCMOVWaddr)
+		v.Aux = symToAux(sym)
+		v.AddArg(base)
+		return true
+	}
+}
 func rewriteValuePPC_OpAnd32(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
@@ -161,6 +184,135 @@ func rewriteValuePPC_OpCopy(v *Value) bool {
 		v.AddArg(x)
 		return true
 	}
+}
+func rewriteValuePPC_OpLoad(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (Load <t> ptr mem)
+	// cond: t.IsBoolean()
+	// result: (MOVBUload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(t.IsBoolean()) {
+			break
+		}
+		v.reset(OpPPCMOVBUload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: is8BitInt(t) && t.IsSigned()
+	// result: (MOVBload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is8BitInt(t) && t.IsSigned()) {
+			break
+		}
+		v.reset(OpPPCMOVBload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: is8BitInt(t) && !t.IsSigned()
+	// result: (MOVBUload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is8BitInt(t) && !t.IsSigned()) {
+			break
+		}
+		v.reset(OpPPCMOVBUload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: is16BitInt(t) && t.IsSigned()
+	// result: (MOVHload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is16BitInt(t) && t.IsSigned()) {
+			break
+		}
+		v.reset(OpPPCMOVHload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: is16BitInt(t) && !t.IsSigned()
+	// result: (MOVHUload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is16BitInt(t) && !t.IsSigned()) {
+			break
+		}
+		v.reset(OpPPCMOVHUload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: (is32BitInt(t) || isPtr(t))
+	// result: (MOVWload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is32BitInt(t) || isPtr(t)) {
+			break
+		}
+		v.reset(OpPPCMOVWload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpLocalAddr(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (LocalAddr <t> {sym} base mem)
+	// cond: t.Elem().HasPointers()
+	// result: (MOVWaddr {sym} (SPanchored base mem))
+	for {
+		t := v.Type
+		sym := auxToSym(v.Aux)
+		base := v_0
+		mem := v_1
+		if !(t.Elem().HasPointers()) {
+			break
+		}
+		v.reset(OpPPCMOVWaddr)
+		v.Aux = symToAux(sym)
+		v0 := b.NewValue0(v.Pos, OpSPanchored, typ.Uintptr)
+		v0.AddArg2(base, mem)
+		v.AddArg(v0)
+		return true
+	}
+	// match: (LocalAddr <t> {sym} base _)
+	// cond: !t.Elem().HasPointers()
+	// result: (MOVWaddr {sym} base)
+	for {
+		t := v.Type
+		sym := auxToSym(v.Aux)
+		base := v_0
+		if !(!t.Elem().HasPointers()) {
+			break
+		}
+		v.reset(OpPPCMOVWaddr)
+		v.Aux = symToAux(sym)
+		v.AddArg(base)
+		return true
+	}
+	return false
 }
 func rewriteValuePPC_OpLsh32x32(v *Value) bool {
 	v_1 := v.Args[1]
@@ -222,6 +374,19 @@ func rewriteValuePPC_OpNeg32(v *Value) bool {
 		x := v_0
 		v.reset(OpPPCNEG)
 		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpOffPtr(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (OffPtr [off] ptr)
+	// result: (MOVWaddr [int32(off)] ptr)
+	for {
+		off := auxIntToInt64(v.AuxInt)
+		ptr := v_0
+		v.reset(OpPPCMOVWaddr)
+		v.AuxInt = int32ToAuxInt(int32(off))
+		v.AddArg(ptr)
 		return true
 	}
 }
@@ -289,6 +454,57 @@ func rewriteValuePPC_OpRsh32x64(v *Value) bool {
 		v.AddArg2(x, y)
 		return true
 	}
+}
+func rewriteValuePPC_OpStore(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (Store {t} ptr val mem)
+	// cond: t.Size() == 1
+	// result: (MOVBstore ptr val mem)
+	for {
+		t := auxToType(v.Aux)
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(t.Size() == 1) {
+			break
+		}
+		v.reset(OpPPCMOVBstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (Store {t} ptr val mem)
+	// cond: t.Size() == 2
+	// result: (MOVHstore ptr val mem)
+	for {
+		t := auxToType(v.Aux)
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(t.Size() == 2) {
+			break
+		}
+		v.reset(OpPPCMOVHstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (Store {t} ptr val mem)
+	// cond: t.Size() == 4 && !t.IsFloat()
+	// result: (MOVWstore ptr val mem)
+	for {
+		t := auxToType(v.Aux)
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(t.Size() == 4 && !t.IsFloat()) {
+			break
+		}
+		v.reset(OpPPCMOVWstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValuePPC_OpSub32(v *Value) bool {
 	v_1 := v.Args[1]
