@@ -447,6 +447,9 @@ const (
 	ABaseRISCV
 	ABaseS390X
 	ABaseWasm
+	// ABasePPC is the 32-bit PowerPC (GOARCH=ppc) opcode subspace. Appended at
+	// the end so that no existing architecture's opcode values move.
+	ABasePPC
 
 	AllowedOpCodes = 1 << 11            // The number of opcodes available for any given architecture.
 	AMask          = AllowedOpCodes - 1 // AND with this to use the opcode as an array index.
