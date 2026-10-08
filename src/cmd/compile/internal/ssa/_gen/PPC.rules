@@ -92,6 +92,10 @@
 (If (GreaterThan cc) yes no) => (GT cc yes no)
 (If (GreaterEqual cc) yes no) => (GE cc yes no)
 (If cond yes no) => (NE (CMPWconst [0] cond) yes no)
+// Blocks are rewritten before their values. The catch-all can therefore wrap
+// a generic comparison before it becomes a predicate; remove that wrapper on
+// the next iteration, just as PPC64 does for its boolean test.
+(NE (CMPWconst [0] ((Equal|NotEqual|LessThan|LessEqual|GreaterThan|GreaterEqual) cc)) yes no) => ((EQ|NE|LT|LE|GT|GE) cc yes no)
 (EQ (FlagEQ) yes no) => (First yes no)
 (EQ (FlagLT) yes no) => (First no yes)
 (EQ (FlagGT) yes no) => (First no yes)
@@ -128,5 +132,27 @@
 (CMPWUconst (MOVWconst [x]) [y]) && uint32(x)==uint32(y) => (FlagEQ)
 (CMPWUconst (MOVWconst [x]) [y]) && uint32(x)<uint32(y) => (FlagLT)
 (CMPWUconst (MOVWconst [x]) [y]) && uint32(x)>uint32(y) => (FlagGT)
+// Fold known condition codes before a boolean predicate needs a register.
+(Equal (FlagEQ)) => (MOVWconst [1])
+(Equal (FlagLT)) => (MOVWconst [0])
+(Equal (FlagGT)) => (MOVWconst [0])
+(NotEqual (FlagEQ)) => (MOVWconst [0])
+(NotEqual (FlagLT)) => (MOVWconst [1])
+(NotEqual (FlagGT)) => (MOVWconst [1])
+(LessThan (FlagEQ)) => (MOVWconst [0])
+(LessThan (FlagLT)) => (MOVWconst [1])
+(LessThan (FlagGT)) => (MOVWconst [0])
+(LessEqual (FlagEQ)) => (MOVWconst [1])
+(LessEqual (FlagLT)) => (MOVWconst [1])
+(LessEqual (FlagGT)) => (MOVWconst [0])
+(GreaterThan (FlagEQ)) => (MOVWconst [0])
+(GreaterThan (FlagLT)) => (MOVWconst [0])
+(GreaterThan (FlagGT)) => (MOVWconst [1])
+(GreaterEqual (FlagEQ)) => (MOVWconst [1])
+(GreaterEqual (FlagLT)) => (MOVWconst [0])
+(GreaterEqual (FlagGT)) => (MOVWconst [1])
+((Equal|NotEqual|LessThan|GreaterThan|LessEqual|GreaterEqual) (InvertFlags x)) => ((Equal|NotEqual|GreaterThan|LessThan|GreaterEqual|LessEqual) x)
+
+(StaticCall ...) => (CALLstatic ...)
 (GetCallerSP ...) => (LoweredGetCallerSP ...)
 (GetCallerPC ...) => (LoweredGetCallerPC ...)

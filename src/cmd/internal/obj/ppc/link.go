@@ -6,6 +6,7 @@ package ppc
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"encoding/binary"
 	"fmt"
@@ -36,12 +37,9 @@ var unaryDst = map[obj.As]bool{
 	AMFCTR: true,
 }
 
-// preprocess and progedit are the two per-Prog fix-up hooks obj calls on the way
-// to the assembler. ppc32 needs neither yet: it emits no pseudo-instructions that
-// have to be expanded (a return is already the architectural blr), and the
-// pc-relative and relocation handling they would normally do belongs to the
-// Mach-O/linker lane (DESIGN.md §13 brief 3.4). They exist so that the assembler
-// path is a no-op rather than a nil call.
+// Frame/prologue processing is not implemented yet. Object emission below
+// records absolute symbol-address and direct-call relocations, but applying
+// those relocations belongs to the ppc32 linker.
 func preprocess(*obj.Link, *obj.LSym, obj.ProgAlloc) {}
 
 func progedit(*obj.Link, *obj.Prog, obj.ProgAlloc) {}
@@ -76,6 +74,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 		q.Pc = pc
 		if q.As != obj.ATEXT && q.As != obj.ANOP && q.As != obj.AFUNCDATA && q.As != obj.APCDATA {
 			pc += 4
+			if isSymbolAddress(q) {
+				pc += 4 // addis + addi, not one addi
+			}
 		}
 	}
 	words := make([]uint32, 0, 16)
@@ -83,6 +84,11 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 		w, ok := encodeProg(ctxt, q, autosize)
 		if !ok {
 			return // diag already issued
+		}
+		if isSymbolAddress(q) {
+			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 8, Type: objabi.R_ADDRPOWER, Sym: q.From.Sym, Add: q.From.Offset})
+		} else if (q.As == obj.ACALL || q.As == ABL) && q.To.Sym != nil {
+			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 4, Type: objabi.R_CALLPOWER, Sym: q.To.Sym, Add: q.To.Offset})
 		}
 		words = append(words, w...)
 	}
@@ -96,6 +102,14 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 	}
 }
 
+// isSymbolAddress recognizes the only external address form implemented here:
+// an absolute address relative to the compiler's pseudo-SB, not PIC/GOT/TLS.
+func isSymbolAddress(p *obj.Prog) bool {
+	return p.As == AADDI && p.From.Type == obj.TYPE_ADDR &&
+		(p.From.Name == obj.NAME_EXTERN || p.From.Name == obj.NAME_STATIC) &&
+		p.From.Sym != nil && p.Reg == 0 // pseudo-SB has no hardware register
+}
+
 // resolveOffset turns an operand's displacement into the byte offset the
 // instruction carries.
 //
@@ -107,11 +121,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 // arm use, and inheriting the same open question about what FixedFrameSize is on
 // Darwin ppc32 (DESIGN.md §11 Q-3).
 //
-// Anything else that carries a symbol (NAME_EXTERN, NAME_STATIC, NAME_GOTREF,
-// TLS) needs a relocation record, and where a ppc32 symbol reference has to be
-// split (lis/ori, or a pc-relative form) depends on the 32-bit Mach-O relocation
-// set, which the Mach-O lane owns (Q-4). Emitting the instruction without its
-// relocation would be a silently wrong address, so those are refused by name.
+// Symbol operands are not displacements. Only the absolute address pair in
+// encodeProg is supported; other external, GOT and TLS accesses are refused
+// rather than silently emitting an address without its relocation.
 func resolveOffset(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, autosize int64) (int64, error) {
 	switch a.Name {
 	case obj.NAME_NONE:
@@ -184,6 +196,19 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 	// Register-immediate forms rd,ra,si: To=rd, Reg=ra, From.Offset=si. A stack
 	// name arrives as TYPE_ADDR; an ordinary constant as TYPE_CONST.
 	case AADDI, AADDIC, AADDIS:
+		if isSymbolAddress(p) {
+			// R_ADDRPOWER supplies high-adjusted/low signed halves to this
+			// D-form pair. Leave both immediates zero in the object.
+			hi, err := Encode(AADDIS, rd(), 0, 0)
+			if err != nil {
+				return bad(err)
+			}
+			lo, err := Encode(AADDI, rd(), rd(), 0)
+			if err != nil {
+				return bad(err)
+			}
+			return []uint32{hi, lo}, true
+		}
 		if p.From.Type != obj.TYPE_CONST && p.From.Type != obj.TYPE_ADDR {
 			return bad(fmt.Errorf("%v: %v needs a constant operand", p, Mnemonic(Inst(p.As))))
 		}
@@ -219,6 +244,35 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 			return bad(err)
 		}
 		return emit(int32(p.From.Reg-REG_R0), int32(d), int32(p.To.Reg-REG_R0))
+
+	// All integer comparisons target CR0. Unlike a three-GPR operation,
+	// From and To are the two inputs, not a source and a destination.
+	case ACMPW, ACMPLW:
+		if p.From.Type != obj.TYPE_REG || p.To.Type != obj.TYPE_REG {
+			return bad(fmt.Errorf("%v: word compare needs two registers", p))
+		}
+		return emit(0, ra(), rd())
+	case ACMPWI, ACMPLWI:
+		if p.From.Type != obj.TYPE_REG || p.To.Type != obj.TYPE_CONST {
+			return bad(fmt.Errorf("%v: immediate compare needs a register and constant", p))
+		}
+		return emit(0, ra(), int32(p.To.Offset))
+
+	case obj.ACALL, ABL:
+		if p.To.Sym != nil && p.To.Name == obj.NAME_EXTERN && p.To.Type == obj.TYPE_MEM {
+			if p.To.Offset&3 != 0 {
+				return bad(fmt.Errorf("%v: unaligned direct call addend", p))
+			}
+			enc, err := Encode(ABL, 0)
+			if err != nil {
+				return bad(err)
+			}
+			return []uint32{enc}, true
+		}
+		if p.As == ABL && p.To.Type == obj.TYPE_BRANCH && p.To.Target() != nil {
+			return emit(int32(p.To.Target().Pc - p.Pc))
+		}
+		return bad(fmt.Errorf("%v: direct call needs an external symbol or local BL target", p))
 
 	case AB, ABC:
 		if p.To.Type != obj.TYPE_BRANCH || p.To.Target() == nil {
