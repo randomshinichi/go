@@ -453,6 +453,10 @@ TEXT runtime·pthread_kill_trampoline(SB),NOSPLIT,$80
 	BL	libc_pthread_kill(SB)
 	RET
 
+TEXT runtime·sched_yield_trampoline(SB),NOSPLIT,$80
+	BL	libc_sched_yield(SB)
+	RET
+
 // mach_port_t pthread_mach_thread_np(pthread_t): a 32-bit port name.
 TEXT runtime·pthread_mach_thread_np_trampoline(SB),NOSPLIT,$80
 	MOVD	R3, R14		// R14 is callee-save in C
