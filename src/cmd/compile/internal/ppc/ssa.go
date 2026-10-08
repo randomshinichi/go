@@ -168,7 +168,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPCInvertFlags, ssa.OpPPCFlagEQ, ssa.OpPPCFlagLT, ssa.OpPPCFlagGT,
 		ssa.OpPPCEqual, ssa.OpPPCNotEqual, ssa.OpPPCLessThan, ssa.OpPPCLessEqual,
 		ssa.OpPPCGreaterThan, ssa.OpPPCGreaterEqual:
-		v.Fatalf("ppc32: comparison pseudo-op %v was not rewritten", v.Op)
+		// Flags and comparison predicates have no GPR representation. The block
+		// selector consumes them directly when it emits bc.
+		return
 	case ssa.OpPPCCALLstatic:
 		s.Call(v)
 	case ssa.OpPPCCALLtail:
@@ -256,16 +258,92 @@ func emitMOVWconst(s *ssagen.State, v *ssa.Value) {
 }
 
 func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
-	switch b.Kind {
-	case ssa.BlockPlain:
-		// Fall through when the next block in layout order is the successor.
-		if b.Succs[0].Block() != next {
-			b.Fatalf("ppc32: a jump is needed here, and branch emission is not part of this slice: %s", b.LongString())
+	branch := func(as ppc.Inst, bo, bi int32, target *ssa.Block) {
+		p := s.Prog(as)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(bo)}
+		p.Reg = int16(bi)
+		p.To.Type = obj.TYPE_BRANCH
+		s.Branches = append(s.Branches, ssagen.Branch{P: p, B: target})
+	}
+	unconditional := func(target *ssa.Block) {
+		p := s.Prog(ppc.AB)
+		p.To.Type = obj.TYPE_BRANCH
+		s.Branches = append(s.Branches, ssagen.Branch{P: p, B: target})
+	}
+	cond := func(bo, bi int32, yes, no *ssa.Block) {
+		if yes == next {
+			branch(ppc.ABC, bo^8, bi, no)
+			return
 		}
-	case ssa.BlockExit, ssa.BlockRet, ssa.BlockRetJmp:
-		// blr returns through LR. Restoring the frame the prologue built belongs
-		// to the frame-writing lane (brief 3.4), so this is the return only.
+		branch(ppc.ABC, bo, bi, yes)
+		if no != next {
+			unconditional(no)
+		}
+	}
+	multiCond := func(yes, no *ssa.Block, trueBits, falseBits []int32) {
+		if yes == next {
+			for _, bi := range falseBits {
+				branch(ppc.ABC, 12, bi, no)
+			}
+			return
+		}
+		for _, bi := range trueBits {
+			branch(ppc.ABC, 12, bi, yes)
+		}
+		if no != next {
+			unconditional(no)
+		}
+	}
+	var yes, no *ssa.Block
+	if len(b.Succs) > 0 {
+		yes = b.Succs[0].Block()
+	}
+	if len(b.Succs) > 1 {
+		no = b.Succs[1].Block()
+	}
+	kind := b.Kind
+	if len(b.Controls) > 0 && b.Controls[0].Op == ssa.OpPPCInvertFlags {
+		switch kind {
+		case ssa.BlockPPCLT:
+			kind = ssa.BlockPPCGT
+		case ssa.BlockPPCGT:
+			kind = ssa.BlockPPCLT
+		case ssa.BlockPPCLE:
+			kind = ssa.BlockPPCGE
+		case ssa.BlockPPCGE:
+			kind = ssa.BlockPPCLE
+		}
+	}
+	switch kind {
+	case ssa.BlockPlain:
+		if yes != next {
+			unconditional(yes)
+		}
+	case ssa.BlockExit:
+	case ssa.BlockRet:
+		// blr returns through LR. Frame restoration belongs to the prologue lane.
 		s.Prog(ppc.ABLR)
+	case ssa.BlockRetJmp:
+		// Tail-call lowering has already loaded the target into CTR and emitted
+		// bctr. This terminator must not overwrite it with blr.
+	case ssa.BlockPPCEQ:
+		cond(12, 2, yes, no)
+	case ssa.BlockPPCNE:
+		cond(4, 2, yes, no)
+	case ssa.BlockPPCLT, ssa.BlockPPCFLT:
+		cond(12, 0, yes, no)
+	case ssa.BlockPPCGE:
+		cond(4, 0, yes, no)
+	case ssa.BlockPPCFGE:
+		// Ordered >= is GT or EQ; unordered (SO) must remain false.
+		multiCond(yes, no, []int32{1, 2}, []int32{0, 3})
+	case ssa.BlockPPCGT, ssa.BlockPPCFGT:
+		cond(12, 1, yes, no)
+	case ssa.BlockPPCLE:
+		cond(4, 1, yes, no)
+	case ssa.BlockPPCFLE:
+		// Ordered <= is LT or EQ; unordered (SO) must remain false.
+		multiCond(yes, no, []int32{0, 2}, []int32{1, 3})
 	default:
 		b.Fatalf("branch not implemented: %s", b.LongString())
 	}

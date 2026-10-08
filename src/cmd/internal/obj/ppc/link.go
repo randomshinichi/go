@@ -68,16 +68,22 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 	// displacement (see resolveOffset).
 	autosize := p.To.Offset
 
+	// Assign function-relative PCs before encoding so local branches can resolve
+	// their block targets. This is an assembler fixup only; external/linker
+	// relocations remain a separate ppc32 linker task.
+	pc := int64(0)
+	for q := p.Link; q != nil; q = q.Link {
+		q.Pc = pc
+		if q.As != obj.ATEXT && q.As != obj.ANOP && q.As != obj.AFUNCDATA && q.As != obj.APCDATA {
+			pc += 4
+		}
+	}
 	words := make([]uint32, 0, 16)
 	for q := p.Link; q != nil; q = q.Link {
 		w, ok := encodeProg(ctxt, q, autosize)
 		if !ok {
 			return // diag already issued
 		}
-		if w == nil {
-			continue // zero-width pseudo-instruction
-		}
-		q.Pc = int64(len(words) * 4)
 		words = append(words, w...)
 	}
 
@@ -213,6 +219,16 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 			return bad(err)
 		}
 		return emit(int32(p.From.Reg-REG_R0), int32(d), int32(p.To.Reg-REG_R0))
+
+	case AB, ABC:
+		if p.To.Type != obj.TYPE_BRANCH || p.To.Target() == nil {
+			return bad(fmt.Errorf("%v: %v has no local branch target", p, Mnemonic(Inst(p.As))))
+		}
+		disp := p.To.Target().Pc - p.Pc
+		if p.As == AB {
+			return emit(int32(disp))
+		}
+		return emit(int32(p.From.Offset), int32(p.Reg), int32(disp))
 
 	case ABLR:
 		return emit()
