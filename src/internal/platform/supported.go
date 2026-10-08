@@ -242,8 +242,8 @@ func DefaultPIE(goos, goarch string, isRace bool) bool {
 		}
 		return true
 	case "darwin":
-		// The Leopard ppc64 port supports non-PIE executables only.
-		return goarch != "ppc64"
+		// The Leopard PowerPC ports support non-PIE executables only.
+		return goarch != "ppc" && goarch != "ppc64"
 	}
 	return false
 }
