@@ -224,7 +224,7 @@ func buildop(*obj.Link) {}
 // carries, Encode does the masking and range checking. Refusing an op by name is
 // deliberate — an assembler that quietly emits nothing is worse than one that
 // fails, and this slice of the backend only lowers the scalar forms below.
-func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
+func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	p := s.Func().Text
 	if p == nil || p.Link == nil {
 		return // external function or section symbol
@@ -239,18 +239,55 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 	p.Pc = 0
 
 	// Assign function-relative PCs before encoding so local branches can resolve
-	// their block targets. This is an assembler fixup only; external/linker
-	// relocations remain a separate ppc32 linker task.
-	pc := int64(0)
-	for q := p.Link; q != nil; q = q.Link {
-		q.Pc = pc
-		if q.As != obj.ATEXT && q.As != obj.ANOP && q.As != obj.AFUNCDATA && q.As != obj.APCDATA {
-			pc += 4
-			if isSymbolAddress(q) {
-				pc += 4 // addis + addi, not one addi
+	// their block targets. Conditional branches have only a 16-bit displacement;
+	// relax an out-of-range one to an inverted local branch around an unconditional
+	// branch. The latter has a 26-bit displacement. Encode keeps checking both
+	// instruction ranges, so a target beyond even the unconditional range fails.
+	// External/linker relocations remain a separate ppc32 linker task.
+	if newprog == nil {
+		newprog = func() *obj.Prog { return new(obj.Prog) }
+	}
+	for {
+		pc := int64(0)
+		for q := p.Link; q != nil; q = q.Link {
+			q.Pc = pc
+			if q.As != obj.ATEXT && q.As != obj.ANOP && q.As != obj.AFUNCDATA && q.As != obj.APCDATA {
+				pc += 4
+				if isSymbolAddress(q) {
+					pc += 4 // addis + addi, not one addi
+				}
 			}
 		}
+		var relaxed bool
+		for q := p.Link; q != nil; q = q.Link {
+			if q.As != ABC || q.To.Type != obj.TYPE_BRANCH || q.To.Target() == nil {
+				continue
+			}
+			disp := q.To.Target().Pc - q.Pc
+			if disp >= -32768 && disp <= 32764 {
+				continue
+			}
+			target := q.To.Target()
+			long := obj.Appendp(q, newprog)
+			long.As = AB
+			long.To.Type = obj.TYPE_BRANCH
+			long.To.SetTarget(target)
+			skip := obj.Appendp(long, newprog)
+			// ori r0,r0,0 is a real four-byte no-op: unlike ANOP it gives
+			// the short conditional branch a concrete instruction to target.
+			skip.As = AORI
+			skip.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+			skip.Reg = REG_R0
+			skip.To = obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}
+			q.From.Offset ^= 8 // invert BO; taken means skip the long branch
+			q.To.SetTarget(skip)
+			relaxed = true
+		}
+		if !relaxed {
+			break
+		}
 	}
+	// PCs above include relaxation instructions and are now final for encoding.
 	words := make([]uint32, 0, 16)
 	for q := p.Link; q != nil; q = q.Link {
 		w, ok := encodeProg(ctxt, q, autosize)
