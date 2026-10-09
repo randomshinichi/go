@@ -45,6 +45,10 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpConst16(v)
 	case OpConst32:
 		return rewriteValuePPC_OpConst32(v)
+	case OpConst32F:
+		return rewriteValuePPC_OpConst32F(v)
+	case OpConst64F:
+		return rewriteValuePPC_OpConst64F(v)
 	case OpConst8:
 		return rewriteValuePPC_OpConst8(v)
 	case OpConstBool:
@@ -53,6 +57,10 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpConstNil(v)
 	case OpCopy:
 		return rewriteValuePPC_OpCopy(v)
+	case OpCvt32Fto64F:
+		return rewriteValuePPC_OpCvt32Fto64F(v)
+	case OpCvt64Fto32F:
+		return rewriteValuePPC_OpCvt64Fto32F(v)
 	case OpCvtBoolToUint8:
 		return rewriteValuePPC_OpCvtBoolToUint8(v)
 	case OpDiv32:
@@ -536,6 +544,26 @@ func rewriteValuePPC_OpConst32(v *Value) bool {
 		return true
 	}
 }
+func rewriteValuePPC_OpConst32F(v *Value) bool {
+	// match: (Const32F [c])
+	// result: (FMOVSconst [float64(c)])
+	for {
+		c := auxIntToFloat32(v.AuxInt)
+		v.reset(OpPPCFMOVSconst)
+		v.AuxInt = float64ToAuxInt(float64(c))
+		return true
+	}
+}
+func rewriteValuePPC_OpConst64F(v *Value) bool {
+	// match: (Const64F [c])
+	// result: (FMOVDconst [c])
+	for {
+		c := auxIntToFloat64(v.AuxInt)
+		v.reset(OpPPCFMOVDconst)
+		v.AuxInt = float64ToAuxInt(c)
+		return true
+	}
+}
 func rewriteValuePPC_OpConst8(v *Value) bool {
 	// match: (Const8 [c])
 	// result: (MOVWconst [int32(c)])
@@ -567,11 +595,52 @@ func rewriteValuePPC_OpConstNil(v *Value) bool {
 }
 func rewriteValuePPC_OpCopy(v *Value) bool {
 	v_0 := v.Args[0]
-	// match: (Copy x)
+	// match: (Copy <t> x)
+	// cond: !t.IsFloat()
 	// result: (MOVWreg x)
 	for {
+		t := v.Type
 		x := v_0
+		if !(!t.IsFloat()) {
+			break
+		}
 		v.reset(OpPPCMOVWreg)
+		v.AddArg(x)
+		return true
+	}
+	// match: (Copy <t> x)
+	// cond: t.IsFloat()
+	// result: (FMR x)
+	for {
+		t := v.Type
+		x := v_0
+		if !(t.IsFloat()) {
+			break
+		}
+		v.reset(OpPPCFMR)
+		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpCvt32Fto64F(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt32Fto64F x)
+	// result: (FMR x)
+	for {
+		x := v_0
+		v.reset(OpPPCFMR)
+		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt64Fto32F(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt64Fto32F x)
+	// result: (FRSP x)
+	for {
+		x := v_0
+		v.reset(OpPPCFRSP)
 		v.AddArg(x)
 		return true
 	}
@@ -1092,6 +1161,34 @@ func rewriteValuePPC_OpLoad(v *Value) bool {
 			break
 		}
 		v.reset(OpPPCMOVWload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: is32BitFloat(t)
+	// result: (FMOVSload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is32BitFloat(t)) {
+			break
+		}
+		v.reset(OpPPCFMOVSload)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	// match: (Load <t> ptr mem)
+	// cond: is64BitFloat(t)
+	// result: (FMOVDload ptr mem)
+	for {
+		t := v.Type
+		ptr := v_0
+		mem := v_1
+		if !(is64BitFloat(t)) {
+			break
+		}
+		v.reset(OpPPCFMOVDload)
 		v.AddArg2(ptr, mem)
 		return true
 	}
@@ -2601,6 +2698,36 @@ func rewriteValuePPC_OpStore(v *Value) bool {
 			break
 		}
 		v.reset(OpPPCMOVWstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (Store {t} ptr val mem)
+	// cond: is32BitFloat(t)
+	// result: (FMOVSstore ptr val mem)
+	for {
+		t := auxToType(v.Aux)
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(is32BitFloat(t)) {
+			break
+		}
+		v.reset(OpPPCFMOVSstore)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (Store {t} ptr val mem)
+	// cond: is64BitFloat(t)
+	// result: (FMOVDstore ptr val mem)
+	for {
+		t := auxToType(v.Aux)
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(is64BitFloat(t)) {
+			break
+		}
+		v.reset(OpPPCFMOVDstore)
 		v.AddArg3(ptr, val, mem)
 		return true
 	}

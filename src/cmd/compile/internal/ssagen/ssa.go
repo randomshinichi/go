@@ -6954,6 +6954,11 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 
 	e := f.Frontend().(*ssafn)
 	s.scratchOffset = -e.stksize - 8
+	if base.Ctxt.Arch.Name == "ppc" {
+		// SP and the allocated frame are 16-byte aligned, but Go locals
+		// need only word alignment. Reserve two aligned doubles plus padding.
+		s.scratchOffset = -types.RoundUp(e.stksize+16, 8)
+	}
 
 	gatherPrintInfo := f.PrintOrHtmlSSA || ssa.GenssaDump[f.Name]
 
@@ -7501,7 +7506,7 @@ func defframe(s *State, e *ssafn, f *ssa.Func) {
 	s.maxarg = types.RoundUp(s.maxarg, e.stkalign)
 	frame := s.maxarg + e.stksize
 	if s.hasScratch {
-		frame += 8
+		frame += -s.scratchOffset - e.stksize
 	}
 	if Arch.PadFrame != nil {
 		frame = Arch.PadFrame(frame)

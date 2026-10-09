@@ -95,7 +95,16 @@
 (Const32 [c]) => (MOVWconst [c])
 (ConstBool [t]) => (MOVWconst [b2i32(t)])
 (ConstNil) => (MOVWconst [0])
-(Copy x) => (MOVWreg x)
+(Copy <t> x) && !t.IsFloat() => (MOVWreg x)
+(Copy <t> x) && t.IsFloat() => (FMR x)
+(Const32F [c]) => (FMOVSconst [float64(c)])
+(Const64F [c]) => (FMOVDconst [c])
+(Cvt32Fto64F x) => (FMR x)
+(Cvt64Fto32F x) => (FRSP x)
+(Load <t> ptr mem) && is32BitFloat(t) => (FMOVSload ptr mem)
+(Load <t> ptr mem) && is64BitFloat(t) => (FMOVDload ptr mem)
+(Store {t} ptr val mem) && is32BitFloat(t) => (FMOVSstore ptr val mem)
+(Store {t} ptr val mem) && is64BitFloat(t) => (FMOVDstore ptr val mem)
 
 // Comparisons use word forms: the 32-bit backend has no 64-bit GPR compare.
 // PPC's signed and unsigned compares set different CR0 LT/GT bits, unlike

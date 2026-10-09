@@ -13,6 +13,7 @@ import (
 	"cmd/internal/obj"
 	"cmd/internal/obj/ppc"
 	"internal/abi"
+	"math"
 )
 
 // This file turns the lowered ppc32 ops into obj.Progs. The operand convention
@@ -135,7 +136,11 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		if v.Type.IsMemory() || v.Reg() == v.Args[0].Reg() {
 			return
 		}
-		// or rd, rs, rs is the register move, including regalloc copies.
+		if v.Type.IsFloat() {
+			reg2(s, ppc.AFMR, v.Reg(), v.Args[0].Reg())
+			return
+		}
+		// or rd, rs, rs is the integer register move.
 		reg3(s, ppc.AOR, v.Reg(), v.Args[0].Reg(), v.Args[0].Reg())
 
 	// Shift by an immediate amount.
@@ -150,8 +155,14 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		if v.Type.IsFlags() {
 			v.Fatalf("ppc32: the carry lives in XER[CA] and cannot be spilled: %v", v.LongString())
 		}
+		var addr obj.Addr
+		ssagen.AddrAuto(&addr, v.Args[0])
+		if v.Type.IsFloat() {
+			emitFloatLoad(s, v.Reg(), addr, v.Type.Size())
+			return
+		}
 		p := s.Prog(loadByType(v.Type))
-		ssagen.AddrAuto(&p.From, v.Args[0])
+		p.From = addr
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
 		if v.Type.Size() == 1 && v.Type.IsSigned() {
 			reg2(s, ppc.AEXTSB, v.Reg(), v.Reg())
@@ -160,9 +171,15 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		if v.Type.IsFlags() {
 			v.Fatalf("ppc32: the carry lives in XER[CA] and cannot be spilled: %v", v.LongString())
 		}
+		var addr obj.Addr
+		ssagen.AddrAuto(&addr, v)
+		if v.Type.IsFloat() {
+			emitFloatStore(s, v.Args[0].Reg(), addr, v.Type.Size())
+			return
+		}
 		p := s.Prog(storeByType(v.Type))
 		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
-		ssagen.AddrAuto(&p.To, v)
+		p.To = addr
 
 	// Address formation and memory.
 	case ssa.OpPPCMOVWaddr:
@@ -198,6 +215,29 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 	case ssa.OpPPCMOVWconst:
 		emitMOVWconst(s, v)
+	case ssa.OpPPCFMR, ssa.OpPPCFRSP:
+		reg2(s, v.Op.Asm(), v.Reg(), v.Args[0].Reg())
+	case ssa.OpPPCFMOVSconst, ssa.OpPPCFMOVDconst:
+		addr := s.ScratchAddr(ppc.REGSP)
+		if v.Op == ssa.OpPPCFMOVSconst {
+			emitConst32(s, ppc.REG_R31, int32(math.Float32bits(float32(v.AuxFloat()))))
+			memoryStore(s, ppc.ASTW, ppc.REG_R31, addr)
+			memoryLoad(s, ppc.ALFS, v.Reg(), addr)
+		} else {
+			emitFloatBits(s, v.Reg(), uint64(v.AuxInt), addr)
+		}
+	case ssa.OpPPCFMOVSload, ssa.OpPPCFMOVDload:
+		addr := obj.Addr{Type: obj.TYPE_MEM, Reg: v.Args[0].Reg()}
+		ssagen.AddAux(&addr, v)
+		emitFloatLoad(s, v.Reg(), addr, v.Type.Size())
+	case ssa.OpPPCFMOVSstore, ssa.OpPPCFMOVDstore:
+		addr := obj.Addr{Type: obj.TYPE_MEM, Reg: v.Args[0].Reg()}
+		ssagen.AddAux(&addr, v)
+		size := int64(8)
+		if v.Op == ssa.OpPPCFMOVSstore {
+			size = 4
+		}
+		emitFloatStore(s, v.Args[1].Reg(), addr, size)
 
 	case ssa.OpPPCCMPW, ssa.OpPPCCMPWU:
 		p := s.Prog(v.Op.Asm())
