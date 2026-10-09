@@ -18,6 +18,18 @@ import (
 	"internal/testenv"
 )
 
+func TestInternalPollDeferBranch(t *testing.T) {
+	// sendFile in internal/poll has a non-open-coded defer path. Compile the
+	// package with the ppc backend to cover its BlockDefer successor branch.
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-a", "internal/poll")
+	cmd.Dir = filepath.Join(testenv.GOROOT(t), "src")
+	cmd.Env = append(os.Environ(), "GOROOT="+testenv.GOROOT(t), "GOOS=darwin", "GOARCH=ppc")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("compile internal/poll for darwin/ppc: %v\n%s", err, out)
+	}
+}
+
 // This runs only the emitted comparison/branch tail, not a Go function or ABI.
 // An independent assembly wrapper supplies input registers, a scratch result
 // slot and LR. No Go prologue, Darwin loader or symbol relocation is exercised.
