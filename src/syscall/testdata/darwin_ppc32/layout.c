@@ -28,10 +28,23 @@
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/icmp6.h>
+union sockaddr_all {
+	struct sockaddr s1;
+	struct sockaddr_in s2;
+	struct sockaddr_in6 s3;
+	struct sockaddr_un s4;
+	struct sockaddr_dl s5;
+};
+struct sockaddr_any {
+	struct sockaddr addr;
+	char pad[sizeof(union sockaddr_all) - sizeof(struct sockaddr)];
+};
 #define S(T) printf("sizeof(%s)=%lu\n", #T, (unsigned long)sizeof(struct T))
 #define O(T,F) printf("offsetof(%s.%s)=%lu\n", #T, #F, (unsigned long)offsetof(struct T,F))
 int main(void) {
-S(timespec); S(timeval); S(rusage); S(rlimit); S(stat64); S(statfs64); S(flock); S(fstore); S(radvisory); S(fbootstraptransfer); S(log2phys); S(fsid); S(dirent); S(sockaddr_in); S(sockaddr_in6); S(sockaddr_un); S(sockaddr_dl); S(sockaddr); S(msghdr); S(cmsghdr); S(iovec); S(linger); S(ip_mreq); S(ipv6_mreq); S(kevent); S(if_msghdr); S(if_data); S(ifa_msghdr); S(ifma_msghdr); S(ifma_msghdr2); S(rt_msghdr); S(rt_metrics); S(bpf_version); S(bpf_stat); S(bpf_program); S(bpf_insn); S(bpf_hdr); S(fd_set); S(termios); S(in6_pktinfo); S(icmp6_filter);
+S(timespec); S(timeval); S(sockaddr_any); S(rusage); S(rlimit); S(stat64); S(statfs64); S(flock); S(fstore); S(radvisory); S(fbootstraptransfer); S(log2phys); S(fsid); S(dirent); S(sockaddr_in); S(sockaddr_in6); S(sockaddr_un); S(sockaddr_dl); S(sockaddr); S(msghdr); S(cmsghdr); S(iovec); S(linger); S(ip_mreq); S(ipv6_mreq); S(kevent); S(if_msghdr); S(if_data); S(ifa_msghdr); S(ifma_msghdr); S(ifma_msghdr2); S(rt_msghdr); S(rt_metrics); S(bpf_version); S(bpf_stat); S(bpf_program); S(bpf_insn); S(bpf_hdr); S(fd_set); S(termios); S(in6_pktinfo); S(icmp6_filter);
+O(timeval,tv_sec); O(timeval,tv_usec); O(sockaddr_any,addr); O(sockaddr_any,pad);
+O(if_data,ifi_lastchange); O(bpf_hdr,bh_tstamp);
 O(stat64,st_dev); O(stat64,st_mode); O(stat64,st_nlink); O(stat64,st_ino); O(stat64,st_uid); O(stat64,st_gid); O(stat64,st_rdev); O(stat64,st_atimespec); O(stat64,st_mtimespec); O(stat64,st_ctimespec); O(stat64,st_birthtimespec); O(stat64,st_size); O(stat64,st_blocks); O(stat64,st_blksize); O(stat64,st_flags); O(stat64,st_gen); O(stat64,st_lspare); O(stat64,st_qspare);
 O(statfs64,f_bsize); O(statfs64,f_iosize); O(statfs64,f_blocks); O(statfs64,f_fsid); O(statfs64,f_owner); O(statfs64,f_type); O(statfs64,f_flags); O(statfs64,f_fstypename); O(statfs64,f_mntonname); O(statfs64,f_mntfromname); O(statfs64,f_reserved);
 O(flock,l_start); O(flock,l_len); O(flock,l_pid); O(flock,l_type); O(flock,l_whence);
