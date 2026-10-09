@@ -10,6 +10,12 @@
 // Darwin ppc32 uses the measured 24-byte linkage area. ABI0 arguments start
 // at SP+24, and the caller's stack is 16-byte aligned.
 #define PPC32_FIXED_FRAME 24
+// Physical offsets from the unmodified caller SP: ABI0 arguments start at +24.
+#define CALL_ARG_TYPE 24
+#define CALL_ARG_FN 28
+#define CALL_ARG_STACKARGS 32
+#define CALL_ARG_STACKSIZE 36
+#define CALL_ARG_RETOFFSET 40
 
 #define DISPATCH(NAME, HIGH, LOW) \
 	ADDIS R4, R0, $HIGH; \
@@ -73,8 +79,8 @@ stackok: \
 	ADDI R31, R31, $LOW; \
 	ADD R31, R1, R31; \
 	/* Copy stack arguments into the target's SP+24 argument area. */ \
-	LWZ R3, 8(R31); \
-	LWZ R4, 12(R31); \
+	LWZ R3, CALL_ARG_STACKARGS(R31); \
+	LWZ R4, CALL_ARG_STACKSIZE(R31); \
 	ADDI R5, R1, $PPC32_FIXED_FRAME; \
 	CMPWI R4, $0; \
 	BC 12, 2, callfn; \
@@ -87,7 +93,7 @@ copyargs: \
 	CMPWI R4, $0; \
 	BC 12, 1, copyargs; \
 callfn: \
-	LWZ R11, 4(R31); \
+	LWZ R11, CALL_ARG_FN(R31); \
 	LWZ R12, 0(R11); \
 	MTCTR R12; \
 	PCDATA $PCDATA_StackMapIndex, $0; \
@@ -96,13 +102,13 @@ callfn: \
 	ADDIS R31, R0, $HIGH; \
 	ADDI R31, R31, $LOW; \
 	ADD R31, R1, R31; \
-	LWZ R7, 0(R31); \
-	LWZ R3, 8(R31); \
-	LWZ R4, 16(R31); \
+	LWZ R7, CALL_ARG_TYPE(R31); \
+	LWZ R3, CALL_ARG_STACKARGS(R31); \
+	LWZ R4, CALL_ARG_RETOFFSET(R31); \
 	ADD R3, R3, R4; \
 	ADDI R5, R1, $PPC32_FIXED_FRAME; \
 	ADD R5, R5, R4; \
-	LWZ R6, 12(R31); \
+	LWZ R6, CALL_ARG_STACKSIZE(R31); \
 	SUBF R6, R4, R6; \
 	BL runtime·callRet(SB); \
 	/* Restore the incoming stack and link register. */ \
