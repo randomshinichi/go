@@ -313,9 +313,7 @@ asmcgocall_call_c:
 	MTCTR R14
 	BCTRL
 	OR R14, R3, R3
-	CMPW R20, R17
-	BC 12, 2, asmcgocall_restore_nog
-	CMPW R30, R17
+	CMPWI R20, $0
 	BC 12, 2, asmcgocall_restore_direct
 	LWZ R17, 24(R1)
 	LWZ R18, g_stack+stack_hi(R17)
@@ -324,9 +322,8 @@ asmcgocall_call_c:
 	OR R30, R17, R17
 	B asmcgocall_result
 asmcgocall_restore_direct:
-	LWZ R1, 28(R1)
-	B asmcgocall_result
-asmcgocall_restore_nog:
+	LWZ R17, 24(R1)
+	OR R30, R17, R17
 	LWZ R1, 28(R1)
 asmcgocall_result:
 	OR R3, R14, R14
@@ -390,6 +387,13 @@ TEXT runtime·rt0_go(SB), NOSPLIT|NOFRAME|TOPFRAME, $0-0
 	BL runtime·abort(SB)
 
 TEXT runtime·asminit(SB), NOSPLIT|NOFRAME, $0-0
+	RET
+
+// breakpoint raises SIGTRAP through the Darwin libc wrapper.
+TEXT runtime·breakpoint(SB), NOSPLIT, $0-0
+	ADDI R3, R0, $5
+	STW R3, 24(R1)
+	BL runtime·raise(SB)
 	RET
 
 TEXT ·checkASM(SB), NOSPLIT|NOFRAME, $0-1
