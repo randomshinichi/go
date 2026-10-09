@@ -20,6 +20,9 @@ type mOS struct {
 	// This is an optimization to avoid calling libc_error
 	// on every syscall_rawsyscalln.
 	errnoAddr *int32
+
+	// CPU profiler state for this thread; empty except on darwin/ppc64.
+	prof mOSProf
 }
 
 func unimplemented(name string) {
@@ -370,15 +373,8 @@ func unminit() {
 func mdestroy(mp *m) {
 }
 
-//go:nosplit
-func osyield_no_g() {
-	usleep_no_g(1)
-}
-
-//go:nosplit
-func osyield() {
-	usleep(1)
-}
+// osyield and osyield_no_g are in osyield_darwin.go and sys_darwin_ppc64.go:
+// on Mac OS X 10.5 usleep is not safe to call from a signal handler.
 
 const (
 	_NSIG        = 32
@@ -458,13 +454,9 @@ func sigdelset(mask *sigset, i int) {
 	*mask &^= 1 << (uint32(i) - 1)
 }
 
-func setProcessCPUProfiler(hz int32) {
-	setProcessCPUProfilerTimer(hz)
-}
-
-func setThreadCPUProfiler(hz int32) {
-	setThreadCPUProfilerHz(hz)
-}
+// setProcessCPUProfiler and setThreadCPUProfiler are in cpuprof_darwin.go
+// and cpuprof_darwin_ppc64.go: Mac OS X 10.5 sends ITIMER_PROF's SIGPROF to
+// the wrong thread, so darwin/ppc64 profiles without it.
 
 //go:nosplit
 func validSIGPROF(mp *m, c *sigctxt) bool {

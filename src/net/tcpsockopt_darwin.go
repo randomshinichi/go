@@ -41,7 +41,7 @@ func setKeepAliveInterval(fd *netFD, d time.Duration) error {
 	secs := int(roundDurationUp(d, time.Second))
 	err := fd.pfd.SetsockoptInt(syscall.IPPROTO_TCP, sysTCP_KEEPINTVL, secs)
 	runtime.KeepAlive(fd)
-	return wrapSyscallError("setsockopt", err)
+	return wrapSyscallError("setsockopt", darwinKeepAliveOptionError(err))
 }
 
 func setKeepAliveCount(fd *netFD, n int) error {
@@ -53,5 +53,5 @@ func setKeepAliveCount(fd *netFD, n int) error {
 
 	err := fd.pfd.SetsockoptInt(syscall.IPPROTO_TCP, sysTCP_KEEPCNT, n)
 	runtime.KeepAlive(fd)
-	return wrapSyscallError("setsockopt", err)
+	return wrapSyscallError("setsockopt", darwinKeepAliveOptionError(err))
 }
