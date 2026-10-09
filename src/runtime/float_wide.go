@@ -52,24 +52,20 @@ func int64tofloat32(y int64) float32 {
 }
 
 func uint64tofloat32(y uint64) float32 {
-	// divide into top 18, mid 23, and bottom 23 bits.
-	// (23-bit integers fit into a float32 without loss.)
-	top := uint32(y >> 46)
-	mid := uint32(y >> 23 & (1<<23 - 1))
-	bot := uint32(y & (1<<23 - 1))
-	if top == 0 {
-		return float32(mid)*(1<<23) + float32(bot)
+	if y>>38 == 0 {
+		// At most 38 significant bits: binary64 represents y exactly.
+		return float32(uint64tofloat64(y))
 	}
-	if bot != 0 {
-		// Top is not zero, so the bits in bot
-		// won't make it into the final mantissa.
-		// In fact, the bottom bit of mid won't
-		// make it into the mantissa either.
-		// We only need to make sure that if top+mid
-		// is about to round down in a round-to-even
-		// scenario, and bot is not zero, we make it
-		// round up instead.
-		mid |= 1
+	// Round to odd before converting to binary64. The shifted integer has
+	// at most 52 bits, so both its conversion and power-of-two scaling are
+	// exact. In the original integer, bit 12 is strictly below the binary32
+	// guard bit (at least bit 14 for y >= 2^38). Jamming the discarded bits
+	// there preserves the guard and sticky information for the sole rounding
+	// to binary32, including values just above or below an even midpoint.
+	sticky := uint64(0)
+	if y&(1<<12-1) != 0 {
+		sticky = 1
 	}
-	return float32(top)*(1<<46) + float32(mid)*(1<<23)
+	y = y>>12 | sticky
+	return float32(uint64tofloat64(y) * (1 << 12))
 }
