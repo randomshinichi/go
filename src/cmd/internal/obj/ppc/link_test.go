@@ -8,6 +8,9 @@ import (
 	"cmd/internal/obj"
 	"cmd/internal/objabi"
 	"encoding/binary"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -38,6 +41,114 @@ func TestLargeNamedAddressMaterialized(t *testing.T) {
 	}
 	if got := binary.BigEndian.Uint32(s.P[4:]); got != 0x3863024c {
 		t.Errorf("addi = %08x, want 3863024c", got)
+	}
+}
+
+func TestRelaxConditionalBranch(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	text := &obj.Prog{As: obj.ATEXT}
+	cmp := &obj.Prog{As: ACMPWI, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}, To: obj.Addr{Type: obj.TYPE_CONST}}
+	branch := &obj.Prog{As: ABC, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 12}, Reg: 2, To: obj.Addr{Type: obj.TYPE_BRANCH}}
+	text.Link, cmp.Link = cmp, branch
+	var prev = branch
+	for i := 0; i < 9000; i++ {
+		p := &obj.Prog{As: AORI, From: obj.Addr{Type: obj.TYPE_CONST}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}}
+		prev.Link = p
+		prev = p
+	}
+	falseExit := []*obj.Prog{
+		{As: AADDI, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 1}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}},
+		{As: AADDI, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 1}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}},
+		{As: ASC},
+	}
+	for _, p := range falseExit {
+		prev.Link = p
+		prev = p
+	}
+	target := &obj.Prog{As: AADDI, From: obj.Addr{Type: obj.TYPE_CONST}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}}
+	successExit := []*obj.Prog{
+		target,
+		{As: AADDI, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 1}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}},
+		{As: ASC},
+	}
+	for _, p := range successExit {
+		prev.Link = p
+		prev = p
+	}
+	branch.To.SetTarget(target)
+	s := ctxt.Lookup("long-conditional")
+	s.NewFuncInfo().Text = text
+	assemble(ctxt, s, nil)
+	if s.Size != 4*(9000+10) {
+		t.Fatalf("relaxed text size %d, want %d", s.Size, 4*(9000+10))
+	}
+	// The branch is inverted and reaches over the long AB and its local target.
+	// The AB then reaches the original target, more than the BC range away.
+	bc := binary.BigEndian.Uint32(s.P[4:8])
+	if bc != 0x40820008 { // bc BO=4, BI=2, +8
+		t.Fatalf("relaxed conditional = %08x, want 40820008", bc)
+	}
+	wantAB, err := Encode(AB, int32(target.Pc-branch.Pc-4))
+	if err != nil {
+		t.Fatalf("expected relaxed AB displacement to encode: %v", err)
+	}
+	if got := binary.BigEndian.Uint32(s.P[8:12]); got != wantAB {
+		t.Fatalf("long branch = %08x, want %08x", got, wantAB)
+	}
+	if got := binary.BigEndian.Uint32(s.P[12:16]); got != 0x60000000 {
+		t.Fatalf("skip target = %08x, want ori r0,r0,0", got)
+	}
+	qemu, err := exec.LookPath("qemu-ppc")
+	if err != nil {
+		t.Skip("qemu-ppc unavailable: relaxed-branch execution inconclusive")
+	}
+	for _, tc := range []struct{ input, want int }{{0, 0}, {1, 1}} {
+		words := []uint32{0x38600000 | uint32(tc.input)} // li r3,input for cmpwi
+		for i := 0; i < len(s.P); i += 4 {
+			words = append(words, binary.BigEndian.Uint32(s.P[i:i+4]))
+		}
+		path := filepath.Join(t.TempDir(), "relaxed-branch.elf")
+		writePPCELF(t, path, words)
+		cmd := exec.Command(qemu, "-cpu", "750", path)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != tc.want {
+				t.Fatalf("qemu input=%d: err=%v want exit=%d\n%s", tc.input, err, tc.want, out)
+			}
+		} else if tc.want != 0 {
+			t.Fatalf("qemu input=%d exited 0, want %d", tc.input, tc.want)
+		}
+	}
+}
+
+func writePPCELF(t *testing.T, path string, words []uint32) {
+	t.Helper()
+	const offset, base = 0x1000, 0x10000
+	b := make([]byte, offset+4*len(words))
+	copy(b, []byte{0x7f, 'E', 'L', 'F', 1, 2, 1})
+	be := binary.BigEndian
+	be.PutUint16(b[16:], 2)  // executable
+	be.PutUint16(b[18:], 20) // EM_PPC
+	be.PutUint32(b[20:], 1)
+	be.PutUint32(b[24:], base+offset)
+	be.PutUint32(b[28:], 52)
+	be.PutUint16(b[40:], 52)
+	be.PutUint16(b[42:], 32)
+	be.PutUint16(b[44:], 1)
+	ph := b[52:]
+	be.PutUint32(ph, 1) // PT_LOAD
+	be.PutUint32(ph[8:], base)
+	be.PutUint32(ph[12:], base)
+	be.PutUint32(ph[16:], uint32(len(b)))
+	be.PutUint32(ph[20:], uint32(len(b)))
+	be.PutUint32(ph[24:], 5) // PF_R | PF_X
+	be.PutUint32(ph[28:], 0x1000)
+	for i, w := range words {
+		be.PutUint32(b[offset+4*i:], w)
+	}
+	if err := os.WriteFile(path, b, 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
