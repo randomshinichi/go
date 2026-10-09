@@ -2,14 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build darwin && (ppc || ppc64)
+
 package runtime
 
 import "unsafe"
 
-// Target-selected alternative to the modern Darwin EVFILT_USER wakeup:
-// Leopard/ppc64 has neither EVFILT_USER nor NOTE_TRIGGER (verified against
-// its headers and compiler). Use the pipe mechanism from netpoll_kqueue_pipe.go
-// instead; this is a substituted feature, not EVFILT_USER support.
+// Target-selected alternative to the modern Darwin EVFILT_USER wakeup.
+// Leopard (Mac OS X 10.5) has neither EVFILT_USER nor NOTE_TRIGGER, on EITHER
+// PowerPC ABI (verified against its headers and compiler), so darwin/ppc and
+// darwin/ppc64 both take the pipe mechanism from netpoll_kqueue_pipe.go. This is
+// a substituted feature, not EVFILT_USER support: netpoll_kqueue_event.go excludes
+// both ABIs for the same reason. One file serves both rather than a copy per ABI.
 
 var netpollBreakRd, netpollBreakWr uintptr // for netpollBreak
 
