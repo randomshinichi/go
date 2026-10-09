@@ -100,6 +100,14 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p.Spadj = int32(frame)
 	}
 	for p := text.Link; p != nil; p = p.Link {
+		if p.As == obj.AGETCALLERPC {
+			if leaf {
+				p.As = AMFLR
+			} else {
+				p.As = ALWZ
+				p.From = mem(frame + 8) // saved LR in caller's linkage area
+			}
+		}
 		if p.As != ABLR && p.As != obj.ARET {
 			continue
 		}
@@ -159,6 +167,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 	// ppc64 reads it. It is what turns a name's own offset into an SP-relative
 	// displacement (see resolveOffset).
 	autosize := p.To.Offset
+	// Assembly input PCs span the file; pcln needs a function-relative TEXT
+	// origin just like the instruction PCs below (including a second TEXT).
+	p.Pc = 0
 
 	// Assign function-relative PCs before encoding so local branches can resolve
 	// their block targets. This is an assembler fixup only; external/linker
@@ -284,7 +295,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		return emit(int32(p.From.Reg-REG_R0), int32(p.To.Reg-REG_R0), rb())
 
 	case AADD, AADDC, AADDE, ASUBF, ASUBFC, ASUBFE,
-		AMULLW, AMULHW, AMULHWU,
+		AMULLW, AMULHW, AMULHWU, ADIVW, ADIVWU,
 		AAND, AANDC, AOR, AORC, AXOR, ANAND, ANOR, AEQV,
 		ASLW, ASRW, ASRAW, AROTLW:
 		return emit(rd(), ra(), rb())
@@ -384,7 +395,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 
 	case AB, ABC:
 		if p.As == AB && p.To.Sym != nil &&
-			(p.To.Type == obj.TYPE_BRANCH || (p.To.Type == obj.TYPE_MEM && p.To.Name == obj.NAME_EXTERN)) {
+			(p.To.Type == obj.TYPE_BRANCH || (p.To.Type == obj.TYPE_MEM && (p.To.Name == obj.NAME_EXTERN || p.To.Name == obj.NAME_STATIC))) {
 			if p.To.Offset&3 != 0 {
 				return bad(fmt.Errorf("%v: unaligned tail branch addend", p))
 			}

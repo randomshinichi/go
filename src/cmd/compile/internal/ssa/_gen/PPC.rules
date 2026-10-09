@@ -37,6 +37,13 @@
 (Hmul32 x y) => (MULHW x y)
 (Hmul32u x y) => (MULHWU x y)
 (Mul32uhilo x y) => (MULLU x y)
+// The frontend inserts the divisor-zero check. DIVW also handles -1,
+// avoiding the architecturally undefined MinInt32/-1 hardware quotient.
+(Div32 x y) => (DIVW x y)
+(Div32u x y) => (DIVWU x y)
+(Mod32 x y) => (SUB x (MULLW <typ.Int32> y (DIVW <typ.Int32> x y)))
+(Mod32u x y) => (SUB x (MULLW <typ.UInt32> y (DIVWU <typ.UInt32> x y)))
+(RotateLeft32 x y) => (ROTLW x y)
 (And(32|16|8|B) x y) => (AND x y)
 (Or(32|16|8|B) x y) => (OR x y)
 (Xor(32|16|8) x y) => (XOR x y)
@@ -200,3 +207,13 @@
 (TailCall ...) => (CALLtail ...)
 (GetCallerSP ...) => (LoweredGetCallerSP ...)
 (GetCallerPC ...) => (LoweredGetCallerPC ...)
+(WB ...) => (LoweredWB ...)
+(PanicBounds ...) => (LoweredPanicBounds ...)
+(PanicExtend ...) => (LoweredPanicExtend ...)
+
+// Generic Move is non-overlapping (or identical); it is not runtime.memmove.
+// Write barriers have already been inserted by writebarrier.go before lowering.
+(Zero [0] _ mem) => (Copy mem)
+(Move [0] _ _ mem) => (Copy mem)
+(Zero [s] {t} ptr mem) && s > 0 => (LoweredZero [s] {t} ptr mem)
+(Move [s] {t} dst src mem) && s > 0 => (LoweredMove [s] {t} dst src mem)

@@ -6,11 +6,13 @@ package ppc
 
 import (
 	"cmd/compile/internal/base"
+	"cmd/compile/internal/ir"
 	"cmd/compile/internal/ssa"
 	"cmd/compile/internal/ssagen"
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 	"cmd/internal/obj/ppc"
+	"internal/abi"
 )
 
 // This file turns the lowered ppc32 ops into obj.Progs. The operand convention
@@ -67,6 +69,51 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		reg3(s, ppc.ASRW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
 	case ssa.OpPPCSRAW:
 		reg3(s, ppc.ASRAW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+
+	case ssa.OpPPCDIVWU, ssa.OpPPCROTLW:
+		reg3(s, v.Op.Asm(), v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCDIVW:
+		// divw has undefined results for signed overflow. Negating the
+		// numerator for every divisor -1 gives Go's wrapping result.
+		p := s.Prog(ppc.ACMPWI)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[1].Reg()}
+		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: -1}
+		minusOne := localBranch(s, 12, 2)
+		reg3(s, ppc.ADIVW, v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+		over := s.Prog(ppc.AB)
+		over.To.Type = obj.TYPE_BRANCH
+		p = s.Prog(ppc.ANEG)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		minusOne.To.SetTarget(p)
+		p = s.Prog(ppc.AOR)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		p.Reg = v.Reg()
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+		over.To.SetTarget(p)
+
+	case ssa.OpPPCLoweredWB:
+		p := s.Prog(obj.ACALL)
+		p.To = obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ir.Syms.GCWriteBarrier[v.AuxInt-1]}
+
+	case ssa.OpPPCLoweredPanicBounds, ssa.OpPPCLoweredPanicExtend:
+		code, signed := ssa.BoundsKind(v.AuxInt).Code()
+		x := int(v.Args[0].Reg() - ppc.REG_R3)
+		y := int(v.Args[1].Reg() - ppc.REG_R3)
+		sym := ir.Syms.PanicBounds
+		if v.Op == ssa.OpPPCLoweredPanicExtend {
+			x = x<<2 | y // high and low save-array slots
+			y = int(v.Args[2].Reg() - ppc.REG_R3)
+			sym = ir.Syms.PanicExtend
+		}
+		p := s.Prog(obj.APCDATA)
+		p.From.SetConst(abi.PCDATA_PanicBounds)
+		p.To.SetConst(int64(abi.BoundsEncode(code, signed, true, true, x, y)))
+		p = s.Prog(obj.ACALL)
+		p.To = obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: sym}
+
+	case ssa.OpPPCLoweredZero, ssa.OpPPCLoweredMove:
+		emitBulkMemory(s, v)
 
 	case ssa.OpPPCMULLU:
 		// No single G3 instruction produces both halves of a 32x32 product, so
@@ -211,6 +258,78 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	}
 }
 
+// localBranch targets CR0; its caller must set a real instruction target.
+func localBranch(s *ssagen.State, bo, bi int16) *obj.Prog {
+	p := s.Prog(ppc.ABC)
+	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(bo)}
+	p.Reg = bi
+	p.To.Type = obj.TYPE_BRANCH
+	return p
+}
+
+// emitBulkMemory preserves pointer-store atomicity when alignment permits word
+// accesses. Byte-aligned aggregates use byte accesses, never unaligned words.
+// Move's SSA contract excludes partial overlap; identical pointers are harmless.
+func emitBulkMemory(s *ssagen.State, v *ssa.Value) {
+	size := v.AuxInt
+	step := int64(1)
+	load, store := ppc.ALBZ, ppc.ASTB
+	if v.Aux.(*types.Type).Alignment() >= 4 {
+		step, load, store = 4, ppc.ALWZ, ppc.ASTW
+	}
+	moving := v.Op == ssa.OpPPCLoweredMove
+	access := func(off int64, ld, st obj.As) *obj.Prog {
+		r := int16(ppc.REG_R0)
+		var first *obj.Prog
+		if moving {
+			r = ppc.REG_R31
+			first = s.Prog(ld)
+			first.From = obj.Addr{Type: obj.TYPE_MEM, Reg: ppc.REG_R4, Offset: off}
+			first.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
+		}
+		p := s.Prog(st)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: r}
+		p.To = obj.Addr{Type: obj.TYPE_MEM, Reg: ppc.REG_R3, Offset: off}
+		if first == nil {
+			first = p
+		}
+		return first
+	}
+	advance := func(r int16) {
+		p := s.Prog(ppc.AADDI)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: step}
+		p.Reg = r
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}
+	}
+	n := size / step
+	if size > 32 {
+		emitConst32(s, ppc.REG_R5, int32(n))
+		start := access(0, load, store)
+		advance(ppc.REG_R3)
+		if moving {
+			advance(ppc.REG_R4)
+		}
+		p := s.Prog(ppc.AADDI)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: -1}
+		p.Reg = ppc.REG_R5
+		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R5}
+		p = s.Prog(ppc.ACMPWI)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R5}
+		p.To = obj.Addr{Type: obj.TYPE_CONST}
+		localBranch(s, 4, 2).To.SetTarget(start)
+		for off := int64(0); off < size%step; off++ {
+			access(off, ppc.ALBZ, ppc.ASTB)
+		}
+		return
+	}
+	for off := int64(0); off < n*step; off += step {
+		access(off, load, store)
+	}
+	for off := n * step; off < size; off++ {
+		access(off, ppc.ALBZ, ppc.ASTB)
+	}
+}
+
 // reg2 and reg3 emit a two- and a three-register form in the operand convention
 // obj/ppc's assembler reads back (obj/ppc/link.go): To=rd, From=ra, Reg=rb.
 func reg2(s *ssagen.State, as obj.As, rd, ra int16) {
@@ -262,8 +381,10 @@ func storeByType(t *types.Type) obj.As {
 // their 16-bit immediate, so a constant that does not fit needs the addis/ori
 // pair. ori combines unsigned low bits: unlike addi, it needs no high-half bias.
 func emitMOVWconst(s *ssagen.State, v *ssa.Value) {
-	c := int32(v.AuxInt)
-	r := v.Reg()
+	emitConst32(s, v.Reg(), int32(v.AuxInt))
+}
+
+func emitConst32(s *ssagen.State, r int16, c int32) {
 	if c >= -32768 && c <= 32767 {
 		p := s.Prog(ppc.AADDI)
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}

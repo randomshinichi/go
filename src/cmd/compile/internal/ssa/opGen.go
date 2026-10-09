@@ -4964,6 +4964,9 @@ const (
 	OpPPCMULHW
 	OpPPCMULHWU
 	OpPPCMULLU
+	OpPPCDIVW
+	OpPPCDIVWU
+	OpPPCROTLW
 	OpPPCNEG
 	OpPPCAND
 	OpPPCOR
@@ -4991,6 +4994,11 @@ const (
 	OpPPCLessEqual
 	OpPPCGreaterThan
 	OpPPCGreaterEqual
+	OpPPCLoweredWB
+	OpPPCLoweredPanicBounds
+	OpPPCLoweredPanicExtend
+	OpPPCLoweredZero
+	OpPPCLoweredMove
 	OpPPCLoweredNilCheck
 	OpPPCLoweredGetClosurePtr
 	OpPPCLoweredGetCallerSP
@@ -76490,6 +76498,49 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:         "DIVW",
+		argLen:       2,
+		clobberFlags: true,
+		asm:          ppc.ADIVW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+				{1, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:   "DIVWU",
+		argLen: 2,
+		asm:    ppc.ADIVWU,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+				{1, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:   "ROTLW",
+		argLen: 2,
+		asm:    ppc.AROTLW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+				{1, 1073741816}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29 g
+			},
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
 		name:   "NEG",
 		argLen: 1,
 		asm:    ppc.ANEG,
@@ -76784,6 +76835,70 @@ var opcodeTable = [...]opInfo{
 			outputs: []outputInfo{
 				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
 			},
+		},
+	},
+	{
+		name:         "LoweredWB",
+		auxType:      auxInt64,
+		argLen:       1,
+		clobberFlags: true,
+		reg: regInfo{
+			clobbers: 9223372035781427200, // R18 R19 R31 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31
+			outputs: []outputInfo{
+				{0, 268435456}, // R29
+			},
+		},
+	},
+	{
+		name:         "LoweredPanicBounds",
+		auxType:      auxInt64,
+		argLen:       3,
+		clobberFlags: true,
+		call:         true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1016}, // R3 R4 R5 R6 R7 R8 R9
+				{1, 1016}, // R3 R4 R5 R6 R7 R8 R9
+			},
+		},
+	},
+	{
+		name:         "LoweredPanicExtend",
+		auxType:      auxInt64,
+		argLen:       4,
+		clobberFlags: true,
+		call:         true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 120},  // R3 R4 R5 R6
+				{1, 120},  // R3 R4 R5 R6
+				{2, 1016}, // R3 R4 R5 R6 R7 R8 R9
+			},
+		},
+	},
+	{
+		name:         "LoweredZero",
+		auxType:      auxTypSize,
+		argLen:       2,
+		clobberFlags: true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 8}, // R3
+			},
+			clobbers: 40, // R3 R5
+		},
+	},
+	{
+		name:         "LoweredMove",
+		auxType:      auxTypSize,
+		argLen:       3,
+		clobberFlags: true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 8},  // R3
+				{1, 16}, // R4
+			},
+			clobbers: 1073741880, // R3 R4 R5 R31
 		},
 	},
 	{
