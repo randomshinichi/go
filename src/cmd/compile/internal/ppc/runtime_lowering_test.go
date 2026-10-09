@@ -42,6 +42,8 @@ func explicitnil(p *[8192]byte) byte { return p[4096] }
 func complement(x uint32) uint32 { return ^x }
 //go:nosplit
 func smallcompare(x, y uint32) bool { return int8(x) < int8(y) }
+//go:noinline
+func zeroAggregate(p *[17]uint32) { *p = [17]uint32{} }
 `
 
 func compileRuntimeIntegers(t *testing.T, dir string) string {
@@ -62,7 +64,7 @@ func compileRuntimeIntegers(t *testing.T, dir string) string {
 
 func TestRuntimeIntegerLowering(t *testing.T) {
 	out := compileRuntimeIntegers(t, t.TempDir())
-	for _, name := range []string{"shl", "shr", "sar", "compare", "small", "signedbyte", "constant", "explicitnil", "complement", "smallcompare"} {
+	for _, name := range []string{"shl", "shr", "sar", "compare", "small", "signedbyte", "constant", "explicitnil", "complement", "smallcompare", "zeroAggregate"} {
 		if len(emittedWords(t, out, "main."+name)) == 0 {
 			t.Errorf("no machine instructions for %s", name)
 		}
@@ -71,6 +73,23 @@ func TestRuntimeIntegerLowering(t *testing.T) {
 	// protected zero page); it must first touch the original pointer.
 	if !strings.Contains(out, "LBZ\t(R3), R31") && !strings.Contains(out, "LBZ\t(R4), R31") {
 		t.Fatalf("explicit nil check did not emit a faulting byte load:\n%s", out)
+	}
+	start := strings.Index(out, "main.zeroAggregate STEXT")
+	if start < 0 {
+		t.Fatal("no machine instructions for zeroAggregate")
+	}
+	end := strings.Index(out[start+len("main.zeroAggregate STEXT"):], "\nmain.")
+	if end >= 0 {
+		end += start + len("main.zeroAggregate STEXT")
+	} else {
+		end = len(out)
+	}
+	zero := out[start:end]
+	if !strings.Contains(zero, "ADDI\t$0, R0, R31") || !strings.Contains(zero, "STW\tR31,") {
+		t.Fatalf("LoweredZero did not materialize zero in R31 before stores:\n%s", zero)
+	}
+	if strings.Contains(zero, "STW\tR0, (R3)") {
+		t.Fatalf("LoweredZero still stores from assumed-zero R0:\n%s", zero)
 	}
 }
 

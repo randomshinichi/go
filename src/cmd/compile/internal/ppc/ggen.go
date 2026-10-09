@@ -12,14 +12,16 @@ import (
 	"cmd/internal/obj/ppc"
 )
 
-// zerorange zeroes cnt bytes starting at SP+FixedFrameSize+off. Go keeps
-// R0's contents zero (stores read RS, not the special RA=0 address field).
-// obj/ppc restores that invariant after using R0 to save LR. PadFrame runs
-// before these offsets are computed, so allocation padding cannot move them.
+// zerorange zeroes cnt bytes starting at SP+FixedFrameSize+off. R0 is
+// initialized explicitly here because preceding calls may have clobbered it.
+// PadFrame runs before these offsets are computed, so allocation padding
+// cannot move them.
 func zerorange(pp *objw.Progs, p *obj.Prog, off, cnt int64, _ *uint32) *obj.Prog {
 	if cnt == 0 {
 		return p
 	}
+	p = pp.Append(p, ppc.AADDI, obj.TYPE_CONST, 0, 0, obj.TYPE_REG, ppc.REG_R0, 0)
+	p.Reg = ppc.REG_R0
 	for i := int64(0); i < cnt; i += int64(types.PtrSize) {
 		p = pp.Append(p, ppc.ASTW, obj.TYPE_REG, ppc.REG_R0, 0, obj.TYPE_MEM, ppc.REGSP, base.Ctxt.Arch.FixedFrameSize+off+i)
 	}
