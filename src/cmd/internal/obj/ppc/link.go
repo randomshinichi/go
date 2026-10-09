@@ -192,8 +192,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 		}
 		if isSymbolAddress(q) {
 			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 8, Type: objabi.R_ADDRPOWER, Sym: q.From.Sym, Add: q.From.Offset})
-		} else if (q.As == obj.ACALL || q.As == ABL || q.As == AB) && q.To.Sym != nil {
-			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 4, Type: objabi.R_CALLPOWER, Sym: q.To.Sym, Add: q.To.Offset})
+		} else if (q.As == obj.ACALL || q.As == ABL || q.As == AB || q.As == obj.AJMP) && symOperand(q) != nil {
+			target := symOperand(q)
+			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 4, Type: objabi.R_CALLPOWER, Sym: target.Sym, Add: target.Offset})
 		}
 		words = append(words, w...)
 	}
@@ -408,21 +409,34 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		}
 		return bad(fmt.Errorf("%v: direct call needs an external symbol or local BL target", p))
 
-	case AB, ABC:
-		if p.As == AB && p.To.Sym != nil &&
-			(p.To.Type == obj.TYPE_BRANCH || (p.To.Type == obj.TYPE_MEM && (p.To.Name == obj.NAME_EXTERN || p.To.Name == obj.NAME_STATIC))) {
-			if p.To.Offset&3 != 0 {
+	case obj.AJMP, AB, ABC:
+		target := &p.To
+		if p.As == obj.AJMP && p.To.Type == obj.TYPE_NONE {
+			target = &p.From // generic asm represents JMP's symbol in From
+		}
+		if (p.As == obj.AJMP || p.As == AB) && target.Sym != nil &&
+			(target.Type == obj.TYPE_BRANCH || (target.Type == obj.TYPE_MEM && (target.Name == obj.NAME_EXTERN || target.Name == obj.NAME_STATIC))) {
+			if target.Offset&3 != 0 {
 				return bad(fmt.Errorf("%v: unaligned tail branch addend", p))
 			}
-			// R_CALLPOWER also relocates non-linking branches on ppc64.
-			return emit(0)
+			// JMP's generic assembler Prog lowers to the same non-linking
+			// relative branch as AB. R_CALLPOWER resolves the symbolic target.
+			enc, err := Encode(AB, 0)
+			if err != nil {
+				return bad(err)
+			}
+			return []uint32{enc}, true
 		}
-		if p.To.Type != obj.TYPE_BRANCH || p.To.Target() == nil {
+		if target.Type != obj.TYPE_BRANCH || target.Target() == nil {
 			return bad(fmt.Errorf("%v: %v has no local branch target", p, Mnemonic(Inst(p.As))))
 		}
-		disp := p.To.Target().Pc - p.Pc
-		if p.As == AB {
-			return emit(int32(disp))
+		disp := target.Target().Pc - p.Pc
+		if p.As == obj.AJMP || p.As == AB {
+			enc, err := Encode(AB, int32(disp))
+			if err != nil {
+				return bad(err)
+			}
+			return []uint32{enc}, true
 		}
 		return emit(int32(p.From.Offset), int32(p.Reg), int32(disp))
 

@@ -428,15 +428,6 @@ func slicecopy(toPtr unsafe.Pointer, toLen int, fromPtr unsafe.Pointer, fromLen 
 	return n
 }
 
-//go:linkname bytealg_MakeNoZero internal/bytealg.MakeNoZero
-func bytealg_MakeNoZero(len int) []byte {
-	if uintptr(len) > maxAlloc {
-		panicmakeslicelen()
-	}
-	cap := roundupsize(uintptr(len), true)
-	return unsafe.Slice((*byte)(mallocgc(cap, nil, false)), cap)[:len]
-}
-
 // moveSlice copies the input slice to the heap and returns it.
 // et is the element type of the slice.
 func moveSlice(et *_type, old unsafe.Pointer, len, cap int) (unsafe.Pointer, int, int) {
