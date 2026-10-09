@@ -57,9 +57,13 @@ func (c *sigctxt) preparePanic(sig uint32, gp *g) {
 }
 
 func (c *sigctxt) pushCall(targetPC, resumePC uintptr) {
-	sp := c.sp() - sys.MinFrameSize
+	// Reserve a 32-byte, 16-byte-aligned caller area. The first 24 bytes are
+	// Darwin's fixed frame; the extra words preserve PIC state across the call.
+	sp := c.sp() - (sys.MinFrameSize + 8)
 	c.set_sp(sp)
 	*(*uint32)(unsafe.Pointer(sp)) = uint32(c.link())
+	*(*uint32)(unsafe.Pointer(sp + sys.MinFrameSize)) = c.regs().gpr[2]
+	*(*uint32)(unsafe.Pointer(sp + sys.MinFrameSize + 4)) = c.regs().gpr[12]
 	c.set_link(resumePC)
 	c.regs().gpr[12] = uint32(targetPC)
 	c.set_pc(targetPC)

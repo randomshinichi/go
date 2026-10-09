@@ -459,8 +459,18 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 	case ASYNC, AISYNC:
 		return emit()
 
-	case AMFLR:
+	case AMFCR, AMFCTR:
+		if p.From.Type == obj.TYPE_REG {
+			return emit(ra())
+		}
 		return emit(rd())
+	case AMFLR:
+		if p.To.Type == obj.TYPE_REG {
+			return emit(rd()) // linker-generated prologue
+		}
+		return emit(ra())
+	case AMTCRF:
+		return emit(int32(p.From.Offset), int32(p.To.Reg-REG_R0))
 	case AMTLR, AMTCTR:
 		return emit(ra())
 	case ABLR, ABLRL, ABCTR, ABCTRL:
