@@ -210,11 +210,13 @@ mcall_switch:
 
 // systemstack_switch is the synthetic frame used when a goroutine stack is
 // scanned while systemstack is running on g0.
-TEXT runtime·systemstack_switch(SB), NOSPLIT|NOFRAME, $0-0
+TEXT runtime·systemstack_switch(SB), NOSPLIT, $0-0
+	BL runtime·abort(SB) // Non-leaf, with the same linkage frame as systemstack.
 	RET
 
 TEXT runtime·gosave_systemstack_switch(SB), NOSPLIT|NOFRAME, $0-0
-	MFLR R5
+	ADDI $runtime·systemstack_switch(SB), R5
+	ADDI R5, R5, $16 // Past the non-leaf prologue, as on PPC64.
 	STW R5, (g_sched+gobuf_pc)(R30)
 	STW R1, (g_sched+gobuf_sp)(R30)
 	STW R0, (g_sched+gobuf_lr)(R30)
@@ -228,12 +230,12 @@ TEXT runtime·systemstack(SB), NOSPLIT, $0-4
 	LWZ R16, g_m(R30)
 	LWZ R17, m_gsignal(R16)
 	CMPW R17, R30
-	BC 12, 2, systemstack_checkg0
+	BC 4, 2, systemstack_checkg0
 	B systemstack_noswitch
 systemstack_checkg0:
 	LWZ R17, m_g0(R16)
 	CMPW R17, R30
-	BC 12, 2, systemstack_checkcurg
+	BC 4, 2, systemstack_checkcurg
 	B systemstack_noswitch
 systemstack_checkcurg:
 	LWZ R17, m_curg(R16)
@@ -250,8 +252,15 @@ systemstack_noswitch:
 	LWZ R12, 0(R14)
 	MTCTR R12
 	BCTRL
-	LWZ R30, 24(R1)
+	LWZ R15, 24(R1)
+	CMPW R15, R30
+	BC 12, 2, systemstack_restore_noswitch
+	OR R30, R15, R15
+	// A stack copy may have moved the suspended goroutine's stack.
+	LWZ R1, (g_sched+gobuf_sp)(R30)
 	STW R0, (g_sched+gobuf_sp)(R30)
+	RET
+systemstack_restore_noswitch:
 	LWZ R1, 28(R1)
 	RET
 systemstack_bad:
