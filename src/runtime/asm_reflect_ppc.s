@@ -71,6 +71,7 @@ TEXT NAME(SB), WRAPPER|NOSPLIT|NOFRAME, $0-0; \
 	LWZ R5, 8(R1); \
 	BL runtime·morestack(SB); \
 stackok: \
+	ADDI R0, R0, $0; \
 	ADDIS R4, R0, $HIGH; \
 	ADDI R4, R4, $LOW; \
 	SUBF R4, R4, R0; \
@@ -148,8 +149,8 @@ CALLFN(runtime·call268435456, 4096, 32)
 CALLFN(runtime·call536870912, 8192, 32)
 CALLFN(runtime·call1073741824, 16384, 32)
 
-// callRet packages register values into the ABI0 argument area for the
-// nosplit runtime.reflectcallmove helper.
+// callRet packages arguments into the ABI0 area for reflectcallmove.
+// PPC32 has no ABI register arguments or returns, so RegArgs is nil.
 TEXT runtime·callRet(SB), NOSPLIT, $20-0
 	NO_LOCAL_POINTERS
 	STW R7, PPC32_FIXED_FRAME+0(R1)
