@@ -151,6 +151,8 @@ func init() {
 		gpstore        = regInfo{inputs: []regMask{gpspsb, gp, 0}}
 		fp01           = regInfo{outputs: []regMask{fp}}
 		fp11           = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
+		fp21           = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
+		fp2cr          = regInfo{inputs: []regMask{fp, fp}}
 		fpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{fp}}
 		fpstore        = regInfo{inputs: []regMask{gpspsb, fp, 0}}
 	)
@@ -161,6 +163,17 @@ func init() {
 		{name: "FMOVSconst", reg: fp01, aux: "Float64", typ: "Float32"},
 		{name: "FMOVDconst", reg: fp01, aux: "Float64", typ: "Float64"},
 		{name: "FMR", argLength: 1, reg: fp11, asm: "FMR"},
+		{name: "FADD", argLength: 2, reg: fp21, asm: "FADD"},
+		{name: "FADDS", argLength: 2, reg: fp21, asm: "FADDS"},
+		{name: "FSUB", argLength: 2, reg: fp21, asm: "FSUB"},
+		{name: "FSUBS", argLength: 2, reg: fp21, asm: "FSUBS"},
+		{name: "FMUL", argLength: 2, reg: fp21, asm: "FMUL"},
+		{name: "FMULS", argLength: 2, reg: fp21, asm: "FMULS"},
+		{name: "FDIV", argLength: 2, reg: fp21, asm: "FDIV"},
+		{name: "FDIVS", argLength: 2, reg: fp21, asm: "FDIVS"},
+		{name: "FNEG", argLength: 1, reg: fp11, asm: "FNEG"},
+		{name: "FCMPU", argLength: 2, reg: fp2cr, asm: "FCMPU", typ: "Flags"},
+		{name: "FLessEqual", argLength: 1, reg: gp01, typ: "Bool"},
 		{name: "FRSP", argLength: 1, reg: fp11, asm: "FRSP"},
 		{name: "FMOVSload", argLength: 2, reg: fpload, aux: "SymOff", typ: "Float32", faultOnNilArg0: true, symEffect: "Read"},
 		{name: "FMOVDload", argLength: 2, reg: fpload, aux: "SymOff", typ: "Float64", faultOnNilArg0: true, symEffect: "Read"},
