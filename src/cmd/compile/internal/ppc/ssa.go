@@ -563,7 +563,9 @@ func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
 		}
 	}
 	switch kind {
-	case ssa.BlockPlain:
+	case ssa.BlockPlain, ssa.BlockDefer:
+		// BlockDefer's second successor is an SSA-only recover edge. The
+		// call's normal continuation is successor 0, as for a plain block.
 		if yes != next {
 			unconditional(yes)
 		}
