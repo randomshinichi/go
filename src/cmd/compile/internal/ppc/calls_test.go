@@ -33,8 +33,9 @@ func captured(x uint32) uint32 {
 //go:noinline
 //go:nosplit
 func nestedCaptured(x uint32) uint32 {
- f:=func() uint32 { return x }
- return nested(f)
+ inner:=func() uint32 { return x }
+ outer:=func() uint32 { return nested(inner) }
+ return invoke(outer)
 }
 type reader interface { Read() uint32 }
 //go:noinline
@@ -127,7 +128,7 @@ func TestIndirectAndTailCallsQEMU(t *testing.T) {
 		t.Fatalf("caller SP compile: %v\n%s", err, output)
 	}
 	dump += string(output)
-	functions := []string{"runtime.invoke", "runtime.nested", "runtime.captured", "runtime.captured.func1", "runtime.nestedCaptured", "runtime.nestedCaptured.func1", "runtime.inter", "runtime.method", "runtime.readG", "runtime.readGAfterCall", "internal/runtime/sys.callerSP", "runtime.(*tailEnd).Read", "runtime.(*tailFirst).Read", "runtime.(*tailOuter).Read"}
+	functions := []string{"runtime.invoke", "runtime.nested", "runtime.captured", "runtime.captured.func1", "runtime.nestedCaptured", "runtime.nestedCaptured.func1", "runtime.nestedCaptured.func2", "runtime.inter", "runtime.method", "runtime.readG", "runtime.readGAfterCall", "internal/runtime/sys.callerSP", "runtime.(*tailEnd).Read", "runtime.(*tailFirst).Read", "runtime.(*tailOuter).Read"}
 	labels := make(map[string]string)
 	for i, fn := range functions {
 		labels[fn] = fmt.Sprintf("fn_%d", i)
