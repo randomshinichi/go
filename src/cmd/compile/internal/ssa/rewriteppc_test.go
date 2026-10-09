@@ -11,6 +11,7 @@ package ssa
 // without producing it cannot be allowed to sit between the pair.
 
 import (
+	"fmt"
 	"testing"
 
 	"cmd/compile/internal/types"
@@ -63,6 +64,43 @@ func carryChainFunc(c *Conf) fun {
 // TestPPCLowerCarryChain checks that the residue lowers to the carry pair, that
 // the carry argument of the high word is the Flags value produced by the low
 // word, and that no generic op is left behind.
+func TestPPCLowerNarrowRotate(t *testing.T) {
+	for _, width := range []int{8, 16} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			c := testConfigPPC32(t)
+			valueType, rotateOp, store := c.config.Types.UInt8, OpRotateLeft8, OpPPCMOVBstore
+			if width == 16 {
+				valueType, rotateOp, store = c.config.Types.UInt16, OpRotateLeft16, OpPPCMOVHstore
+			}
+			f := c.Fun("entry",
+				Bloc("entry",
+					Valu("mem", OpInitMem, types.TypeMem, 0, nil),
+					Valu("x", OpArg, valueType, 0, nil),
+					Valu("k", OpArg, c.config.Types.Int32, 0, nil),
+					Valu("rot", rotateOp, valueType, 0, nil, "x", "k"),
+					Valu("sp", OpSP, c.config.Types.Uintptr, 0, nil),
+					Valu("off", OpOffPtr, types.NewPtr(valueType), 0, nil, "sp"),
+					Valu("st", store, types.TypeMem, 0, nil, "off", "rot", "mem"),
+					Exit("st")),
+			)
+			lower(f.f)
+			checkLower(f.f)
+			foundLeft, foundRight := false, false
+			for _, v := range f.blocks["entry"].Values {
+				if v.Op == OpPPCSLW {
+					foundLeft = true
+				}
+				if v.Op == OpPPCSRW {
+					foundRight = true
+				}
+			}
+			if !foundLeft || !foundRight {
+				t.Fatalf("RotateLeft%d lowered without both word shifts: left=%t right=%t", width, foundLeft, foundRight)
+			}
+		})
+	}
+}
+
 func TestPPCLowerCarryChain(t *testing.T) {
 	c := testConfigPPC32(t)
 	f := carryChainFunc(c)
