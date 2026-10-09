@@ -120,7 +120,11 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		branch := appendOp(p, ABC, obj.Addr{Type: obj.TYPE_CONST, Offset: 12}, obj.Addr{Type: obj.TYPE_BRANCH})
 		branch.Reg = 2
 		p = appendOp(branch, ALWZ, mem(8), reg(REG_R5))
-		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup("runtime.morestack")})
+		morestack := "runtime.morestack_noctxt"
+		if s.NeedCtxt() {
+			morestack = "runtime.morestack"
+		}
+		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup(morestack)})
 		done := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
 		branch.To.SetTarget(done)
 		p = done

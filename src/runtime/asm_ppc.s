@@ -63,6 +63,7 @@ TEXT runtime·gogo(SB), NOSPLIT|NOFRAME, $0-4
 	LWZ R31, gobuf_lr(R5)
 	LWZ R12, gobuf_pc(R5)
 	LWZ R30, gobuf_g(R5)
+	LWZ R11, gobuf_ctxt(R5)
 	STW R0, gobuf_sp(R5)
 	STW R0, gobuf_lr(R5)
 	STW R0, gobuf_ctxt(R5)
@@ -78,7 +79,7 @@ TEXT runtime·morestack(SB), NOSPLIT|NOFRAME, $0-0
 	STW R1, (g_sched+gobuf_sp)(R30)
 	STW R8, (g_sched+gobuf_pc)(R30)
 	STW R5, (g_sched+gobuf_lr)(R30)
-	STW R0, (g_sched+gobuf_ctxt)(R30)
+	STW R11, (g_sched+gobuf_ctxt)(R30)
 	LWZ R7, g_m(R30)
 	LWZ R8, m_g0(R7)
 	CMPW R30, R8
@@ -104,6 +105,7 @@ switchstack:
 	BL runtime·abort(SB)
 
 TEXT runtime·morestack_noctxt(SB), NOSPLIT|NOFRAME, $0-0
+	ADDI R11, R0, $0
 	B runtime·morestack(SB)
 
 // memmove handles overlapping ranges with byte copies. The target's baseline
