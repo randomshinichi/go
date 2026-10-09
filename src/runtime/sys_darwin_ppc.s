@@ -9,7 +9,7 @@
 
 // libc_error_trampoline stores the address of the thread's libc errno slot.
 TEXT runtime·libc_error_trampoline(SB), NOSPLIT, $8-0
-	OR	R14, R3, R3
+	LWZ	R14, 0(R3)
 	BL	libc_error(SB)
 	STW	R3, 0(R14)
 	RET
