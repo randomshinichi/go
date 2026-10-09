@@ -36,6 +36,7 @@ func TestIndirectCallAndTailFrames(t *testing.T) {
 				text.Link, mtctr.Link, call.Link = mtctr, call, ret
 			}
 			s := ctxt.Lookup("fixture")
+			s.Set(obj.AttrNoSplit, true)
 			s.NewFuncInfo().Text = text
 			preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
 			if text.To.Offset != tc.frame || s.Leaf() == tc.indirect {

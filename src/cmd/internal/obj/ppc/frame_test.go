@@ -34,6 +34,7 @@ func TestGoStackFrames(t *testing.T) {
 				load.Link = call
 			}
 			s := ctxt.Lookup("fixture")
+			s.Set(obj.AttrNoSplit, true)
 			s.NewFuncInfo().Text = text
 			preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
 			if s.Func().Args != 4 || s.Func().Locals != int32(tc.locals) || s.Leaf() == tc.call {
@@ -80,11 +81,35 @@ func TestGoStackFrames(t *testing.T) {
 	}
 }
 
+func TestStackGuardPrologue(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	s := ctxt.Lookup("split")
+	text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 4}}
+	text.Link = &obj.Prog{As: obj.ARET}
+	s.NewFuncInfo().Text = text
+	preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
+	var stackcheck, morestack, skipBranch bool
+	for p := text.Link; p != nil; p = p.Link {
+		if p.As == ABL && p.To.Sym != nil {
+			stackcheck = stackcheck || p.To.Sym.Name == "runtime.stackcheck"
+			morestack = morestack || p.To.Sym.Name == "runtime.morestack"
+		}
+		if p.As == ABC && p.From.Offset == 12 && p.Reg == 2 && p.To.Target() != nil {
+			skipBranch = true
+		}
+	}
+	if !stackcheck || !morestack || !skipBranch {
+		t.Fatalf("stack-split prologue missing check/call/skip: stackcheck=%v morestack=%v branch=%v", stackcheck, morestack, skipBranch)
+	}
+}
+
 func TestLargeFramePrologue(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	diagnosed := false
 	ctxt.DiagFunc = func(string, ...interface{}) { diagnosed = true }
 	s := ctxt.Lookup("large")
+	s.Set(obj.AttrNoSplit, true)
 	text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 32768}}
 	text.Link = &obj.Prog{As: obj.ARET}
 	s.NewFuncInfo().Text = text
