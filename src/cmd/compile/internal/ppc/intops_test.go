@@ -120,13 +120,18 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		width, countWidth int
 		signed            bool
 	}
-	for _, width := range []int{8, 16, 32} {
+	for _, width := range []int{8, 16, 32, 64} {
 		for _, signed := range []bool{false, true} {
 			for _, op := range []string{"lsh", "rsh"} {
 				for _, countWidth := range []int{8, 16, 32, 64} {
 					name := fmt.Sprintf("shift_%s_w%d_s%t_c%d", op, width, signed, countWidth)
 					valueType, resultType, valueExpr := "uint32", "uint32", "x"
-					if signed {
+					if width == 64 {
+						valueType, resultType = "uint64", "uint64"
+						if signed {
+							valueType, resultType = "int64", "int64"
+						}
+					} else if signed {
 						valueType, resultType = "int32", "int32"
 						if width < 32 {
 							valueExpr = fmt.Sprintf("int%d(x)", width)
@@ -189,7 +194,7 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	// Intrinsification is source-symbol based. Compile a real math/bits caller
 	// so this exercises the generic RotateLeft32 op, not a hand-emitted opcode.
 	rotateSrc := filepath.Join(dir, "rotate.go")
-	writePPCFixture(t, rotateSrc, []byte("package bits\nfunc RotateLeft32(x uint32, k int) uint32\n//go:nosplit\nfunc rotate8(x uint32,k int) uint32 { x8 := uint8(x); return uint32(x8<<uint(k&7) | x8>>uint((-k)&7)) }\n//go:nosplit\nfunc rotate16(x uint32,k int) uint32 { x16 := uint16(x); return uint32(x16<<uint(k&15) | x16>>uint((-k)&15)) }\n//go:nosplit\nfunc rotate(x uint32,k int) uint32 { return RotateLeft32(x,k) }\n"), 0644)
+	writePPCFixture(t, rotateSrc, []byte("package bits\nfunc RotateLeft32(x uint32, k int) uint32\n//go:nosplit\nfunc rotate8(x uint32,k int) uint32 { x8 := uint8(x); return uint32(x8<<uint(k&7) | x8>>uint((-k)&7)) }\n//go:nosplit\nfunc rotate16(x uint32,k int) uint32 { x16 := uint16(x); return uint32(x16<<uint(k&15) | x16>>uint((-k)&15)) }\n//go:nosplit\nfunc rotate64(x uint64,k int) uint64 { return x<<uint(k&63) | x>>uint((-k)&63) }\n//go:nosplit\nfunc rotate(x uint32,k int) uint32 { return RotateLeft32(x,k) }\n"), 0644)
 	cmd = exec.Command(testenv.GoToolPath(t), "tool", "compile", "-p", "math/bits", "-d=ssa/check/on", "-S", "-o", filepath.Join(dir, "rotate.o"), rotateSrc)
 	cmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=ppc")
 	output, err = cmd.CombinedOutput()
@@ -530,39 +535,60 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	// count widths. The out-of-range vectors catch PPC's masked-count behavior;
 	// high input bits make narrow zero/sign extension observable after widening.
 	for _, tc := range shiftMatrix {
-		input := uint32(0xfedcba98)
+		input := uint64(0xfedcba9876543210)
+		if tc.width < 64 {
+			input = 0xfedcba98
+		}
 		mask := uint64(1)<<tc.width - 1
 		counts := []uint64{0, uint64(tc.width - 1), uint64(tc.width), uint64(tc.width + 1), 64}
 		for _, count := range counts {
-			var want uint32
-			value := uint64(input) & mask
+			value := input & mask
+			var want uint64
 			if tc.op == "lsh" {
 				value = (value << count) & mask
-			} else if tc.signed && value&(uint64(1)<<(tc.width-1)) != 0 {
-				want = uint32(int32(int64(int32(value|^mask)) >> count))
+			} else if tc.signed {
+				if value&(uint64(1)<<(tc.width-1)) != 0 && tc.width < 64 {
+					value |= ^mask
+				}
+				value = uint64(int64(value) >> count)
 			} else {
 				value >>= count
 			}
-			if tc.op == "lsh" || !tc.signed || value&(uint64(1)<<(tc.width-1)) == 0 {
-				want = uint32(value)
-				if tc.signed && want&(1<<(tc.width-1)) != 0 {
-					want |= uint32(^mask)
-				}
+			if tc.op == "lsh" && tc.signed && tc.width < 64 && value&(uint64(1)<<(tc.width-1)) != 0 {
+				value |= ^mask
 			}
+			want = value
 			countArg := uint32(count)
 			if tc.countWidth == 8 || tc.countWidth == 16 {
 				countArg <<= 32 - tc.countWidth
 			}
-			setup := stackWords(input, countArg)
-			if tc.countWidth == 64 {
-				setup = stackWords(input, uint32(count>>32)) + storeWord(32, uint32(count))
+			var setup, check string
+			if tc.width < 64 {
+				setup = stackWords(uint32(input), countArg)
+				resultOffset := 32
+				if tc.countWidth == 64 {
+					setup = stackWords(uint32(input), uint32(count>>32)) + storeWord(32, uint32(count))
+					resultOffset = 36
+				}
+				check = fmt.Sprintf("lwz 3,%d(1)\n", resultOffset) + checkReg(3, uint32(want))
+			} else {
+				setup = storeWord(24, uint32(input>>32)) + storeWord(28, uint32(input)) + storeWord(32, countArg)
+				resultOffset := 36
+				if tc.countWidth == 64 {
+					setup = storeWord(24, uint32(input>>32)) + storeWord(28, uint32(input)) + storeWord(32, uint32(count>>32)) + storeWord(36, uint32(count))
+					resultOffset = 40
+				}
+				check = fmt.Sprintf("lwz 3,%d(1)\n", resultOffset) + checkReg(3, uint32(want>>32)) + fmt.Sprintf("lwz 3,%d(1)\n", resultOffset+4) + checkReg(3, uint32(want))
 			}
-			resultOffset := 32
-			if tc.countWidth == 64 {
-				resultOffset = 36
-			}
-			run(fmt.Sprintf("%s-count-%d", tc.name, count), "main."+tc.name, setup, fmt.Sprintf("lwz 3,%d(1)\n", resultOffset)+checkReg(3, want), "", 0)
+			run(fmt.Sprintf("%s-count-%d", tc.name, count), "main."+tc.name, setup, check, "", 0)
 		}
+	}
+	for _, k := range []int{-1, 0, 63, 64, 65} {
+		input := uint64(0xfedcba9876543210)
+		want := bits.RotateLeft64(input, k)
+		setup := storeWord(24, uint32(input>>32)) + storeWord(28, uint32(input)) + storeWord(32, uint32(k))
+		check := "lwz 3,36(1)\n" + checkReg(3, uint32(want>>32)) + "lwz 3,40(1)\n" + checkReg(3, uint32(want))
+		run(fmt.Sprintf("rotate64-%d", k), "math/bits.rotate64", setup, check, "", 0)
 	}
 	censusPPCObjects(t, dir, "ints.o", "rotate.o", "panic.o")
 }
