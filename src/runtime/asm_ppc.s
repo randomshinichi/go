@@ -97,7 +97,9 @@ switchstack:
 	STW R30, (m_morebuf+gobuf_g)(R7)
 	LWZ R30, m_g0(R7)
 	LWZ R1, (g_sched+gobuf_sp)(R30)
-	STWU R1, -24(R1)
+	// Reserve the 24-byte ABI0 linkage frame plus 8 bytes of padding so SP
+	// remains 16-byte aligned at the call to newstack.
+	STWU R1, -32(R1)
 	BL runtime·newstack(SB)
 	BL runtime·abort(SB)
 
