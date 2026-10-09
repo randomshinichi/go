@@ -47,8 +47,8 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		return
 	}
 	locals := text.To.Offset
-	if locals < 0 || locals > 32752 {
-		ctxt.Diag("ppc32: TEXT frame size %d outside supported D-form frame range", locals)
+	if locals < 0 || locals > int64(^uint32(0)>>1)-ctxt.Arch.FixedFrameSize-15 {
+		ctxt.Diag("ppc32: TEXT frame size %d exceeds the supported 32-bit stack range", locals)
 		return
 	}
 	leaf := true
@@ -62,10 +62,8 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	if locals != 0 || !leaf {
 		frame = (locals + ctxt.Arch.FixedFrameSize + 15) &^ 15
 	}
-	// Stack operands currently use signed D-form displacements; refuse a
-	// larger frame rather than truncate its allocation or unwind metadata.
-	if frame > 32752 {
-		ctxt.Diag("ppc32: frame %d exceeds supported D-form frame range", frame)
+	if frame > int64(^uint32(0)>>1) {
+		ctxt.Diag("ppc32: frame %d exceeds the supported 32-bit stack range", frame)
 		return
 	}
 	if s.NoFrame() && frame != 0 {
@@ -86,6 +84,13 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		q.As, q.From, q.To = as, from, to
 		return q
 	}
+	appendFrameConst := func(p *obj.Prog, value int64, scratch int16) *obj.Prog {
+		p = appendOp(p, AADDIS, obj.Addr{Type: obj.TYPE_CONST, Offset: (value + 0x8000) >> 16}, reg(scratch))
+		p.Reg = REG_R0
+		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: int64(int16(value))}, reg(scratch))
+		p.Reg = scratch
+		return p
+	}
 	p := text
 	if !leaf {
 		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
@@ -96,16 +101,36 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p.Reg = REG_R0
 	}
 	if frame != 0 {
-		p = appendOp(p, ASTWU, reg(REGSP), mem(-frame))
+		if frame <= 32752 {
+			p = appendOp(p, ASTWU, reg(REGSP), mem(-frame))
+		} else {
+			p = appendFrameConst(p, -frame, REG_R31)
+			p = appendOp(p, ASTWUX, reg(REGSP), obj.Addr{Type: obj.TYPE_MEM, Reg: REGSP})
+			p.Reg = REG_R31
+		}
 		p.Spadj = int32(frame)
 	}
 	for p := text.Link; p != nil; p = p.Link {
 		if p.As == obj.AGETCALLERPC {
 			if leaf {
 				p.As = AMFLR
-			} else {
+			} else if frame <= 32752 {
 				p.As = ALWZ
 				p.From = mem(frame + 8) // saved LR in caller's linkage area
+			} else {
+				// Materialize SP+frame+8 because the linkage-area slot is
+				// outside D-form reach for a large local frame.
+				ret := p.To
+				p.As = AADDIS
+				p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: (frame + 8 + 0x8000) >> 16}
+				p.Reg = REG_R0
+				p.To = reg(REG_R31)
+				q := appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: int64(int16(frame + 8))}, reg(REG_R31))
+				q.Reg = REG_R31
+				q = appendOp(q, AADD, reg(REG_R31), reg(REGSP))
+				q.Reg = REG_R31
+				q = appendOp(q, ALWZ, obj.Addr{Type: obj.TYPE_MEM, Reg: REG_R31, Offset: 8}, ret)
+				p = q
 			}
 		}
 		if p.As != ABLR && p.As != obj.ARET {
@@ -131,9 +156,19 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			continue
 		}
 		// Rewrite in place so branches to a return also execute its epilogue.
-		p.As, p.From, p.To = AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REGSP)
-		p.Reg = REGSP
-		p.Spadj = -int32(frame)
+		var stackAdj *obj.Prog
+		if frame <= 32752 {
+			p.As, p.From, p.To = AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REGSP)
+			p.Reg = REGSP
+			stackAdj = p
+		} else {
+			p = appendFrameConst(p, frame, REG_R31)
+			q := appendOp(p, AADD, reg(REGSP), reg(REGSP))
+			q.Reg = REG_R31
+			stackAdj = q
+			p = q
+		}
+		stackAdj.Spadj = -int32(frame)
 		if !leaf {
 			p = appendOp(p, ALWZ, mem(8), reg(REG_R31))
 			p = appendOp(p, AMTLR, reg(REG_R31), obj.Addr{})
@@ -295,6 +330,9 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 	case ASTWCX_:
 		return emit(int32(p.From.Reg-REG_R0), int32(p.To.Reg-REG_R0), rb())
 
+	case ASTWX, ASTWUX:
+		return emit(int32(p.From.Reg-REG_R0), int32(p.To.Reg-REG_R0), rb())
+
 	case AADD, AADDC, AADDE, ASUBF, ASUBFC, ASUBFE,
 		AMULLW, AMULHW, AMULHWU, ADIVW, ADIVWU,
 		AAND, AANDC, AOR, AORC, AXOR, ANAND, ANOR, AEQV,
@@ -352,7 +390,26 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if p.As == ALFS || p.As == ALFD {
 			dest = int32(p.To.Reg - REG_F0)
 		}
-		return emit(dest, int32(d), base)
+		if d >= -32768 && d <= 32767 {
+			return emit(dest, int32(d), base)
+		}
+		hi, err := Encode(AADDIS, int32(REG_R31-REG_R0), base, int32((d+0x8000)>>16))
+		if err != nil {
+			return bad(err)
+		}
+		lo, err := Encode(AADDI, int32(REG_R31-REG_R0), int32(REG_R31-REG_R0), int32(int16(d)))
+		if err != nil {
+			return bad(err)
+		}
+		add, err := Encode(AADD, int32(REG_R31-REG_R0), base, int32(REG_R31-REG_R0))
+		if err != nil {
+			return bad(err)
+		}
+		mem, err := Encode(Inst(p.As), dest, 0, int32(REG_R31-REG_R0))
+		if err != nil {
+			return bad(err)
+		}
+		return []uint32{hi, lo, add, mem}, true
 
 	// Stores: To=d(ra), From=rs.
 	case ASTW, ASTWU, ASTB, ASTH, ASTFS, ASTFD:
@@ -371,7 +428,26 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if p.As == ASTFS || p.As == ASTFD {
 			src = int32(p.From.Reg - REG_F0)
 		}
-		return emit(src, int32(d), int32(base))
+		if d >= -32768 && d <= 32767 {
+			return emit(src, int32(d), int32(base))
+		}
+		hi, err := Encode(AADDIS, int32(REG_R31-REG_R0), int32(base), int32((d+0x8000)>>16))
+		if err != nil {
+			return bad(err)
+		}
+		lo, err := Encode(AADDI, int32(REG_R31-REG_R0), int32(REG_R31-REG_R0), int32(int16(d)))
+		if err != nil {
+			return bad(err)
+		}
+		add, err := Encode(AADD, int32(REG_R31-REG_R0), int32(base), int32(REG_R31-REG_R0))
+		if err != nil {
+			return bad(err)
+		}
+		mem, err := Encode(Inst(p.As), src, 0, int32(REG_R31-REG_R0))
+		if err != nil {
+			return bad(err)
+		}
+		return []uint32{hi, lo, add, mem}, true
 
 	// All integer comparisons target CR0. Unlike a three-GPR operation,
 	// From and To are the two inputs, not a source and a destination.
