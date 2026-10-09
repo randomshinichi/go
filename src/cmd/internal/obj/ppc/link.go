@@ -58,6 +58,11 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			leaf = false
 		}
 	}
+	// A split-capable function with locals calls the stack guard helper before
+	// allocating its frame, so its incoming link register must be saved too.
+	if locals != 0 && !s.NoSplit() {
+		leaf = false
+	}
 	frame := int64(0)
 	if locals != 0 || !leaf {
 		frame = (locals + ctxt.Arch.FixedFrameSize + 15) &^ 15
@@ -66,9 +71,12 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		ctxt.Diag("ppc32: frame %d exceeds the supported 32-bit stack range", frame)
 		return
 	}
-	if s.NoFrame() && frame != 0 {
-		ctxt.Diag("ppc32: NOFRAME function requires an allocated frame")
-		return
+	if s.NoFrame() {
+		if locals != 0 {
+			ctxt.Diag("ppc32: NOFRAME function requires zero locals")
+			return
+		}
+		frame = 0 // assembly manages SP and LR itself, even if it calls.
 	}
 	s.Func().Locals = int32(locals)
 	if args, ok := text.To.Val.(int32); ok {
@@ -99,6 +107,23 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Go treats R0 as zero for stores (not merely the RA=0 address rule).
 		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
 		p.Reg = REG_R0
+	}
+	if frame != 0 && !s.NoSplit() {
+		if frame <= 32752 {
+			p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REG_R3))
+			p.Reg = REG_R0
+		} else {
+			p = appendFrameConst(p, frame, REG_R3)
+		}
+		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup("runtime.stackcheck")})
+		p = appendOp(p, ACMPWI, reg(REG_R3), obj.Addr{Type: obj.TYPE_CONST})
+		branch := appendOp(p, ABC, obj.Addr{Type: obj.TYPE_CONST, Offset: 12}, obj.Addr{Type: obj.TYPE_BRANCH})
+		branch.Reg = 2
+		p = appendOp(branch, ALWZ, mem(8), reg(REG_R5))
+		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup("runtime.morestack")})
+		done := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
+		branch.To.SetTarget(done)
+		p = done
 	}
 	if frame != 0 {
 		if frame <= 32752 {
