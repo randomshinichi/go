@@ -50,6 +50,25 @@ func TestAssembleSymbolAddressAndCall(t *testing.T) {
 }
 
 // clang: cmpw 3,4; cmplw 3,4; cmpwi 3,-1; cmplwi 3,65535.
+func TestAssembleSymbolJMP(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	target := ctxt.Lookup("target")
+	text := &obj.Prog{As: obj.ATEXT}
+	jump := &obj.Prog{As: obj.AJMP, From: obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: target}}
+	text.Link = jump
+	s := ctxt.Lookup("fixture")
+	s.NewFuncInfo().Text = text
+	assemble(ctxt, s, nil)
+	if s.Size != 4 || binary.BigEndian.Uint32(s.P) != 0x48000000 {
+		t.Fatalf("JMP encoding = % x, want 48 00 00 00 (b target)", s.P)
+	}
+	want := []obj.Reloc{{Off: 0, Siz: 4, Type: objabi.R_CALLPOWER, Sym: target}}
+	if !reflect.DeepEqual(s.R, want) {
+		t.Fatalf("JMP relocations = %+v, want %+v", s.R, want)
+	}
+}
+
 func TestEncodeCompareProgs(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
