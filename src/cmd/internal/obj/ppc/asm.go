@@ -194,6 +194,7 @@ var forms = []form{
 	{op: AFCMPO, mnem: "fcmpo", base: 0xFC000040, spec: "bf,fra,frb"},
 	{op: ASYNC, mnem: "sync", base: 0x7C0004AC, spec: ""},
 	{op: AISYNC, mnem: "isync", base: 0x4C00012C, spec: ""},
+	{op: ASC, mnem: "sc", base: 0x44000002, spec: ""},
 }
 
 var formByOp = map[Inst]*form{}

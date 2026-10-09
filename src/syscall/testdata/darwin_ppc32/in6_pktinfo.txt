@@ -1,0 +1,3 @@
+sizeof(struct in6_pktinfo)=20
+offsetof(struct in6_pktinfo, ipi6_addr)=0
+offsetof(struct in6_pktinfo, ipi6_ifindex)=16
