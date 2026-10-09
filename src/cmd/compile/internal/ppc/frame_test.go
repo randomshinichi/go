@@ -60,6 +60,13 @@ func spilled(x int) int { y:=middle(x); z:=middle(x+1); return y+z }
 //go:noinline
 //go:nosplit
 func branchCall(x int) int { if x<0 { return middle(x) }; return middle(x)+1 }
+//go:noinline
+func largeFrame(x int) int {
+	var a [65536]byte
+	i := x & (len(a)-1)
+	a[i] = byte(x)
+	return int(a[i]) + int(a[0])
+}
 `
 
 // TestGoStackCallsQEMU executes entire compiled functions, not selected body
@@ -122,15 +129,16 @@ func TestGoStackCallsQEMU(t *testing.T) {
 		{"branch-positive", "branchCall", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 19, false},
 		// x=0x00000001_ffffffff, result=2*x+0x100000001=0x4_ffffffff.
 		{"split-uint64", "wide", "li 3,1\nstw 3,24(1)\nli 3,-1\nstw 3,28(1)\n", "lwz 3,32(1)\ncmpwi 3,4\nbne harness_bad\nlwz 3,36(1)\n", 255, false},
+		{"large-frame-65568", "largeFrame", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 5, false},
 		{"wrong-lr-slot", "outer", "li 3,5\nstw 3,24(1)\n", "lwz 3,28(1)\n", 71, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var asm strings.Builder
 			// Initial Linux SP is not a Go frame. Reserve a private, aligned
 			// caller area and keep its address in g (reserved from allocation).
-			fmt.Fprintf(&asm, "clrrwi 1,1,4\naddi 1,1,-256\nmr 30,1\nli 0,0\nstw 0,4(1)\n%sbl fn_%s\ncmpw 1,30\nbne harness_bad\n%sli 0,1\nsc\nharness_bad:\nli 3,250\nli 0,1\nsc\n", tc.setup, tc.entry, tc.check)
+			fmt.Fprintf(&asm, "clrrwi 1,1,4\naddi 1,1,-256\nmr 30,1\nli 0,0\nstw 0,4(1)\n%sbl fn_%s\ncmpw 1,30\nbne harness_bad\n%sli 0,1\nsc\nharness_bad:\nli 3,250\nli 0,1\nsc\nharness_stackcheck:\nli 3,0\nblr\nharness_morestack:\nblr\n", tc.setup, tc.entry, tc.check)
 			mutated := 0
-			for _, fn := range []string{"leaf", "middle", "outer", "sum12", "many", "wideleaf", "wide", "spilled", "branchCall"} {
+			for _, fn := range []string{"leaf", "middle", "outer", "sum12", "many", "wideleaf", "wide", "spilled", "branchCall", "largeFrame"} {
 				words := emittedWords(t, string(out), "main."+fn)
 				fmt.Fprintf(&asm, "fn_%s:\n", fn)
 				// Check SP alignment at every actual Go call boundary, before
@@ -142,7 +150,11 @@ func TestGoStackCallsQEMU(t *testing.T) {
 						if w != 0x48000001 {
 							t.Fatalf("call word %08x not BL placeholder", w)
 						}
-						fmt.Fprintf(&asm, "bl fn_%s\n", strings.TrimPrefix(target, "main."))
+						if strings.HasPrefix(target, "runtime.") {
+							fmt.Fprintf(&asm, "bl harness_%s\n", strings.TrimPrefix(target, "runtime."))
+						} else {
+							fmt.Fprintf(&asm, "bl fn_%s\n", strings.TrimPrefix(target, "main."))
+						}
 					} else {
 						if tc.mutant && w == 0x83e10008 {
 							w = 0x83e10004 // restore LR from reserved CR slot, not LR
@@ -195,7 +207,7 @@ func TestGoStackCallsQEMU(t *testing.T) {
 	}
 }
 
-var fixtureCallReloc = regexp.MustCompile(`^(\d+)\+4 R_CALLPOWER (main\.\w+)\+0$`)
+var fixtureCallReloc = regexp.MustCompile(`^(\d+)\+4 R_CALLPOWER ((?:main\.\w+)|(?:runtime\.(?:stackcheck|morestack)))\+0$`)
 
 // The calls/GetG fixtures also use closure code addresses and method symbols.
 // Share the whole-function relocation adapter, keeping unsupported relocations

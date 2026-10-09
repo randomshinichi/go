@@ -105,25 +105,68 @@ func TestStackGuardPrologue(t *testing.T) {
 }
 
 func TestLargeFramePrologue(t *testing.T) {
-	ctxt := obj.Linknew(&Linkppc)
-	diagnosed := false
-	ctxt.DiagFunc = func(string, ...interface{}) { diagnosed = true }
-	s := ctxt.Lookup("large")
-	s.Set(obj.AttrNoSplit, true)
-	text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 32768}}
-	text.Link = &obj.Prog{As: obj.ARET}
-	s.NewFuncInfo().Text = text
-	preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
-	if diagnosed {
-		t.Fatal("large frame rejected")
-	}
-	var foundIndexedAllocation bool
-	for p := text.Link; p != nil; p = p.Link {
-		if p.As == ASTWUX {
-			foundIndexedAllocation = true
-		}
-	}
-	if !foundIndexedAllocation {
-		t.Fatal("large frame did not use indexed stack allocation")
+	for _, tc := range []struct {
+		name  string
+		frame int64
+	}{
+		{"largest-d-form", 32752},
+		{"first-indexed", 32768},
+		{"above-32k", 65536},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctxt := obj.Linknew(&Linkppc)
+			ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+			s := ctxt.Lookup("large")
+			text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: tc.frame - ctxt.Arch.FixedFrameSize}}
+			text.Link = &obj.Prog{As: obj.ARET}
+			s.NewFuncInfo().Text = text
+			preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
+			if text.To.Offset != tc.frame || tc.frame%16 != 0 {
+				t.Fatalf("allocated frame %d, want aligned frame %d", text.To.Offset, tc.frame)
+			}
+			var stackcheck, morestack, directAllocation, indexedAllocation, sourceReturnRemains bool
+			var allocationSPAdj, restoreSPAdj int32
+			var tail []obj.As
+			for p := text.Link; p != nil; p = p.Link {
+				if p.As == ABL && p.To.Sym != nil {
+					stackcheck = stackcheck || p.To.Sym.Name == "runtime.stackcheck"
+					morestack = morestack || p.To.Sym.Name == "runtime.morestack"
+				}
+				directAllocation = directAllocation || p.As == ASTWU
+				indexedAllocation = indexedAllocation || p.As == ASTWUX
+				if p.As == ASTWU || p.As == ASTWUX {
+					allocationSPAdj = p.Spadj
+				}
+				if p.Spadj < 0 {
+					restoreSPAdj = p.Spadj
+				}
+				sourceReturnRemains = sourceReturnRemains || p.As == obj.ARET
+				tail = append(tail, p.As)
+			}
+			if !stackcheck || !morestack {
+				t.Fatalf("large growable frame lacks stack-growth path: stackcheck=%v morestack=%v", stackcheck, morestack)
+			}
+			if tc.frame <= 32752 && (!directAllocation || indexedAllocation) {
+				t.Fatalf("frame %d should use D-form stwu only", tc.frame)
+			}
+			if tc.frame > 32752 && (directAllocation || !indexedAllocation) {
+				t.Fatalf("frame %d should use indexed stwux only", tc.frame)
+			}
+			if sourceReturnRemains || len(tail) < 6 {
+				t.Fatalf("frame %d retains source RET instead of replacing it with an epilogue: %v", tc.frame, tail)
+			}
+			if allocationSPAdj != int32(tc.frame) || restoreSPAdj != -int32(tc.frame) {
+				t.Fatalf("frame %d has stack-map deltas allocation=%d restore=%d", tc.frame, allocationSPAdj, restoreSPAdj)
+			}
+			wantTail := []obj.As{AADDI, ALWZ, AMTLR, ABLR}
+			if tc.frame > 32752 {
+				wantTail = []obj.As{AADDI, AADD, ALWZ, AMTLR, ABLR}
+			}
+			for i := range wantTail {
+				if tail[len(tail)-len(wantTail)+i] != wantTail[i] {
+					t.Fatalf("frame %d epilogue tail %v, want suffix %v", tc.frame, tail, wantTail)
+				}
+			}
+		})
 	}
 }
