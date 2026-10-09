@@ -719,3 +719,48 @@ func executeIntELF(t *testing.T, qemu, clang, dir, name, asm string, want, chang
 	}
 	t.Logf("exit=%d expected=%d mutations=%d; full bits, caller SP and canaries checked", rc, want, changed)
 }
+
+// TestUint64TrailingZerosComplementPPC covers the de Bruijn multiply when
+// the value entering it is all ones. MULLU's low-word result must not destroy
+// an input needed by its following high-word multiply.
+func TestUint64TrailingZerosComplementPPC(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	qemu, err := exec.LookPath("qemu-ppc")
+	if err != nil {
+		t.Skip(err)
+	}
+	clang, err := exec.LookPath("clang")
+	if err != nil {
+		t.Skip(err)
+	}
+	dir := t.TempDir()
+	source := filepath.Join(dir, "tz.go")
+	writePPCFixture(t, source, []byte(`package main
+//go:nosplit
+func tz(x uint64) uint32 { return uint32((^x & -^x) * 0x03f79d71b4ca8b09 >> 58) }
+`), 0644)
+	cmd := exec.Command(testenv.GoToolPath(t), "tool", "compile", "-S", "-o", filepath.Join(dir, "tz.o"), source)
+	cmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=ppc")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("compile: %v\n%s", err, output)
+	}
+	words := emittedWords(t, string(output), "main.tz")
+	var asm strings.Builder
+	asm.WriteString("clrrwi 1,1,4\naddi 1,1,-4096\nmr 2,1\nli 0,0\nli 3,0\nstw 3,24(1)\nstw 3,28(1)\nbl fn_entry\nharness_after:\ncmpw 1,2\nbne harness_bad\nlwz 3,32(1)\ncmpwi 3,0\nbne harness_bad\nli 3,0\nli 0,1\nsc\nharness_bad:\nlwz 3,32(1)\nli 0,1\nsc\nfn_stackcheck:\nblr\nfn_morestack:\nblr\nfn_entry:\n")
+	relocs := fixtureFunctionRelocs(t, string(output), "main.tz")
+	for i, word := range words {
+		if rel, ok := relocs[i*4]; ok {
+			if rel.target == "runtime.stackcheck" {
+				fmt.Fprintln(&asm, "bl fn_stackcheck")
+			} else if rel.target == "runtime.morestack_noctxt" || rel.target == "runtime.morestack" {
+				fmt.Fprintln(&asm, "bl fn_morestack")
+			} else {
+				t.Fatalf("unsupported relocation: %v", rel)
+			}
+		} else {
+			fmt.Fprintf(&asm, ".long 0x%08x\n", word)
+		}
+	}
+	executeIntELF(t, qemu, clang, dir, "tz-allones", asm.String(), 0, 0)
+}

@@ -205,7 +205,7 @@ func init() {
 		{name: "MULLW", argLength: 2, reg: gp21, asm: "MULLW", commutative: true},   // arg0 * arg1, low 32
 		{name: "MULHW", argLength: 2, reg: gp21, asm: "MULHW", commutative: true},   // (arg0 * arg1) >> 32, signed
 		{name: "MULHWU", argLength: 2, reg: gp21, asm: "MULHWU", commutative: true}, // (arg0 * arg1) >> 32, unsigned
-		{name: "MULLU", argLength: 2, reg: gp22, asm: "MULLW", commutative: true},   // arg0 * arg1, high 32 in out0, low 32 in out1
+		{name: "MULLU", argLength: 2, reg: gp22, asm: "MULLW", commutative: true, resultNotInArgs: true}, // arg0 * arg1, high 32 in out0, low 32 in out1
 
 		{name: "DIVW", argLength: 2, reg: gp21, asm: "DIVW", clobberFlags: true},
 		{name: "DIVWU", argLength: 2, reg: gp21, asm: "DIVWU"},
