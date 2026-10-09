@@ -119,7 +119,7 @@ func TestStackGuardPrologue(t *testing.T) {
 	for p := text.Link; p != nil; p = p.Link {
 		if p.As == ABL && p.To.Sym != nil {
 			stackcheck = stackcheck || p.To.Sym.Name == "runtime.stackcheck"
-			morestack = morestack || p.To.Sym.Name == "runtime.morestack"
+			morestack = morestack || p.To.Sym.Name == "runtime.morestack_noctxt"
 		}
 		if p.As == ABC && p.From.Offset == 12 && p.Reg == 2 && p.To.Target() != nil {
 			skipBranch = true
@@ -127,6 +127,32 @@ func TestStackGuardPrologue(t *testing.T) {
 	}
 	if !stackcheck || !morestack || !skipBranch {
 		t.Fatalf("stack-split prologue missing check/call/skip: stackcheck=%v morestack=%v branch=%v", stackcheck, morestack, skipBranch)
+	}
+}
+
+func TestStackGuardContextSelection(t *testing.T) {
+	for _, needCtxt := range []bool{false, true} {
+		ctxt := obj.Linknew(&Linkppc)
+		ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+		s := ctxt.Lookup("split")
+		s.Set(obj.AttrNeedCtxt, needCtxt)
+		text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 4}}
+		text.Link = &obj.Prog{As: obj.ARET}
+		s.NewFuncInfo().Text = text
+		preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
+		want := "runtime.morestack_noctxt"
+		if needCtxt {
+			want = "runtime.morestack"
+		}
+		found := false
+		for p := text.Link; p != nil; p = p.Link {
+			if p.As == ABL && p.To.Sym != nil && p.To.Sym.Name == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("NeedCtxt=%v: missing call to %s", needCtxt, want)
+		}
 	}
 }
 
@@ -156,7 +182,7 @@ func TestLargeFramePrologue(t *testing.T) {
 			for p := text.Link; p != nil; p = p.Link {
 				if p.As == ABL && p.To.Sym != nil {
 					stackcheck = stackcheck || p.To.Sym.Name == "runtime.stackcheck"
-					morestack = morestack || p.To.Sym.Name == "runtime.morestack"
+					morestack = morestack || p.To.Sym.Name == "runtime.morestack_noctxt"
 				}
 				directAllocation = directAllocation || p.As == ASTWU
 				indexedAllocation = indexedAllocation || p.As == ASTWUX
