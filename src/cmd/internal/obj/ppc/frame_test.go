@@ -81,6 +81,32 @@ func TestGoStackFrames(t *testing.T) {
 	}
 }
 
+func TestNoFrameNonLeafPreservesIncomingLR(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	s := ctxt.Lookup("noframe")
+	s.Set(obj.AttrNoSplit, true)
+	s.Set(obj.AttrNoFrame, true)
+	text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Type: obj.TYPE_TEXTSIZE, Val: int32(0)}}
+	// morestack must observe its incoming LR before calling another function.
+	capture := &obj.Prog{As: AMFLR, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R8}}
+	call := &obj.Prog{As: ABL, To: obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup("callee")}}
+	ret := &obj.Prog{As: obj.ARET}
+	text.Link, capture.Link, call.Link = capture, call, ret
+	s.NewFuncInfo().Text = text
+	preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
+	if text.To.Offset != 0 || s.Leaf() || text.Link != capture || capture.Link != call || call.Link != ret {
+		t.Fatalf("NOFRAME nonleaf gained an automatic prologue or epilogue")
+	}
+	if ret.As != ABLR {
+		t.Fatalf("NOFRAME return = %v, want BLR", ret.As)
+	}
+	assemble(ctxt, s, nil)
+	if len(s.P) != 12 || binary.BigEndian.Uint32(s.P) != 0x7d0802a6 {
+		t.Fatalf("NOFRAME code overwrote LR/linkage before explicit MFLR R8: %x", s.P)
+	}
+}
+
 func TestStackGuardPrologue(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
