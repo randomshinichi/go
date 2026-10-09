@@ -157,6 +157,7 @@ TEXT runtime·callRet(SB), NOSPLIT, $20-0
 	STW R3, PPC32_FIXED_FRAME+4(R1)
 	STW R5, PPC32_FIXED_FRAME+8(R1)
 	STW R6, PPC32_FIXED_FRAME+12(R1)
+	ADDI R0, R0, $0 // Explicitly materialize the null register-argument area.
 	STW R0, PPC32_FIXED_FRAME+16(R1)
 	BL runtime·reflectcallmove(SB)
 	RET

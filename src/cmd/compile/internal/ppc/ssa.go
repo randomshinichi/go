@@ -335,11 +335,15 @@ func emitBulkMemory(s *ssagen.State, v *ssa.Value) {
 		step, load, store = 4, ppc.ALWZ, ppc.ASTW
 	}
 	moving := v.Op == ssa.OpPPCLoweredMove
+	if !moving {
+		// A C call can leave any value in R0. Materialize zero in the
+		// reserved scratch register instead of treating R0 as a zero value.
+		emitConst32(s, ppc.REG_R31, 0)
+	}
 	access := func(off int64, ld, st obj.As) *obj.Prog {
-		r := int16(ppc.REG_R0)
+		r := int16(ppc.REG_R31)
 		var first *obj.Prog
 		if moving {
-			r = ppc.REG_R31
 			first = s.Prog(ld)
 			first.From = obj.Addr{Type: obj.TYPE_MEM, Reg: ppc.REG_R4, Offset: off}
 			first.To = obj.Addr{Type: obj.TYPE_REG, Reg: r}

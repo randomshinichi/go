@@ -480,6 +480,7 @@ TEXT runtime·mach_vm_region_trampoline(SB), NOSPLIT, $8-0
 	LWZ	R7, 12(R14)			// info
 	LWZ	R8, 16(R14)			// count
 	ADDI	R9, R1, $24			// object name output
+	ADDI	R0, R0, $0			// task_self_trap is C and clobbers R0.
 	STW	R0, 24(R1)
 	BL	libc_mach_vm_region(SB)
 	RET
