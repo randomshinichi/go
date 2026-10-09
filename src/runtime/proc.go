@@ -651,9 +651,6 @@ func switchToCrashStack(fn func()) {
 // hangs the process (see issue 63938).
 const crashStackImplemented = GOOS != "windows"
 
-//go:noescape
-func switchToCrashStack0(fn func()) // in assembly
-
 func lockedOSThread() bool {
 	gp := getg()
 	return gp.lockedm != 0 && gp.m.lockedg != 0
