@@ -168,7 +168,9 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R11}
 	case ssa.OpPPCLoweredGetCallerSP:
 		p := s.Prog(ppc.AADDI)
-		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: -base.Ctxt.Arch.FixedFrameSize}
+		// NAME_PARAM includes the allocated frame in its resolved offset.
+		// Subtract the linkage area to obtain the caller's actual SP.
+		p.From = obj.Addr{Type: obj.TYPE_ADDR, Name: obj.NAME_PARAM, Offset: -base.Ctxt.Arch.FixedFrameSize}
 		p.Reg = ppc.REGSP
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
 	case ssa.OpPPCLoweredGetCallerPC:
@@ -190,7 +192,19 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPCCALLtail:
 		s.TailCall(v)
 	case ssa.OpPPCCALLclosure, ssa.OpPPCCALLinter:
-		v.Fatalf("ppc32: indirect call emission is not yet supported by obj/ppc")
+		if v.Args[0].Reg() != ppc.REG_R12 {
+			v.Fatalf("ppc32: indirect call target must be in R12: %v", v.LongString())
+		}
+		if v.Op == ssa.OpPPCCALLclosure && v.Args[1].Reg() != ppc.REG_R11 {
+			v.Fatalf("ppc32: closure context must be in R11: %v", v.LongString())
+		}
+		p := s.Prog(ppc.AMTCTR)
+		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
+		// Keep Call's stack-map/argument bookkeeping, but branch through CTR
+		// with link. obj/ppc must treat this as a non-leaf call too.
+		p = s.Call(v)
+		p.As = ppc.ABCTRL
+		p.To = obj.Addr{}
 
 	default:
 		v.Fatalf("unhandled op %v", v.Op)
@@ -370,8 +384,8 @@ func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
 		// blr returns through LR. Frame restoration belongs to the prologue lane.
 		s.Prog(ppc.ABLR)
 	case ssa.BlockRetJmp:
-		// Tail-call lowering has already loaded the target into CTR and emitted
-		// bctr. This terminator must not overwrite it with blr.
+		// CALLtail emitted RET symbol. obj/ppc restores SP/LR before the
+		// non-linking branch; do not emit a second return here.
 	case ssa.BlockPPCEQ:
 		cond(12, 2, yes, no)
 	case ssa.BlockPPCNE:

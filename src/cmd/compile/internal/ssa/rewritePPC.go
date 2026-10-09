@@ -32,6 +32,9 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpAndB(v)
 	case OpAvg32u:
 		return rewriteValuePPC_OpAvg32u(v)
+	case OpClosureCall:
+		v.Op = OpPPCCALLclosure
+		return true
 	case OpCom16:
 		return rewriteValuePPC_OpCom16(v)
 	case OpCom32:
@@ -75,6 +78,9 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpHmul32(v)
 	case OpHmul32u:
 		return rewriteValuePPC_OpHmul32u(v)
+	case OpInterCall:
+		v.Op = OpPPCCALLinter
+		return true
 	case OpIsInBounds:
 		return rewriteValuePPC_OpIsInBounds(v)
 	case OpIsNonNil:
@@ -235,6 +241,9 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpSub32withcarry(v)
 	case OpSub8:
 		return rewriteValuePPC_OpSub8(v)
+	case OpTailCall:
+		v.Op = OpPPCCALLtail
+		return true
 	case OpTrunc16to8:
 		return rewriteValuePPC_OpTrunc16to8(v)
 	case OpTrunc32to16:
