@@ -2,9 +2,34 @@
 #define KERNEL
 #define _DARWIN_USE_64_BIT_INODE
 #include <stdio.h>
-#include <errno.h>
+#include <sys/types.h>
+#include <sys/event.h>
+#include <sys/ptrace.h>
+#include <sys/socket.h>
+#include <sys/sockio.h>
+#include <sys/sysctl.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <net/bpf.h>
+#include <net/if.h>
+#include <net/if_types.h>
+#include <net/route.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/ip_mroute.h>
+#include <termios.h>
+#include <limits.h>
+#include <sys/file.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <netinet/ip6.h>
+#include <netinet/tcp.h>
+#include <errno.h>
+#include <sys/signal.h>
 #include <signal.h>
+#include <sys/resource.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/event.h>
 #include <sys/ptrace.h>
@@ -532,6 +557,57 @@ printf("DT_UNKNOWN=%lld\n", (long long)(DT_UNKNOWN));
 #ifdef DT_WHT
 printf("DT_WHT=%lld\n", (long long)(DT_WHT));
 #endif
+#ifdef E2BIG
+printf("E2BIG=%lld\n", (long long)(E2BIG));
+#endif
+#ifdef EACCES
+printf("EACCES=%lld\n", (long long)(EACCES));
+#endif
+#ifdef EADDRINUSE
+printf("EADDRINUSE=%lld\n", (long long)(EADDRINUSE));
+#endif
+#ifdef EADDRNOTAVAIL
+printf("EADDRNOTAVAIL=%lld\n", (long long)(EADDRNOTAVAIL));
+#endif
+#ifdef EAFNOSUPPORT
+printf("EAFNOSUPPORT=%lld\n", (long long)(EAFNOSUPPORT));
+#endif
+#ifdef EAGAIN
+printf("EAGAIN=%lld\n", (long long)(EAGAIN));
+#endif
+#ifdef EALREADY
+printf("EALREADY=%lld\n", (long long)(EALREADY));
+#endif
+#ifdef EAUTH
+printf("EAUTH=%lld\n", (long long)(EAUTH));
+#endif
+#ifdef EBADARCH
+printf("EBADARCH=%lld\n", (long long)(EBADARCH));
+#endif
+#ifdef EBADEXEC
+printf("EBADEXEC=%lld\n", (long long)(EBADEXEC));
+#endif
+#ifdef EBADF
+printf("EBADF=%lld\n", (long long)(EBADF));
+#endif
+#ifdef EBADMACHO
+printf("EBADMACHO=%lld\n", (long long)(EBADMACHO));
+#endif
+#ifdef EBADMSG
+printf("EBADMSG=%lld\n", (long long)(EBADMSG));
+#endif
+#ifdef EBADRPC
+printf("EBADRPC=%lld\n", (long long)(EBADRPC));
+#endif
+#ifdef EBUSY
+printf("EBUSY=%lld\n", (long long)(EBUSY));
+#endif
+#ifdef ECANCELED
+printf("ECANCELED=%lld\n", (long long)(ECANCELED));
+#endif
+#ifdef ECHILD
+printf("ECHILD=%lld\n", (long long)(ECHILD));
+#endif
 #ifdef ECHO
 printf("ECHO=%lld\n", (long long)(ECHO));
 #endif
@@ -552,6 +628,264 @@ printf("ECHONL=%lld\n", (long long)(ECHONL));
 #endif
 #ifdef ECHOPRT
 printf("ECHOPRT=%lld\n", (long long)(ECHOPRT));
+#endif
+#ifdef ECONNABORTED
+printf("ECONNABORTED=%lld\n", (long long)(ECONNABORTED));
+#endif
+#ifdef ECONNREFUSED
+printf("ECONNREFUSED=%lld\n", (long long)(ECONNREFUSED));
+#endif
+#ifdef ECONNRESET
+printf("ECONNRESET=%lld\n", (long long)(ECONNRESET));
+#endif
+#ifdef EDEADLK
+printf("EDEADLK=%lld\n", (long long)(EDEADLK));
+#endif
+#ifdef EDESTADDRREQ
+printf("EDESTADDRREQ=%lld\n", (long long)(EDESTADDRREQ));
+#endif
+#ifdef EDEVERR
+printf("EDEVERR=%lld\n", (long long)(EDEVERR));
+#endif
+#ifdef EDOM
+printf("EDOM=%lld\n", (long long)(EDOM));
+#endif
+#ifdef EDQUOT
+printf("EDQUOT=%lld\n", (long long)(EDQUOT));
+#endif
+#ifdef EEXIST
+printf("EEXIST=%lld\n", (long long)(EEXIST));
+#endif
+#ifdef EFAULT
+printf("EFAULT=%lld\n", (long long)(EFAULT));
+#endif
+#ifdef EFBIG
+printf("EFBIG=%lld\n", (long long)(EFBIG));
+#endif
+#ifdef EFTYPE
+printf("EFTYPE=%lld\n", (long long)(EFTYPE));
+#endif
+#ifdef EHOSTDOWN
+printf("EHOSTDOWN=%lld\n", (long long)(EHOSTDOWN));
+#endif
+#ifdef EHOSTUNREACH
+printf("EHOSTUNREACH=%lld\n", (long long)(EHOSTUNREACH));
+#endif
+#ifdef EIDRM
+printf("EIDRM=%lld\n", (long long)(EIDRM));
+#endif
+#ifdef EILSEQ
+printf("EILSEQ=%lld\n", (long long)(EILSEQ));
+#endif
+#ifdef EINPROGRESS
+printf("EINPROGRESS=%lld\n", (long long)(EINPROGRESS));
+#endif
+#ifdef EINTR
+printf("EINTR=%lld\n", (long long)(EINTR));
+#endif
+#ifdef EINVAL
+printf("EINVAL=%lld\n", (long long)(EINVAL));
+#endif
+#ifdef EIO
+printf("EIO=%lld\n", (long long)(EIO));
+#endif
+#ifdef EISCONN
+printf("EISCONN=%lld\n", (long long)(EISCONN));
+#endif
+#ifdef EISDIR
+printf("EISDIR=%lld\n", (long long)(EISDIR));
+#endif
+#ifdef ELAST
+printf("ELAST=%lld\n", (long long)(ELAST));
+#endif
+#ifdef ELOOP
+printf("ELOOP=%lld\n", (long long)(ELOOP));
+#endif
+#ifdef EMFILE
+printf("EMFILE=%lld\n", (long long)(EMFILE));
+#endif
+#ifdef EMLINK
+printf("EMLINK=%lld\n", (long long)(EMLINK));
+#endif
+#ifdef EMSGSIZE
+printf("EMSGSIZE=%lld\n", (long long)(EMSGSIZE));
+#endif
+#ifdef EMULTIHOP
+printf("EMULTIHOP=%lld\n", (long long)(EMULTIHOP));
+#endif
+#ifdef ENAMETOOLONG
+printf("ENAMETOOLONG=%lld\n", (long long)(ENAMETOOLONG));
+#endif
+#ifdef ENEEDAUTH
+printf("ENEEDAUTH=%lld\n", (long long)(ENEEDAUTH));
+#endif
+#ifdef ENETDOWN
+printf("ENETDOWN=%lld\n", (long long)(ENETDOWN));
+#endif
+#ifdef ENETRESET
+printf("ENETRESET=%lld\n", (long long)(ENETRESET));
+#endif
+#ifdef ENETUNREACH
+printf("ENETUNREACH=%lld\n", (long long)(ENETUNREACH));
+#endif
+#ifdef ENFILE
+printf("ENFILE=%lld\n", (long long)(ENFILE));
+#endif
+#ifdef ENOATTR
+printf("ENOATTR=%lld\n", (long long)(ENOATTR));
+#endif
+#ifdef ENOBUFS
+printf("ENOBUFS=%lld\n", (long long)(ENOBUFS));
+#endif
+#ifdef ENODATA
+printf("ENODATA=%lld\n", (long long)(ENODATA));
+#endif
+#ifdef ENODEV
+printf("ENODEV=%lld\n", (long long)(ENODEV));
+#endif
+#ifdef ENOENT
+printf("ENOENT=%lld\n", (long long)(ENOENT));
+#endif
+#ifdef ENOEXEC
+printf("ENOEXEC=%lld\n", (long long)(ENOEXEC));
+#endif
+#ifdef ENOLCK
+printf("ENOLCK=%lld\n", (long long)(ENOLCK));
+#endif
+#ifdef ENOLINK
+printf("ENOLINK=%lld\n", (long long)(ENOLINK));
+#endif
+#ifdef ENOMEM
+printf("ENOMEM=%lld\n", (long long)(ENOMEM));
+#endif
+#ifdef ENOMSG
+printf("ENOMSG=%lld\n", (long long)(ENOMSG));
+#endif
+#ifdef ENOPOLICY
+printf("ENOPOLICY=%lld\n", (long long)(ENOPOLICY));
+#endif
+#ifdef ENOPROTOOPT
+printf("ENOPROTOOPT=%lld\n", (long long)(ENOPROTOOPT));
+#endif
+#ifdef ENOSPC
+printf("ENOSPC=%lld\n", (long long)(ENOSPC));
+#endif
+#ifdef ENOSR
+printf("ENOSR=%lld\n", (long long)(ENOSR));
+#endif
+#ifdef ENOSTR
+printf("ENOSTR=%lld\n", (long long)(ENOSTR));
+#endif
+#ifdef ENOSYS
+printf("ENOSYS=%lld\n", (long long)(ENOSYS));
+#endif
+#ifdef ENOTBLK
+printf("ENOTBLK=%lld\n", (long long)(ENOTBLK));
+#endif
+#ifdef ENOTCONN
+printf("ENOTCONN=%lld\n", (long long)(ENOTCONN));
+#endif
+#ifdef ENOTDIR
+printf("ENOTDIR=%lld\n", (long long)(ENOTDIR));
+#endif
+#ifdef ENOTEMPTY
+printf("ENOTEMPTY=%lld\n", (long long)(ENOTEMPTY));
+#endif
+#ifdef ENOTSOCK
+printf("ENOTSOCK=%lld\n", (long long)(ENOTSOCK));
+#endif
+#ifdef ENOTSUP
+printf("ENOTSUP=%lld\n", (long long)(ENOTSUP));
+#endif
+#ifdef ENOTTY
+printf("ENOTTY=%lld\n", (long long)(ENOTTY));
+#endif
+#ifdef ENXIO
+printf("ENXIO=%lld\n", (long long)(ENXIO));
+#endif
+#ifdef EOPNOTSUPP
+printf("EOPNOTSUPP=%lld\n", (long long)(EOPNOTSUPP));
+#endif
+#ifdef EOVERFLOW
+printf("EOVERFLOW=%lld\n", (long long)(EOVERFLOW));
+#endif
+#ifdef EPERM
+printf("EPERM=%lld\n", (long long)(EPERM));
+#endif
+#ifdef EPFNOSUPPORT
+printf("EPFNOSUPPORT=%lld\n", (long long)(EPFNOSUPPORT));
+#endif
+#ifdef EPIPE
+printf("EPIPE=%lld\n", (long long)(EPIPE));
+#endif
+#ifdef EPROCLIM
+printf("EPROCLIM=%lld\n", (long long)(EPROCLIM));
+#endif
+#ifdef EPROCUNAVAIL
+printf("EPROCUNAVAIL=%lld\n", (long long)(EPROCUNAVAIL));
+#endif
+#ifdef EPROGMISMATCH
+printf("EPROGMISMATCH=%lld\n", (long long)(EPROGMISMATCH));
+#endif
+#ifdef EPROGUNAVAIL
+printf("EPROGUNAVAIL=%lld\n", (long long)(EPROGUNAVAIL));
+#endif
+#ifdef EPROTO
+printf("EPROTO=%lld\n", (long long)(EPROTO));
+#endif
+#ifdef EPROTONOSUPPORT
+printf("EPROTONOSUPPORT=%lld\n", (long long)(EPROTONOSUPPORT));
+#endif
+#ifdef EPROTOTYPE
+printf("EPROTOTYPE=%lld\n", (long long)(EPROTOTYPE));
+#endif
+#ifdef EPWROFF
+printf("EPWROFF=%lld\n", (long long)(EPWROFF));
+#endif
+#ifdef ERANGE
+printf("ERANGE=%lld\n", (long long)(ERANGE));
+#endif
+#ifdef EREMOTE
+printf("EREMOTE=%lld\n", (long long)(EREMOTE));
+#endif
+#ifdef EROFS
+printf("EROFS=%lld\n", (long long)(EROFS));
+#endif
+#ifdef ERPCMISMATCH
+printf("ERPCMISMATCH=%lld\n", (long long)(ERPCMISMATCH));
+#endif
+#ifdef ESHLIBVERS
+printf("ESHLIBVERS=%lld\n", (long long)(ESHLIBVERS));
+#endif
+#ifdef ESHUTDOWN
+printf("ESHUTDOWN=%lld\n", (long long)(ESHUTDOWN));
+#endif
+#ifdef ESOCKTNOSUPPORT
+printf("ESOCKTNOSUPPORT=%lld\n", (long long)(ESOCKTNOSUPPORT));
+#endif
+#ifdef ESPIPE
+printf("ESPIPE=%lld\n", (long long)(ESPIPE));
+#endif
+#ifdef ESRCH
+printf("ESRCH=%lld\n", (long long)(ESRCH));
+#endif
+#ifdef ESTALE
+printf("ESTALE=%lld\n", (long long)(ESTALE));
+#endif
+#ifdef ETIME
+printf("ETIME=%lld\n", (long long)(ETIME));
+#endif
+#ifdef ETIMEDOUT
+printf("ETIMEDOUT=%lld\n", (long long)(ETIMEDOUT));
+#endif
+#ifdef ETOOMANYREFS
+printf("ETOOMANYREFS=%lld\n", (long long)(ETOOMANYREFS));
+#endif
+#ifdef ETXTBSY
+printf("ETXTBSY=%lld\n", (long long)(ETXTBSY));
+#endif
+#ifdef EUSERS
+printf("EUSERS=%lld\n", (long long)(EUSERS));
 #endif
 #ifdef EVFILT_AIO
 printf("EVFILT_AIO=%lld\n", (long long)(EVFILT_AIO));
@@ -627,6 +961,12 @@ printf("EV_RECEIPT=%lld\n", (long long)(EV_RECEIPT));
 #endif
 #ifdef EV_SYSFLAGS
 printf("EV_SYSFLAGS=%lld\n", (long long)(EV_SYSFLAGS));
+#endif
+#ifdef EWOULDBLOCK
+printf("EWOULDBLOCK=%lld\n", (long long)(EWOULDBLOCK));
+#endif
+#ifdef EXDEV
+printf("EXDEV=%lld\n", (long long)(EXDEV));
 #endif
 #ifdef EXTA
 printf("EXTA=%lld\n", (long long)(EXTA));
@@ -2359,6 +2699,102 @@ printf("SHUT_RDWR=%lld\n", (long long)(SHUT_RDWR));
 #ifdef SHUT_WR
 printf("SHUT_WR=%lld\n", (long long)(SHUT_WR));
 #endif
+#ifdef SIGABRT
+printf("SIGABRT=%lld\n", (long long)(SIGABRT));
+#endif
+#ifdef SIGALRM
+printf("SIGALRM=%lld\n", (long long)(SIGALRM));
+#endif
+#ifdef SIGBUS
+printf("SIGBUS=%lld\n", (long long)(SIGBUS));
+#endif
+#ifdef SIGCHLD
+printf("SIGCHLD=%lld\n", (long long)(SIGCHLD));
+#endif
+#ifdef SIGCONT
+printf("SIGCONT=%lld\n", (long long)(SIGCONT));
+#endif
+#ifdef SIGEMT
+printf("SIGEMT=%lld\n", (long long)(SIGEMT));
+#endif
+#ifdef SIGFPE
+printf("SIGFPE=%lld\n", (long long)(SIGFPE));
+#endif
+#ifdef SIGHUP
+printf("SIGHUP=%lld\n", (long long)(SIGHUP));
+#endif
+#ifdef SIGILL
+printf("SIGILL=%lld\n", (long long)(SIGILL));
+#endif
+#ifdef SIGINFO
+printf("SIGINFO=%lld\n", (long long)(SIGINFO));
+#endif
+#ifdef SIGINT
+printf("SIGINT=%lld\n", (long long)(SIGINT));
+#endif
+#ifdef SIGIO
+printf("SIGIO=%lld\n", (long long)(SIGIO));
+#endif
+#ifdef SIGIOT
+printf("SIGIOT=%lld\n", (long long)(SIGIOT));
+#endif
+#ifdef SIGKILL
+printf("SIGKILL=%lld\n", (long long)(SIGKILL));
+#endif
+#ifdef SIGPIPE
+printf("SIGPIPE=%lld\n", (long long)(SIGPIPE));
+#endif
+#ifdef SIGPROF
+printf("SIGPROF=%lld\n", (long long)(SIGPROF));
+#endif
+#ifdef SIGQUIT
+printf("SIGQUIT=%lld\n", (long long)(SIGQUIT));
+#endif
+#ifdef SIGSEGV
+printf("SIGSEGV=%lld\n", (long long)(SIGSEGV));
+#endif
+#ifdef SIGSTOP
+printf("SIGSTOP=%lld\n", (long long)(SIGSTOP));
+#endif
+#ifdef SIGSYS
+printf("SIGSYS=%lld\n", (long long)(SIGSYS));
+#endif
+#ifdef SIGTERM
+printf("SIGTERM=%lld\n", (long long)(SIGTERM));
+#endif
+#ifdef SIGTRAP
+printf("SIGTRAP=%lld\n", (long long)(SIGTRAP));
+#endif
+#ifdef SIGTSTP
+printf("SIGTSTP=%lld\n", (long long)(SIGTSTP));
+#endif
+#ifdef SIGTTIN
+printf("SIGTTIN=%lld\n", (long long)(SIGTTIN));
+#endif
+#ifdef SIGTTOU
+printf("SIGTTOU=%lld\n", (long long)(SIGTTOU));
+#endif
+#ifdef SIGURG
+printf("SIGURG=%lld\n", (long long)(SIGURG));
+#endif
+#ifdef SIGUSR1
+printf("SIGUSR1=%lld\n", (long long)(SIGUSR1));
+#endif
+#ifdef SIGUSR2
+printf("SIGUSR2=%lld\n", (long long)(SIGUSR2));
+#endif
+#ifdef SIGVTALRM
+printf("SIGVTALRM=%lld\n", (long long)(SIGVTALRM));
+#endif
+#ifdef SIGWINCH
+printf("SIGWINCH=%lld\n", (long long)(SIGWINCH));
+#endif
+#ifdef SIGXCPU
+printf("SIGXCPU=%lld\n", (long long)(SIGXCPU));
+#endif
+#ifdef SIGXFSZ
+printf("SIGXFSZ=%lld\n", (long long)(SIGXFSZ));
+#endif
 #ifdef SIOCADDMULTI
 printf("SIOCADDMULTI=%lld\n", (long long)(SIOCADDMULTI));
 #endif
@@ -3118,425 +3554,14 @@ printf("WNOHANG=%lld\n", (long long)(WNOHANG));
 #ifdef WNOWAIT
 printf("WNOWAIT=%lld\n", (long long)(WNOWAIT));
 #endif
-#ifdef WORDSIZE
-printf("WORDSIZE=%lld\n", (long long)(WORDSIZE));
+#ifdef __WORDSIZE
+printf("WORDSIZE=%lld\n", (long long)(__WORDSIZE));
 #endif
 #ifdef WSTOPPED
 printf("WSTOPPED=%lld\n", (long long)(WSTOPPED));
 #endif
 #ifdef WUNTRACED
 printf("WUNTRACED=%lld\n", (long long)(WUNTRACED));
-#endif
-#ifdef E2BIG
-printf("E2BIG=%lld\n", (long long)(E2BIG));
-#endif
-#ifdef EACCES
-printf("EACCES=%lld\n", (long long)(EACCES));
-#endif
-#ifdef EADDRINUSE
-printf("EADDRINUSE=%lld\n", (long long)(EADDRINUSE));
-#endif
-#ifdef EADDRNOTAVAIL
-printf("EADDRNOTAVAIL=%lld\n", (long long)(EADDRNOTAVAIL));
-#endif
-#ifdef EAFNOSUPPORT
-printf("EAFNOSUPPORT=%lld\n", (long long)(EAFNOSUPPORT));
-#endif
-#ifdef EAGAIN
-printf("EAGAIN=%lld\n", (long long)(EAGAIN));
-#endif
-#ifdef EALREADY
-printf("EALREADY=%lld\n", (long long)(EALREADY));
-#endif
-#ifdef EAUTH
-printf("EAUTH=%lld\n", (long long)(EAUTH));
-#endif
-#ifdef EBADARCH
-printf("EBADARCH=%lld\n", (long long)(EBADARCH));
-#endif
-#ifdef EBADEXEC
-printf("EBADEXEC=%lld\n", (long long)(EBADEXEC));
-#endif
-#ifdef EBADF
-printf("EBADF=%lld\n", (long long)(EBADF));
-#endif
-#ifdef EBADMACHO
-printf("EBADMACHO=%lld\n", (long long)(EBADMACHO));
-#endif
-#ifdef EBADMSG
-printf("EBADMSG=%lld\n", (long long)(EBADMSG));
-#endif
-#ifdef EBADRPC
-printf("EBADRPC=%lld\n", (long long)(EBADRPC));
-#endif
-#ifdef EBUSY
-printf("EBUSY=%lld\n", (long long)(EBUSY));
-#endif
-#ifdef ECANCELED
-printf("ECANCELED=%lld\n", (long long)(ECANCELED));
-#endif
-#ifdef ECHILD
-printf("ECHILD=%lld\n", (long long)(ECHILD));
-#endif
-#ifdef ECONNABORTED
-printf("ECONNABORTED=%lld\n", (long long)(ECONNABORTED));
-#endif
-#ifdef ECONNREFUSED
-printf("ECONNREFUSED=%lld\n", (long long)(ECONNREFUSED));
-#endif
-#ifdef ECONNRESET
-printf("ECONNRESET=%lld\n", (long long)(ECONNRESET));
-#endif
-#ifdef EDEADLK
-printf("EDEADLK=%lld\n", (long long)(EDEADLK));
-#endif
-#ifdef EDESTADDRREQ
-printf("EDESTADDRREQ=%lld\n", (long long)(EDESTADDRREQ));
-#endif
-#ifdef EDEVERR
-printf("EDEVERR=%lld\n", (long long)(EDEVERR));
-#endif
-#ifdef EDOM
-printf("EDOM=%lld\n", (long long)(EDOM));
-#endif
-#ifdef EDQUOT
-printf("EDQUOT=%lld\n", (long long)(EDQUOT));
-#endif
-#ifdef EEXIST
-printf("EEXIST=%lld\n", (long long)(EEXIST));
-#endif
-#ifdef EFAULT
-printf("EFAULT=%lld\n", (long long)(EFAULT));
-#endif
-#ifdef EFBIG
-printf("EFBIG=%lld\n", (long long)(EFBIG));
-#endif
-#ifdef EFTYPE
-printf("EFTYPE=%lld\n", (long long)(EFTYPE));
-#endif
-#ifdef EHOSTDOWN
-printf("EHOSTDOWN=%lld\n", (long long)(EHOSTDOWN));
-#endif
-#ifdef EHOSTUNREACH
-printf("EHOSTUNREACH=%lld\n", (long long)(EHOSTUNREACH));
-#endif
-#ifdef EIDRM
-printf("EIDRM=%lld\n", (long long)(EIDRM));
-#endif
-#ifdef EILSEQ
-printf("EILSEQ=%lld\n", (long long)(EILSEQ));
-#endif
-#ifdef EINPROGRESS
-printf("EINPROGRESS=%lld\n", (long long)(EINPROGRESS));
-#endif
-#ifdef EINTR
-printf("EINTR=%lld\n", (long long)(EINTR));
-#endif
-#ifdef EINVAL
-printf("EINVAL=%lld\n", (long long)(EINVAL));
-#endif
-#ifdef EIO
-printf("EIO=%lld\n", (long long)(EIO));
-#endif
-#ifdef EISCONN
-printf("EISCONN=%lld\n", (long long)(EISCONN));
-#endif
-#ifdef EISDIR
-printf("EISDIR=%lld\n", (long long)(EISDIR));
-#endif
-#ifdef ELAST
-printf("ELAST=%lld\n", (long long)(ELAST));
-#endif
-#ifdef ELOOP
-printf("ELOOP=%lld\n", (long long)(ELOOP));
-#endif
-#ifdef EMFILE
-printf("EMFILE=%lld\n", (long long)(EMFILE));
-#endif
-#ifdef EMLINK
-printf("EMLINK=%lld\n", (long long)(EMLINK));
-#endif
-#ifdef EMSGSIZE
-printf("EMSGSIZE=%lld\n", (long long)(EMSGSIZE));
-#endif
-#ifdef EMULTIHOP
-printf("EMULTIHOP=%lld\n", (long long)(EMULTIHOP));
-#endif
-#ifdef ENAMETOOLONG
-printf("ENAMETOOLONG=%lld\n", (long long)(ENAMETOOLONG));
-#endif
-#ifdef ENEEDAUTH
-printf("ENEEDAUTH=%lld\n", (long long)(ENEEDAUTH));
-#endif
-#ifdef ENETDOWN
-printf("ENETDOWN=%lld\n", (long long)(ENETDOWN));
-#endif
-#ifdef ENETRESET
-printf("ENETRESET=%lld\n", (long long)(ENETRESET));
-#endif
-#ifdef ENETUNREACH
-printf("ENETUNREACH=%lld\n", (long long)(ENETUNREACH));
-#endif
-#ifdef ENFILE
-printf("ENFILE=%lld\n", (long long)(ENFILE));
-#endif
-#ifdef ENOATTR
-printf("ENOATTR=%lld\n", (long long)(ENOATTR));
-#endif
-#ifdef ENOBUFS
-printf("ENOBUFS=%lld\n", (long long)(ENOBUFS));
-#endif
-#ifdef ENODATA
-printf("ENODATA=%lld\n", (long long)(ENODATA));
-#endif
-#ifdef ENODEV
-printf("ENODEV=%lld\n", (long long)(ENODEV));
-#endif
-#ifdef ENOENT
-printf("ENOENT=%lld\n", (long long)(ENOENT));
-#endif
-#ifdef ENOEXEC
-printf("ENOEXEC=%lld\n", (long long)(ENOEXEC));
-#endif
-#ifdef ENOLCK
-printf("ENOLCK=%lld\n", (long long)(ENOLCK));
-#endif
-#ifdef ENOLINK
-printf("ENOLINK=%lld\n", (long long)(ENOLINK));
-#endif
-#ifdef ENOMEM
-printf("ENOMEM=%lld\n", (long long)(ENOMEM));
-#endif
-#ifdef ENOMSG
-printf("ENOMSG=%lld\n", (long long)(ENOMSG));
-#endif
-#ifdef ENOPOLICY
-printf("ENOPOLICY=%lld\n", (long long)(ENOPOLICY));
-#endif
-#ifdef ENOPROTOOPT
-printf("ENOPROTOOPT=%lld\n", (long long)(ENOPROTOOPT));
-#endif
-#ifdef ENOSPC
-printf("ENOSPC=%lld\n", (long long)(ENOSPC));
-#endif
-#ifdef ENOSR
-printf("ENOSR=%lld\n", (long long)(ENOSR));
-#endif
-#ifdef ENOSTR
-printf("ENOSTR=%lld\n", (long long)(ENOSTR));
-#endif
-#ifdef ENOSYS
-printf("ENOSYS=%lld\n", (long long)(ENOSYS));
-#endif
-#ifdef ENOTBLK
-printf("ENOTBLK=%lld\n", (long long)(ENOTBLK));
-#endif
-#ifdef ENOTCONN
-printf("ENOTCONN=%lld\n", (long long)(ENOTCONN));
-#endif
-#ifdef ENOTDIR
-printf("ENOTDIR=%lld\n", (long long)(ENOTDIR));
-#endif
-#ifdef ENOTEMPTY
-printf("ENOTEMPTY=%lld\n", (long long)(ENOTEMPTY));
-#endif
-#ifdef ENOTSOCK
-printf("ENOTSOCK=%lld\n", (long long)(ENOTSOCK));
-#endif
-#ifdef ENOTSUP
-printf("ENOTSUP=%lld\n", (long long)(ENOTSUP));
-#endif
-#ifdef ENOTTY
-printf("ENOTTY=%lld\n", (long long)(ENOTTY));
-#endif
-#ifdef ENXIO
-printf("ENXIO=%lld\n", (long long)(ENXIO));
-#endif
-#ifdef EOPNOTSUPP
-printf("EOPNOTSUPP=%lld\n", (long long)(EOPNOTSUPP));
-#endif
-#ifdef EOVERFLOW
-printf("EOVERFLOW=%lld\n", (long long)(EOVERFLOW));
-#endif
-#ifdef EPERM
-printf("EPERM=%lld\n", (long long)(EPERM));
-#endif
-#ifdef EPFNOSUPPORT
-printf("EPFNOSUPPORT=%lld\n", (long long)(EPFNOSUPPORT));
-#endif
-#ifdef EPIPE
-printf("EPIPE=%lld\n", (long long)(EPIPE));
-#endif
-#ifdef EPROCLIM
-printf("EPROCLIM=%lld\n", (long long)(EPROCLIM));
-#endif
-#ifdef EPROCUNAVAIL
-printf("EPROCUNAVAIL=%lld\n", (long long)(EPROCUNAVAIL));
-#endif
-#ifdef EPROGMISMATCH
-printf("EPROGMISMATCH=%lld\n", (long long)(EPROGMISMATCH));
-#endif
-#ifdef EPROGUNAVAIL
-printf("EPROGUNAVAIL=%lld\n", (long long)(EPROGUNAVAIL));
-#endif
-#ifdef EPROTO
-printf("EPROTO=%lld\n", (long long)(EPROTO));
-#endif
-#ifdef EPROTONOSUPPORT
-printf("EPROTONOSUPPORT=%lld\n", (long long)(EPROTONOSUPPORT));
-#endif
-#ifdef EPROTOTYPE
-printf("EPROTOTYPE=%lld\n", (long long)(EPROTOTYPE));
-#endif
-#ifdef EPWROFF
-printf("EPWROFF=%lld\n", (long long)(EPWROFF));
-#endif
-#ifdef ERANGE
-printf("ERANGE=%lld\n", (long long)(ERANGE));
-#endif
-#ifdef EREMOTE
-printf("EREMOTE=%lld\n", (long long)(EREMOTE));
-#endif
-#ifdef EROFS
-printf("EROFS=%lld\n", (long long)(EROFS));
-#endif
-#ifdef ERPCMISMATCH
-printf("ERPCMISMATCH=%lld\n", (long long)(ERPCMISMATCH));
-#endif
-#ifdef ESHLIBVERS
-printf("ESHLIBVERS=%lld\n", (long long)(ESHLIBVERS));
-#endif
-#ifdef ESHUTDOWN
-printf("ESHUTDOWN=%lld\n", (long long)(ESHUTDOWN));
-#endif
-#ifdef ESOCKTNOSUPPORT
-printf("ESOCKTNOSUPPORT=%lld\n", (long long)(ESOCKTNOSUPPORT));
-#endif
-#ifdef ESPIPE
-printf("ESPIPE=%lld\n", (long long)(ESPIPE));
-#endif
-#ifdef ESRCH
-printf("ESRCH=%lld\n", (long long)(ESRCH));
-#endif
-#ifdef ESTALE
-printf("ESTALE=%lld\n", (long long)(ESTALE));
-#endif
-#ifdef ETIME
-printf("ETIME=%lld\n", (long long)(ETIME));
-#endif
-#ifdef ETIMEDOUT
-printf("ETIMEDOUT=%lld\n", (long long)(ETIMEDOUT));
-#endif
-#ifdef ETOOMANYREFS
-printf("ETOOMANYREFS=%lld\n", (long long)(ETOOMANYREFS));
-#endif
-#ifdef ETXTBSY
-printf("ETXTBSY=%lld\n", (long long)(ETXTBSY));
-#endif
-#ifdef EUSERS
-printf("EUSERS=%lld\n", (long long)(EUSERS));
-#endif
-#ifdef EWOULDBLOCK
-printf("EWOULDBLOCK=%lld\n", (long long)(EWOULDBLOCK));
-#endif
-#ifdef EXDEV
-printf("EXDEV=%lld\n", (long long)(EXDEV));
-#endif
-#ifdef SIGABRT
-printf("SIGABRT=%lld\n", (long long)(SIGABRT));
-#endif
-#ifdef SIGALRM
-printf("SIGALRM=%lld\n", (long long)(SIGALRM));
-#endif
-#ifdef SIGBUS
-printf("SIGBUS=%lld\n", (long long)(SIGBUS));
-#endif
-#ifdef SIGCHLD
-printf("SIGCHLD=%lld\n", (long long)(SIGCHLD));
-#endif
-#ifdef SIGCONT
-printf("SIGCONT=%lld\n", (long long)(SIGCONT));
-#endif
-#ifdef SIGEMT
-printf("SIGEMT=%lld\n", (long long)(SIGEMT));
-#endif
-#ifdef SIGFPE
-printf("SIGFPE=%lld\n", (long long)(SIGFPE));
-#endif
-#ifdef SIGHUP
-printf("SIGHUP=%lld\n", (long long)(SIGHUP));
-#endif
-#ifdef SIGILL
-printf("SIGILL=%lld\n", (long long)(SIGILL));
-#endif
-#ifdef SIGINFO
-printf("SIGINFO=%lld\n", (long long)(SIGINFO));
-#endif
-#ifdef SIGINT
-printf("SIGINT=%lld\n", (long long)(SIGINT));
-#endif
-#ifdef SIGIO
-printf("SIGIO=%lld\n", (long long)(SIGIO));
-#endif
-#ifdef SIGIOT
-printf("SIGIOT=%lld\n", (long long)(SIGIOT));
-#endif
-#ifdef SIGKILL
-printf("SIGKILL=%lld\n", (long long)(SIGKILL));
-#endif
-#ifdef SIGPIPE
-printf("SIGPIPE=%lld\n", (long long)(SIGPIPE));
-#endif
-#ifdef SIGPROF
-printf("SIGPROF=%lld\n", (long long)(SIGPROF));
-#endif
-#ifdef SIGQUIT
-printf("SIGQUIT=%lld\n", (long long)(SIGQUIT));
-#endif
-#ifdef SIGSEGV
-printf("SIGSEGV=%lld\n", (long long)(SIGSEGV));
-#endif
-#ifdef SIGSTOP
-printf("SIGSTOP=%lld\n", (long long)(SIGSTOP));
-#endif
-#ifdef SIGSYS
-printf("SIGSYS=%lld\n", (long long)(SIGSYS));
-#endif
-#ifdef SIGTERM
-printf("SIGTERM=%lld\n", (long long)(SIGTERM));
-#endif
-#ifdef SIGTRAP
-printf("SIGTRAP=%lld\n", (long long)(SIGTRAP));
-#endif
-#ifdef SIGTSTP
-printf("SIGTSTP=%lld\n", (long long)(SIGTSTP));
-#endif
-#ifdef SIGTTIN
-printf("SIGTTIN=%lld\n", (long long)(SIGTTIN));
-#endif
-#ifdef SIGTTOU
-printf("SIGTTOU=%lld\n", (long long)(SIGTTOU));
-#endif
-#ifdef SIGURG
-printf("SIGURG=%lld\n", (long long)(SIGURG));
-#endif
-#ifdef SIGUSR1
-printf("SIGUSR1=%lld\n", (long long)(SIGUSR1));
-#endif
-#ifdef SIGUSR2
-printf("SIGUSR2=%lld\n", (long long)(SIGUSR2));
-#endif
-#ifdef SIGVTALRM
-printf("SIGVTALRM=%lld\n", (long long)(SIGVTALRM));
-#endif
-#ifdef SIGWINCH
-printf("SIGWINCH=%lld\n", (long long)(SIGWINCH));
-#endif
-#ifdef SIGXCPU
-printf("SIGXCPU=%lld\n", (long long)(SIGXCPU));
-#endif
-#ifdef SIGXFSZ
-printf("SIGXFSZ=%lld\n", (long long)(SIGXFSZ));
 #endif
 return 0;
 }
