@@ -69,6 +69,48 @@ func TestAssembleSymbolJMP(t *testing.T) {
 	}
 }
 
+func TestAssembleRegisterTargetJMP(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	for _, tc := range []struct {
+		target int16
+		want   uint32
+	}{
+		{REG_CTR, 0x4e800420},
+		{REG_LR, 0x4e800020},
+	} {
+		p := &obj.Prog{As: obj.AJMP, From: obj.Addr{Type: obj.TYPE_REG, Reg: tc.target}}
+		words, ok := encodeProg(ctxt, p, 0)
+		if !ok || len(words) != 1 || words[0] != tc.want {
+			t.Errorf("%v = %08x, want %08x", p, words, tc.want)
+		}
+	}
+}
+
+func TestEncodeIndirectBranchForms(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	for _, tc := range []struct {
+		as   obj.As
+		want uint32
+	}{
+		{ABLR, 0x4e800020},
+		{ABLRL, 0x4e800021},
+		{ABCTR, 0x4e800420},
+		{ABCTRL, 0x4e800421},
+		{ABCLR, 0x4e000020},
+		{ABCLRL, 0x4e000021},
+		{ABCCTR, 0x4e000420},
+		{ABCCTRL, 0x4e000421},
+	} {
+		p := &obj.Prog{As: tc.as, From: obj.Addr{Offset: 16}, Reg: REG_R0, To: obj.Addr{Offset: 0}}
+		words, ok := encodeProg(ctxt, p, 0)
+		if !ok || len(words) != 1 || words[0] != tc.want {
+			t.Errorf("%v = %08x, want %08x", p, words, tc.want)
+		}
+	}
+}
+
 func TestEncodeCompareProgs(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }

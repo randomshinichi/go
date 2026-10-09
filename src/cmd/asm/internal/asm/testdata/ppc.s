@@ -4,4 +4,6 @@ TEXT ·probe(SB),NOSPLIT,$0-0 // TEXT pkg.probe(SB), NOSPLIT, $0-0
 	STWCX R3,R4,R5 // STWCX. R3, R5, R4 // 7c64292d
 	SYNC // SYNC // 7c0004ac
 	ISYNC // ISYNC // 4c00012c
+	JMP (CTR) // JMP (CTR) // 4e800420
+	JMP (LR) // JMP (LR) // 4e800020
 	RET
