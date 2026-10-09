@@ -266,6 +266,12 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 
 	switch p.As {
 	// Three-register forms: To=rd, From=ra, Reg=rb.
+	case ALWARX:
+		return emit(rd(), ra(), rb())
+
+	case ASTWCX_:
+		return emit(int32(p.From.Reg-REG_R0), int32(p.To.Reg-REG_R0), rb())
+
 	case AADD, AADDC, AADDE, ASUBF, ASUBFC, ASUBFE,
 		AMULLW, AMULHW, AMULHWU,
 		AAND, AANDC, AOR, AORC, AXOR, ANAND, ANOR, AEQV,
@@ -315,7 +321,11 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if err != nil {
 			return bad(err)
 		}
-		return emit(rd(), int32(d), ra())
+		base := ra()
+		if p.From.Name == obj.NAME_AUTO || p.From.Name == obj.NAME_PARAM {
+			base = int32(REGSP - REG_R0)
+		}
+		return emit(rd(), int32(d), base)
 
 	// Stores: To=d(ra), From=rs.
 	case ASTW, ASTWU, ASTB, ASTH:
@@ -326,7 +336,11 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if err != nil {
 			return bad(err)
 		}
-		return emit(int32(p.From.Reg-REG_R0), int32(d), int32(p.To.Reg-REG_R0))
+		base := p.To.Reg - REG_R0
+		if p.To.Name == obj.NAME_AUTO || p.To.Name == obj.NAME_PARAM {
+			base = REGSP - REG_R0
+		}
+		return emit(int32(p.From.Reg-REG_R0), int32(d), int32(base))
 
 	// All integer comparisons target CR0. Unlike a three-GPR operation,
 	// From and To are the two inputs, not a source and a destination.
@@ -366,6 +380,9 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 			return emit(int32(disp))
 		}
 		return emit(int32(p.From.Offset), int32(p.Reg), int32(disp))
+
+	case ASYNC, AISYNC:
+		return emit()
 
 	case AMFLR:
 		return emit(rd())

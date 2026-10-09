@@ -78,6 +78,19 @@ const (
 	REG_F29
 	REG_F30
 	REG_F31
+	REG_CR0
+	REG_CR1
+	REG_CR2
+	REG_CR3
+	REG_CR4
+	REG_CR5
+	REG_CR6
+	REG_CR7
+	REG_LR
+	REG_CTR
+	REG_XER
+	REG_MSR
+	REG_FPSCR
 )
 
 // The architectural names the rest of the compiler uses for the three

@@ -230,7 +230,7 @@ func init() {
 	objAnames := make([]string, int(obj.A_ARCHSPECIFIC)+len(anames))
 	copy(objAnames[int(obj.A_ARCHSPECIFIC):], anames)
 	obj.RegisterOpcode(obj.ABasePPC, objAnames)
-	obj.RegisterRegister(obj.RBasePPC, obj.RBasePPC+64, Rconv)
+	obj.RegisterRegister(obj.RBasePPC, obj.RBasePPC+77, Rconv)
 }
 
 // Rconv names a ppc32 register for the assembler's dumps. Registers outside the
@@ -248,6 +248,18 @@ func Rconv(r int) string {
 		return fmt.Sprintf("R%d", r-REG_R0)
 	case REG_F0 <= r && r <= REG_F31:
 		return fmt.Sprintf("F%d", r-REG_F0)
+	case REG_CR0 <= r && r <= REG_CR7:
+		return fmt.Sprintf("CR%d", r-REG_CR0)
+	case r == REG_LR:
+		return "LR"
+	case r == REG_CTR:
+		return "CTR"
+	case r == REG_XER:
+		return "XER"
+	case r == REG_MSR:
+		return "MSR"
+	case r == REG_FPSCR:
+		return "FPSCR"
 	}
 	return fmt.Sprintf("Rgok(%d)", r-obj.RBasePPC)
 }

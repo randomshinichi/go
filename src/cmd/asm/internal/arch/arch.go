@@ -11,6 +11,7 @@ import (
 	"cmd/internal/obj/arm64"
 	"cmd/internal/obj/loong64"
 	"cmd/internal/obj/mips"
+	"cmd/internal/obj/ppc"
 	"cmd/internal/obj/ppc64"
 	"cmd/internal/obj/riscv"
 	"cmd/internal/obj/s390x"
@@ -71,6 +72,8 @@ func Set(GOARCH string, shared bool) *Arch {
 		return archMips64(&mips.Linkmips64)
 	case "mips64le":
 		return archMips64(&mips.Linkmips64le)
+	case "ppc":
+		return archPPC(&ppc.Linkppc)
 	case "ppc64":
 		return archPPC64(&ppc64.Linkppc64)
 	case "ppc64le":
@@ -319,6 +322,74 @@ func archArm64() *Arch {
 		IsJump:         jumpArm64,
 	}
 
+}
+
+func archPPC(linkArch *obj.LinkArch) *Arch {
+	register := make(map[string]int16)
+	for i := ppc.REG_R0; i <= ppc.REG_R31; i++ {
+		register[fmt.Sprintf("R%d", i-ppc.REG_R0)] = int16(i)
+	}
+	for i := ppc.REG_F0; i <= ppc.REG_F31; i++ {
+		register[fmt.Sprintf("F%d", i-ppc.REG_F0)] = int16(i)
+	}
+	for i := ppc.REG_CR0; i <= ppc.REG_CR7; i++ {
+		register[obj.Rconv(i)] = int16(i)
+	}
+	for _, r := range []int16{ppc.REG_LR, ppc.REG_CTR, ppc.REG_XER, ppc.REG_MSR, ppc.REG_FPSCR} {
+		register[obj.Rconv(int(r))] = r
+	}
+	register["SB"] = RSB
+	register["FP"] = RFP
+	register["PC"] = RPC
+	register["SP"] = ppc.REG_R1
+	register["g"] = ppc.REG_R30
+
+	instructions := make(map[string]obj.As)
+	for i, name := range obj.Anames {
+		instructions[name] = obj.As(i)
+	}
+	for i, name := range ppc.Anames() {
+		if i > 0 {
+			instructions[name] = obj.As(i) + obj.A_ARCHSPECIFIC + obj.ABasePPC
+		}
+	}
+	instructions["B"] = ppc.AB
+	instructions["BL"] = ppc.ABL
+	instructions["STWCX"] = ppc.ASTWCX_
+	return &Arch{
+		LinkArch:       linkArch,
+		Instructions:   instructions,
+		Register:       register,
+		RegisterPrefix: map[string]bool{"R": true, "F": true, "CR": true},
+		RegisterNumber: ppcRegisterNumber,
+		IsJump:         jumpPPC,
+	}
+}
+
+func ppcRegisterNumber(name string, n int16) (int16, bool) {
+	var base, limit int16
+	switch name {
+	case "R":
+		base, limit = ppc.REG_R0, ppc.REG_R31
+	case "F":
+		base, limit = ppc.REG_F0, ppc.REG_F31
+	case "CR":
+		base, limit = ppc.REG_CR0, ppc.REG_CR7
+	default:
+		return 0, false
+	}
+	if n < 0 || n > limit-base {
+		return 0, false
+	}
+	return base + n, true
+}
+
+func jumpPPC(word string) bool {
+	switch word {
+	case "B", "BL", "BC", "BCL", "BLR", "BCTR", "BCLR":
+		return true
+	}
+	return false
 }
 
 func archPPC64(linkArch *obj.LinkArch) *Arch {
