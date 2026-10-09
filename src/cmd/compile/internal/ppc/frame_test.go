@@ -21,6 +21,18 @@ import (
 	"cmd/compile/internal/ssagen"
 )
 
+// TestMLDSALargeFrameCompile compiles an ordinary package with 33, 49, and
+// 93 KiB frames. It guards both large-frame allocation and frame-relative
+// address lowering independently of reflectcall.
+func TestMLDSALargeFrameCompile(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	cmd := exec.Command(testenv.GoToolPath(t), "build", "-a", "crypto/internal/fips140/mldsa")
+	cmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=ppc")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compile crypto/internal/fips140/mldsa for darwin/ppc: %v\n%s", err, out)
+	}
+}
+
 func TestPadGoStackFrame(t *testing.T) {
 	var arch ssagen.ArchInfo
 	Init(&arch)
