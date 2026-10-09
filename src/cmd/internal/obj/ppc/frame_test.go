@@ -80,14 +80,25 @@ func TestGoStackFrames(t *testing.T) {
 	}
 }
 
-func TestRejectOversizedFrame(t *testing.T) {
+func TestLargeFramePrologue(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	diagnosed := false
 	ctxt.DiagFunc = func(string, ...interface{}) { diagnosed = true }
 	s := ctxt.Lookup("large")
-	s.NewFuncInfo().Text = &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 32768}}
+	text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 32768}}
+	text.Link = &obj.Prog{As: obj.ARET}
+	s.NewFuncInfo().Text = text
 	preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
-	if !diagnosed {
-		t.Fatal("oversized frame silently accepted")
+	if diagnosed {
+		t.Fatal("large frame rejected")
+	}
+	var foundIndexedAllocation bool
+	for p := text.Link; p != nil; p = p.Link {
+		if p.As == ASTWUX {
+			foundIndexedAllocation = true
+		}
+	}
+	if !foundIndexedAllocation {
+		t.Fatal("large frame did not use indexed stack allocation")
 	}
 }
