@@ -337,7 +337,7 @@ func nanotime_trampoline()
 func walltime() (int64, int32) {
 	var t timespec
 	libcCall(unsafe.Pointer(abi.FuncPCABI0(walltime_trampoline)), unsafe.Pointer(&t))
-	return t.tv_sec, int32(t.tv_nsec)
+	return int64(t.tv_sec), int32(t.tv_nsec)
 }
 func walltime_trampoline()
 
