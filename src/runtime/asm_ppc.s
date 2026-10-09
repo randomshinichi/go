@@ -19,6 +19,8 @@ TEXT runtime·goexit(SB), NOSPLIT|TOPFRAME, $0-0
 	RET
 
 // getg returns the current goroutine from the reserved Go register R30.
+// R13 and R2 are not thread pointers on the measured Darwin ppc32 ABI; core
+// Go runtime access to g needs no separate TLS lookup.
 TEXT runtime·getg(SB), NOSPLIT, $0-4
 	STW	R30, ret+0(FP)
 	RET
