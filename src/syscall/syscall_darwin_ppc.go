@@ -162,3 +162,27 @@ func readdir_r(dir uintptr, entry *Dirent, result **Dirent) (res Errno) {
 func libc_readdir_r_inode64_trampoline()
 
 //go:cgo_import_dynamic libc_readdir_r_inode64 readdir_r$INODE64 "/usr/lib/libSystem.B.dylib"
+
+// Getdirentries uses the Leopard syscall that returns 64-bit-inode directory
+// records, matching Dirent on ppc. SYS_getdirentries (196) returns a legacy
+// 32-bit-inode record and is not layout-compatible. The 64-bit record layout
+// was measured on the G5 for ppc64 (ino@0, seekoff@8, reclen@16, namlen@18,
+// type@20, name@21); the inode record is independent of userspace pointer size.
+func Getdirentries(fd int, buf []byte, basep *uintptr) (n int, err error) {
+	var p unsafe.Pointer
+	if len(buf) > 0 {
+		p = unsafe.Pointer(&buf[0])
+	} else {
+		p = unsafe.Pointer(&_zero)
+	}
+	var base uintptr
+	if basep == nil {
+		basep = &base
+	}
+	r0, _, e1 := Syscall6(SYS_GETDIRENTRIES64, uintptr(fd), uintptr(p), uintptr(len(buf)), uintptr(unsafe.Pointer(basep)), 0, 0)
+	n = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
