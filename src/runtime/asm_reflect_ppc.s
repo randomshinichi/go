@@ -52,12 +52,29 @@ TEXT runtime·reflectcall(SB), NOSPLIT|NOFRAME, $0-28
 	DISPATCH(call1073741824, 16384, 0)
 	B runtime·badreflectcall(SB)
 
-#define CALLFN(NAME, MAXSIZE) \
-TEXT NAME(SB), WRAPPER, $MAXSIZE-28; \
+#define CALLFN(NAME, HIGH, LOW) \
+TEXT NAME(SB), WRAPPER|NOSPLIT|NOFRAME, $0-0; \
 	NO_LOCAL_POINTERS; \
+	MFLR R0; \
+	STW R0, 8(R1); \
+	ADDIS R3, R0, $HIGH; \
+	ADDI R3, R3, $LOW; \
+	BL runtime·stackcheck(SB); \
+	CMPWI R3, $0; \
+	BC 12, 2, stackok; \
+	LWZ R5, 8(R1); \
+	BL runtime·morestack(SB); \
+stackok: \
+	ADDIS R4, R0, $HIGH; \
+	ADDI R4, R4, $LOW; \
+	SUBF R4, R4, R0; \
+	STWUX R1, R1, R4; \
+	ADDIS R31, R0, $HIGH; \
+	ADDI R31, R31, $LOW; \
+	ADD R31, R1, R31; \
 	/* Copy stack arguments into the target's SP+24 argument area. */ \
-	LWZ R3, stackArgs+8(FP); \
-	LWZ R4, stackArgsSize+12(FP); \
+	LWZ R3, 8(R31); \
+	LWZ R4, 12(R31); \
 	ADDI R5, R1, $PPC32_FIXED_FRAME; \
 	CMPWI R4, $0; \
 	BC 12, 2, callfn; \
@@ -70,57 +87,60 @@ copyargs: \
 	CMPWI R4, $0; \
 	BC 12, 1, copyargs; \
 callfn: \
-	LWZ R11, f+4(FP); \
+	LWZ R11, 4(R31); \
 	LWZ R12, 0(R11); \
 	MTCTR R12; \
 	PCDATA $PCDATA_StackMapIndex, $0; \
 	BCTRL; \
-	/* Original reflectcall arguments remain in the caller's frame. */ \
-	LWZ R7, stackArgsType+0(FP); \
-	STW R7, PPC32_FIXED_FRAME+0(R1); \
-	LWZ R3, stackArgs+8(FP); \
-	LWZ R4, stackRetOffset+16(FP); \
+	/* Recompute the old SP after calls, which may clobber R31. */ \
+	ADDIS R31, R0, $HIGH; \
+	ADDI R31, R31, $LOW; \
+	ADD R31, R1, R31; \
+	LWZ R7, 0(R31); \
+	LWZ R3, 8(R31); \
+	LWZ R4, 16(R31); \
 	ADD R3, R3, R4; \
-	STW R3, PPC32_FIXED_FRAME+4(R1); \
 	ADDI R5, R1, $PPC32_FIXED_FRAME; \
 	ADD R5, R5, R4; \
-	STW R5, PPC32_FIXED_FRAME+8(R1); \
-	LWZ R6, stackArgsSize+12(FP); \
+	LWZ R6, 12(R31); \
 	SUBF R6, R4, R6; \
-	STW R6, PPC32_FIXED_FRAME+12(R1); \
-	STW R0, PPC32_FIXED_FRAME+16(R1); \
-	/* reflectcallmove applies write barriers while copying return values. */ \
 	BL runtime·callRet(SB); \
+	/* Restore the incoming stack and link register. */ \
+	ADDIS R31, R0, $HIGH; \
+	ADDI R31, R31, $LOW; \
+	ADD R1, R1, R31; \
+	LWZ R31, 8(R1); \
+	MTLR R31; \
 	RET
 
 
-CALLFN(runtime·call16, 16)
-CALLFN(runtime·call32, 32)
-CALLFN(runtime·call64, 64)
-CALLFN(runtime·call128, 128)
-CALLFN(runtime·call256, 256)
-CALLFN(runtime·call512, 512)
-CALLFN(runtime·call1024, 1024)
-CALLFN(runtime·call2048, 2048)
-CALLFN(runtime·call4096, 4096)
-CALLFN(runtime·call8192, 8192)
-CALLFN(runtime·call16384, 16384)
-CALLFN(runtime·call32768, 32768)
-CALLFN(runtime·call65536, 65536)
-CALLFN(runtime·call131072, 131072)
-CALLFN(runtime·call262144, 262144)
-CALLFN(runtime·call524288, 524288)
-CALLFN(runtime·call1048576, 1048576)
-CALLFN(runtime·call2097152, 2097152)
-CALLFN(runtime·call4194304, 4194304)
-CALLFN(runtime·call8388608, 8388608)
-CALLFN(runtime·call16777216, 16777216)
-CALLFN(runtime·call33554432, 33554432)
-CALLFN(runtime·call67108864, 67108864)
-CALLFN(runtime·call134217728, 134217728)
-CALLFN(runtime·call268435456, 268435456)
-CALLFN(runtime·call536870912, 536870912)
-CALLFN(runtime·call1073741824, 1073741824)
+CALLFN(runtime·call16, 0, 48)
+CALLFN(runtime·call32, 0, 64)
+CALLFN(runtime·call64, 0, 96)
+CALLFN(runtime·call128, 0, 160)
+CALLFN(runtime·call256, 0, 288)
+CALLFN(runtime·call512, 0, 544)
+CALLFN(runtime·call1024, 0, 1056)
+CALLFN(runtime·call2048, 0, 2080)
+CALLFN(runtime·call4096, 0, 4128)
+CALLFN(runtime·call8192, 0, 8224)
+CALLFN(runtime·call16384, 0, 16416)
+CALLFN(runtime·call32768, 1, -32736)
+CALLFN(runtime·call65536, 1, 32)
+CALLFN(runtime·call131072, 2, 32)
+CALLFN(runtime·call262144, 4, 32)
+CALLFN(runtime·call524288, 8, 32)
+CALLFN(runtime·call1048576, 16, 32)
+CALLFN(runtime·call2097152, 32, 32)
+CALLFN(runtime·call4194304, 64, 32)
+CALLFN(runtime·call8388608, 128, 32)
+CALLFN(runtime·call16777216, 256, 32)
+CALLFN(runtime·call33554432, 512, 32)
+CALLFN(runtime·call67108864, 1024, 32)
+CALLFN(runtime·call134217728, 2048, 32)
+CALLFN(runtime·call268435456, 4096, 32)
+CALLFN(runtime·call536870912, 8192, 32)
+CALLFN(runtime·call1073741824, 16384, 32)
 
 // callRet packages register values into the ABI0 argument area for the
 // nosplit runtime.reflectcallmove helper.

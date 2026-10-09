@@ -42,6 +42,8 @@ TEXT runtime·mstart_stub(SB), NOSPLIT, $0-0
 // allocated frame size in R3; it returns nonzero when SP-frame crosses g's
 // stack guard. It is a leaf so it can run before the caller has a frame.
 TEXT runtime·stackcheck(SB), NOSPLIT|NOFRAME, $0-0
+	CMPLW R1, R3
+	BC 12, 0, grow // SP-frame would wrap around the 32-bit address space.
 	LWZ R4, g_stackguard0(R30)
 	SUBF R3, R3, R1
 	CMPLW R3, R4
