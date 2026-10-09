@@ -57,6 +57,8 @@
 (Mod8 x y) => (Mod32 (SignExt8to32 x) (SignExt8to32 y))
 (Mod8u x y) => (Mod32u (ZeroExt8to32 x) (ZeroExt8to32 y))
 (RotateLeft32 x y) => (ROTLW x y)
+(RotateLeft8 x y) => (Or8 <x.Type> (Lsh8x32 <x.Type> x (And32 <y.Type> y (MOVWconst <y.Type> [7]))) (Rsh8Ux32 <x.Type> x (Sub32 <y.Type> (MOVWconst <y.Type> [8]) (And32 <y.Type> y (MOVWconst <y.Type> [7])))))
+(RotateLeft16 x y) => (Or16 <x.Type> (Lsh16x32 <x.Type> x (And32 <y.Type> y (MOVWconst <y.Type> [15]))) (Rsh16Ux32 <x.Type> x (Sub32 <y.Type> (MOVWconst <y.Type> [16]) (And32 <y.Type> y (MOVWconst <y.Type> [15])))))
 (And(32|16|8|B) x y) => (AND x y)
 (Or(32|16|8|B) x y) => (OR x y)
 (Xor(32|16|8) x y) => (XOR x y)
@@ -74,10 +76,10 @@
 (Rsh32x(8|16) x y) => (Rsh32x32 x (ZeroExt(8|16)to32 y))
 // Narrow left shifts use the word operation, but must still return zero when
 // the count reaches the source width (the word shift only checks 32).
-(Lsh8x(8|16) x y) => (AND (SLW <typ.UInt32> x (ZeroExt(8|16)to32 y)) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] (ZeroExt(8|16)to32 y)))))
-(Lsh16x(8|16) x y) => (AND (SLW <typ.UInt32> x (ZeroExt(8|16)to32 y)) (NEG <typ.UInt32> (LessThan (CMPWUconst [16] (ZeroExt(8|16)to32 y)))))
-(Lsh8x32 x y) => (AND (SLW <typ.UInt32> x y) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] y))))
-(Lsh16x32 x y) => (AND (SLW <typ.UInt32> x y) (NEG <typ.UInt32> (LessThan (CMPWUconst [16] y))))
+(Lsh8x(8|16) x y) => (AND (AND <typ.UInt32> (SLW <typ.UInt32> (ZeroExt8to32 x) (ZeroExt(8|16)to32 y)) (MOVWconst [255])) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] (ZeroExt(8|16)to32 y)))))
+(Lsh16x(8|16) x y) => (AND (AND <typ.UInt32> (SLW <typ.UInt32> (ZeroExt16to32 x) (ZeroExt(8|16)to32 y)) (MOVWconst [65535])) (NEG <typ.UInt32> (LessThan (CMPWUconst [16] (ZeroExt(8|16)to32 y)))))
+(Lsh8x32 x y) => (AND (AND <typ.UInt32> (SLW <typ.UInt32> (ZeroExt8to32 x) y) (MOVWconst [255])) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] y))))
+(Lsh16x32 x y) => (AND (AND <typ.UInt32> (SLW <typ.UInt32> (ZeroExt16to32 x) y) (MOVWconst [65535])) (NEG <typ.UInt32> (LessThan (CMPWUconst [16] y))))
 (Rsh8Ux(8|16) x y) => (AND (SRW <typ.UInt32> (ZeroExt8to32 x) (ZeroExt(8|16)to32 y)) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] (ZeroExt(8|16)to32 y)))))
 (Rsh16Ux(8|16) x y) => (AND (SRW <typ.UInt32> (ZeroExt16to32 x) (ZeroExt(8|16)to32 y)) (NEG <typ.UInt32> (LessThan (CMPWUconst [16] (ZeroExt(8|16)to32 y)))))
 (Rsh8Ux32 x y) => (AND (SRW <typ.UInt32> (ZeroExt8to32 x) y) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] y))))
@@ -96,9 +98,9 @@
 (Rsh32x64 x (Const64 [c])) && uint64(c) >= 32 => (SRAWI x [31])
 // Constant mixed-width shifts are reduced here because the generic 64-bit
 // decomposition can leave the shift count as Const64 on the ppc32 target.
-(Lsh8x64 x (Const64 [c])) && uint64(c) < 8 => (SLW x (MOVWconst [int32(c)]))
+(Lsh8x64 x (Const64 [c])) && uint64(c) < 8 => (AND <typ.UInt32> (SLW <typ.UInt32> (ZeroExt8to32 x) (MOVWconst <typ.UInt32> [int32(c)])) (MOVWconst <typ.UInt32> [255]))
 (Lsh8x64 _ (Const64 [c])) && uint64(c) >= 8 => (MOVWconst [0])
-(Lsh16x64 x (Const64 [c])) && uint64(c) < 16 => (SLW x (MOVWconst [int32(c)]))
+(Lsh16x64 x (Const64 [c])) && uint64(c) < 16 => (AND <typ.UInt32> (SLW <typ.UInt32> (ZeroExt16to32 x) (MOVWconst <typ.UInt32> [int32(c)])) (MOVWconst <typ.UInt32> [65535]))
 (Lsh16x64 _ (Const64 [c])) && uint64(c) >= 16 => (MOVWconst [0])
 (Rsh8Ux64 x (Const64 [c])) && uint64(c) < 8 => (SRW (ZeroExt8to32 x) (MOVWconst [int32(c)]))
 (Rsh8Ux64 _ (Const64 [c])) && uint64(c) >= 8 => (MOVWconst [0])
