@@ -12,8 +12,7 @@ import (
 
 // Init registers the ppc32 back end with the compiler driver. It is modelled on
 // cmd/compile/internal/arm: a 32-bit RISC target whose 64-bit operations are
-// decomposed into 32-bit ones, with no register calling convention and no
-// hardware g register.
+// decomposed into 32-bit ones, stack-only arguments and R30 dedicated to g.
 func Init(arch *ssagen.ArchInfo) {
 	arch.LinkArch = &ppc.Linkppc
 	arch.REGSP = ppc.REGSP

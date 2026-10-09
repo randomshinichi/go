@@ -197,6 +197,37 @@ func TestGoStackCallsQEMU(t *testing.T) {
 
 var fixtureCallReloc = regexp.MustCompile(`^(\d+)\+4 R_CALLPOWER (main\.\w+)\+0$`)
 
+// The calls/GetG fixtures also use closure code addresses and method symbols.
+// Share the whole-function relocation adapter, keeping unsupported relocations
+// fatal rather than discarding them while building the Linux ELF fragment.
+var fixtureFunctionReloc = regexp.MustCompile(`^(\d+)\+(4|8) (R_CALLPOWER|R_ADDRPOWER) (.+)\+0$`)
+
+type fixtureRelocation struct {
+	kind, target string
+}
+
+func fixtureFunctionRelocs(t *testing.T, out, fn string) map[int]fixtureRelocation {
+	t.Helper()
+	relocs := make(map[int]fixtureRelocation)
+	for _, rel := range emittedRelocs(out, fn) {
+		// This zero-size record tells the Go linker which interface method
+		// is reachable; it patches no instruction in the fragment.
+		if strings.HasPrefix(rel, "0+0 R_USEIFACEMETHOD ") {
+			continue
+		}
+		m := fixtureFunctionReloc.FindStringSubmatch(rel)
+		if m == nil || (m[3] == "R_CALLPOWER" && m[2] != "4") || (m[3] == "R_ADDRPOWER" && m[2] != "8") {
+			t.Fatalf("fragment has an unsupported relocation: %s", rel)
+		}
+		off, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		relocs[off] = fixtureRelocation{m[3], m[4]}
+	}
+	return relocs
+}
+
 func fixtureLocalCalls(t *testing.T, out, fn string) map[int]string {
 	t.Helper()
 	calls := make(map[int]string)
