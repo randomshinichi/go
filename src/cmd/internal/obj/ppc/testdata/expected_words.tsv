@@ -133,3 +133,4 @@ sync		0x7C0004AC	clang
 xor	3,4,5	0x7C832A78	clang
 xori	3,4,4660	0x68831234	clang
 xoris	3,4,4660	0x6C831234	clang
+sc		0x44000002	GCC-4.0.1/otool-pmg5

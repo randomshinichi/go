@@ -263,6 +263,7 @@ const (
 	AFCMPO  // fcmpo
 	ASYNC   // sync
 	AISYNC  // isync
+	ASC     // sc
 
 	ALAST
 )

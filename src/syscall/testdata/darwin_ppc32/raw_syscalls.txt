@@ -1,0 +1,2 @@
+SYS_getpid=20 result=12897 error=0
+SYS_open_missing=5 result=-1 error=2
