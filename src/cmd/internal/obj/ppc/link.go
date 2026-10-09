@@ -152,7 +152,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 				p.To = reg(REG_R31)
 				q := appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: int64(int16(frame + 8))}, reg(REG_R31))
 				q.Reg = REG_R31
-				q = appendOp(q, AADD, reg(REG_R31), reg(REGSP))
+				q = appendOp(q, AADD, reg(REGSP), reg(REG_R31))
 				q.Reg = REG_R31
 				q = appendOp(q, ALWZ, obj.Addr{Type: obj.TYPE_MEM, Reg: REG_R31, Offset: 8}, ret)
 				p = q
@@ -187,8 +187,15 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p.Reg = REGSP
 			stackAdj = p
 		} else {
-			p = appendFrameConst(p, frame, REG_R31)
-			q := appendOp(p, AADD, reg(REGSP), reg(REGSP))
+			// Replace RET with the first instruction of the epilogue. Appending
+			// after RET would leave the stack restoration unreachable.
+			p.As = AADDIS
+			p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: (frame + 0x8000) >> 16}
+			p.Reg = REG_R0
+			p.To = reg(REG_R31)
+			q := appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: int64(int16(frame))}, reg(REG_R31))
+			q.Reg = REG_R31
+			q = appendOp(q, AADD, reg(REGSP), reg(REGSP))
 			q.Reg = REG_R31
 			stackAdj = q
 			p = q
@@ -429,7 +436,8 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if d >= -32768 && d <= 32767 {
 			return emit(dest, int32(d), base)
 		}
-		hi, err := Encode(AADDIS, int32(REG_R31-REG_R0), base, int32((d+0x8000)>>16))
+		// Materialize the displacement from zero, then add the base once below.
+		hi, err := Encode(AADDIS, int32(REG_R31-REG_R0), 0, int32((d+0x8000)>>16))
 		if err != nil {
 			return bad(err)
 		}
@@ -467,7 +475,8 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if d >= -32768 && d <= 32767 {
 			return emit(src, int32(d), int32(base))
 		}
-		hi, err := Encode(AADDIS, int32(REG_R31-REG_R0), int32(base), int32((d+0x8000)>>16))
+		// Materialize the displacement from zero, then add the base once below.
+		hi, err := Encode(AADDIS, int32(REG_R31-REG_R0), 0, int32((d+0x8000)>>16))
 		if err != nil {
 			return bad(err)
 		}
