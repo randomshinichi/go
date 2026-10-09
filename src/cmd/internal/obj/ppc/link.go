@@ -414,6 +414,22 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if p.As == obj.AJMP && p.To.Type == obj.TYPE_NONE {
 			target = &p.From // generic asm represents JMP's symbol in From
 		}
+		if p.As == obj.AJMP && (target.Type == obj.TYPE_REG || target.Type == obj.TYPE_MEM) && target.Name == obj.NAME_NONE {
+			var as obj.As
+			switch target.Reg {
+			case REG_CTR:
+				as = ABCTR
+			case REG_LR:
+				as = ABLR
+			default:
+				return bad(fmt.Errorf("%v: indirect JMP target must be CTR or LR", p))
+			}
+			enc, err := Encode(Inst(as))
+			if err != nil {
+				return bad(err)
+			}
+			return []uint32{enc}, true
+		}
 		if (p.As == obj.AJMP || p.As == AB) && target.Sym != nil &&
 			(target.Type == obj.TYPE_BRANCH || (target.Type == obj.TYPE_MEM && (target.Name == obj.NAME_EXTERN || target.Name == obj.NAME_STATIC))) {
 			if target.Offset&3 != 0 {
@@ -447,8 +463,10 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		return emit(rd())
 	case AMTLR, AMTCTR:
 		return emit(ra())
-	case ABLR, ABCTRL:
+	case ABLR, ABLRL, ABCTR, ABCTRL:
 		return emit()
+	case ABCLR, ABCLRL, ABCCTR, ABCCTRL:
+		return emit(int32(p.From.Offset), int32(p.Reg-REG_R0), int32(p.To.Offset))
 	}
 
 	return bad(fmt.Errorf("no ppc32 encoding for %v (as %v)", p, p.As))
