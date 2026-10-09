@@ -416,7 +416,13 @@ func rtconvfn(src, dst *types.Type) (param, result types.Kind) {
 		}
 
 	case sys.PPC:
-		// Like the other 32-bit targets, use the exact runtime recipes.
+		// Use the runtime's integer-only recipes for wide conversions.
+		if src.IsFloat() {
+			switch dst.Kind() {
+			case types.TINT64, types.TUINT64:
+				return types.TFLOAT64, dst.Kind()
+			}
+		}
 		// In particular, wide integer -> binary64 -> binary32 can double-round.
 		if dst.IsFloat() {
 			switch src.Kind() {
