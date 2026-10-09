@@ -23,7 +23,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
-//go:build arm || 386 || mips || mipsle
+//go:build arm || 386 || mips || mipsle || ppc
 
 package runtime
 
@@ -119,9 +119,9 @@ func _div64by32(a uint64, b uint32, r *uint32) (q uint32)
 
 //go:nosplit
 func dodiv(n, d uint64) (q, r uint64) {
-	if GOARCH == "arm" {
-		// arm doesn't have a division instruction, so
-		// slowdodiv is the best that we can do.
+	if GOARCH == "arm" || GOARCH == "ppc" {
+		// arm lacks division instructions, and ppc32 has no helper for
+		// 64-by-64 division; slowdodiv is the portable fallback.
 		return slowdodiv(n, d)
 	}
 

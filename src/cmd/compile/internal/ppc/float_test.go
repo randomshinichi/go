@@ -203,14 +203,21 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 					t.Fatalf("non-call relocation: %s %08x", rel.kind, w)
 				}
 				target := strings.TrimPrefix(rel.target, pkg+".")
-				found := target == "smash"
+				found := target == "smash" || target == "runtime.stackcheck" || target == "runtime.morestack" || target == "stackcheck" || target == "morestack"
 				for _, local := range functions {
 					found = found || target == local
 				}
 				if !found {
 					t.Fatalf("non-fixture target: %s", rel.target)
 				}
-				fmt.Fprintf(&asm, "bl fn_%s\n", target)
+				switch target {
+				case "runtime.stackcheck", "stackcheck":
+					asm.WriteString("bl fn_stackcheck\n")
+				case "runtime.morestack", "morestack":
+					asm.WriteString("bl fn_morestack\n")
+				default:
+					fmt.Fprintf(&asm, "bl fn_%s\n", target)
+				}
 			} else {
 				if mutate != nil {
 					v := mutate(fn, w)
@@ -223,6 +230,7 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 			}
 		}
 	}
+	asm.WriteString("fn_stackcheck:\nli 3,0\nblr\nfn_morestack:\nli 3,99\nli 0,1\nsc\n")
 	if mutate != nil && changes == 0 {
 		t.Fatal("negative control changed no instruction")
 	}

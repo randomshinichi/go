@@ -391,7 +391,18 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if err != nil {
 			return bad(err)
 		}
-		return emit(rd(), reg(), int32(off))
+		if off >= -32768 && off <= 32767 {
+			return emit(rd(), reg(), int32(off))
+		}
+		hi, err := Encode(AADDIS, rd(), reg(), int32((off+0x8000)>>16))
+		if err != nil {
+			return bad(err)
+		}
+		lo, err := Encode(AADDI, rd(), rd(), int32(int16(off)))
+		if err != nil {
+			return bad(err)
+		}
+		return []uint32{hi, lo}, true
 
 	// Immediate forms that write their first operand: To=ra, Reg=rs,
 	// From.Offset=the immediate (ui or sh).

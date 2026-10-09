@@ -135,6 +135,8 @@ func TestIndirectAndTailCallsQEMU(t *testing.T) {
 	}
 	labels["runtime.(*tailLink).Read"] = labels["runtime.(*tailFirst).Read"]
 	labels["internal/runtime/sys.method"] = labels["runtime.method"]
+	labels["runtime.stackcheck"] = "fn_stackcheck"
+	labels["runtime.morestack"] = "fn_morestack"
 
 	for _, tc := range []struct {
 		name, entry, setup string
@@ -209,6 +211,7 @@ func TestIndirectAndTailCallsQEMU(t *testing.T) {
 					}
 				}
 			}
+			asm.WriteString("fn_stackcheck:\nli 3,0\nblr\nfn_morestack:\nli 3,99\nli 0,1\nsc\n")
 			if tailBranches < 2 {
 				t.Fatalf("fixture lost the two tail branches: %d", tailBranches)
 			}

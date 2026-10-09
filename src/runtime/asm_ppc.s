@@ -103,3 +103,80 @@ switchstack:
 
 TEXT runtime·morestack_noctxt(SB), NOSPLIT|NOFRAME, $0-0
 	B runtime·morestack(SB)
+
+// memmove handles overlapping ranges with byte copies. The target's baseline
+// has no PPC64 helper, and the generic runtime requires this symbol at link time.
+TEXT runtime·memmove(SB), NOSPLIT|NOFRAME, $0-12
+	LWZ R3, to+0(FP)
+	LWZ R4, from+4(FP)
+	LWZ R5, n+8(FP)
+	CMPWI R5, $0
+	BC 12, 2, memdone
+	CMPLW R3, R4
+	BC 12, 0, memforward
+	ADD R7, R4, R5
+	CMPLW R3, R7
+	BC 12, 0, membackward
+memforward:
+	LBZ R6, 0(R4)
+	STB R6, 0(R3)
+	ADDI R3, R3, $1
+	ADDI R4, R4, $1
+	ADDI R5, R5, $-1
+	CMPWI R5, $0
+	BC 4, 2, memforward
+	RET
+membackward:
+	ADD R3, R3, R5
+	ADD R4, R4, R5
+membackloop:
+	ADDI R3, R3, $-1
+	ADDI R4, R4, $-1
+	LBZ R6, 0(R4)
+	STB R6, 0(R3)
+	ADDI R5, R5, $-1
+	CMPWI R5, $0
+	BC 4, 2, membackloop
+memdone:
+	RET
+
+// The generic 32-bit hash fallbacks are Go ABI0 functions. These small stubs
+// provide the assembly names expected by compiler builtins and forward their
+// arguments through the measured stack-only ABI.
+TEXT runtime·memhash32(SB), NOSPLIT, $12-12
+	LWZ R3, p+0(FP)
+	STW R3, 24(R1)
+	LWZ R4, h+4(FP)
+	STW R4, 28(R1)
+	BL runtime·memhash32Fallback(SB)
+	STW R3, ret+8(FP)
+	RET
+
+TEXT runtime·memhash64(SB), NOSPLIT, $12-12
+	LWZ R3, p+0(FP)
+	STW R3, 24(R1)
+	LWZ R4, h+4(FP)
+	STW R4, 28(R1)
+	BL runtime·memhash64Fallback(SB)
+	STW R3, ret+8(FP)
+	RET
+
+TEXT runtime·memhash(SB), NOSPLIT, $12-16
+	LWZ R3, p+0(FP)
+	STW R3, 24(R1)
+	LWZ R4, h+4(FP)
+	STW R4, 28(R1)
+	LWZ R5, s+8(FP)
+	STW R5, 32(R1)
+	BL runtime·memhashFallback(SB)
+	STW R3, ret+12(FP)
+	RET
+
+TEXT runtime·strhash(SB), NOSPLIT, $8-12
+	LWZ R3, p+0(FP)
+	STW R3, 24(R1)
+	LWZ R4, h+4(FP)
+	STW R4, 28(R1)
+	BL runtime·strhashFallback(SB)
+	STW R3, ret+8(FP)
+	RET
