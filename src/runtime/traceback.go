@@ -371,6 +371,12 @@ func (u *unwinder) resolveInternal(innermost, isSyscall bool) {
 		if usesLR {
 			if innermost && frame.sp < frame.fp || frame.lr == 0 {
 				lrPtr = frame.sp
+				if goarch.IsPpc != 0 {
+					// PPC32 saves LR in the caller's linkage area, before
+					// allocating its frame. The SP delta gives the caller SP
+					// (also stored in this frame's backchain), not the LR slot.
+					lrPtr = frame.fp + 8
+				}
 				frame.lr = *(*uintptr)(unsafe.Pointer(lrPtr))
 			}
 		} else {

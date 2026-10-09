@@ -699,6 +699,11 @@ func adjustpointers(scanp unsafe.Pointer, bv *bitvector, adjinfo *adjustinfo, f 
 
 // Note: the argument/return area is adjusted by the callee.
 func adjustframe(frame *stkframe, adjinfo *adjustinfo) {
+	if goarch.IsPpc != 0 && frame.sp < frame.fp {
+		// STWU saved the caller SP in the PPC32 backchain. It is a stack
+		// pointer, unlike the LR at caller SP+8, and must move with the stack.
+		adjustpointer(adjinfo, unsafe.Pointer(frame.sp))
+	}
 	// Adjust saved frame pointer if there is one.
 	if (goarch.ArchFamily == goarch.AMD64 || goarch.ArchFamily == goarch.ARM64) && frame.argp-frame.varp == 2*goarch.PtrSize {
 		if stackDebug >= 3 {
