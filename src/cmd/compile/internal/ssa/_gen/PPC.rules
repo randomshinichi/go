@@ -106,6 +106,16 @@
 (Store {t} ptr val mem) && is32BitFloat(t) => (FMOVSstore ptr val mem)
 (Store {t} ptr val mem) && is64BitFloat(t) => (FMOVDstore ptr val mem)
 
+// Baseline G3 conversions use aligned IEEE bias construction or fctiwz.
+(Cvt32to64F x) => (LoweredCvt32to64F x)
+(Cvt32Uto64F x) => (LoweredCvt32Uto64F x)
+(Cvt32to32F x) => (FRSP (LoweredCvt32to64F <typ.Float64> x))
+(Cvt32Uto32F x) => (FRSP (LoweredCvt32Uto64F <typ.Float64> x))
+(Cvt64Fto32 x) => (LoweredCvt64Fto32 x)
+(Cvt64Fto32U x) => (LoweredCvt64Fto32U x)
+(Cvt32Fto32 x) => (LoweredCvt64Fto32 x)
+(Cvt32Fto32U x) => (LoweredCvt64Fto32U x)
+
 // Single operations round before their result can be widened or reused.
 (Add32F x y) => (FRSP (FADDS <typ.Float32> x y))
 (Sub32F x y) => (FRSP (FSUBS <typ.Float32> x y))

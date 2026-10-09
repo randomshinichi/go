@@ -153,8 +153,14 @@ func init() {
 		fp11           = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
 		fp21           = regInfo{inputs: []regMask{fp, fp}, outputs: []regMask{fp}}
 		fp2cr          = regInfo{inputs: []regMask{fp, fp}}
-		fpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{fp}}
-		fpstore        = regInfo{inputs: []regMask{gpspsb, fp, 0}}
+		// Conversion recipes use F31 (and F30 for unsigned output). These
+		// are operation-local clobbers, not callee-saved or globally reserved.
+		fpConv  = fp &^ buildReg("F30 F31")
+		gpToFP  = regInfo{inputs: []regMask{gp}, outputs: []regMask{fpConv}, clobbers: buildReg("F31")}
+		fpToGP  = regInfo{inputs: []regMask{fpConv}, outputs: []regMask{gp}, clobbers: buildReg("F31")}
+		fpToGPU = regInfo{inputs: []regMask{fpConv}, outputs: []regMask{gp}, clobbers: buildReg("F30 F31")}
+		fpload  = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{fp}}
+		fpstore = regInfo{inputs: []regMask{gpspsb, fp, 0}}
 	)
 
 	ops := []opData{
@@ -174,6 +180,10 @@ func init() {
 		{name: "FNEG", argLength: 1, reg: fp11, asm: "FNEG"},
 		{name: "FCMPU", argLength: 2, reg: fp2cr, asm: "FCMPU", typ: "Flags"},
 		{name: "FLessEqual", argLength: 1, reg: gp01, typ: "Bool"},
+		{name: "LoweredCvt32to64F", argLength: 1, reg: gpToFP},
+		{name: "LoweredCvt32Uto64F", argLength: 1, reg: gpToFP},
+		{name: "LoweredCvt64Fto32", argLength: 1, reg: fpToGP},
+		{name: "LoweredCvt64Fto32U", argLength: 1, reg: fpToGPU, clobberFlags: true},
 		{name: "FRSP", argLength: 1, reg: fp11, asm: "FRSP"},
 		{name: "FMOVSload", argLength: 2, reg: fpload, aux: "SymOff", typ: "Float32", faultOnNilArg0: true, symEffect: "Read"},
 		{name: "FMOVDload", argLength: 2, reg: fpload, aux: "SymOff", typ: "Float64", faultOnNilArg0: true, symEffect: "Read"},

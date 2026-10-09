@@ -4966,6 +4966,10 @@ const (
 	OpPPCFNEG
 	OpPPCFCMPU
 	OpPPCFLessEqual
+	OpPPCLoweredCvt32to64F
+	OpPPCLoweredCvt32Uto64F
+	OpPPCLoweredCvt64Fto32
+	OpPPCLoweredCvt64Fto32U
 	OpPPCFRSP
 	OpPPCFMOVSload
 	OpPPCFMOVDload
@@ -76504,6 +76508,59 @@ var opcodeTable = [...]opInfo{
 		name:   "FLessEqual",
 		argLen: 1,
 		reg: regInfo{
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:   "LoweredCvt32to64F",
+		argLen: 1,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			clobbers: 4611686018427387904, // F31
+			outputs: []outputInfo{
+				{0, 2305843007066210304}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29
+			},
+		},
+	},
+	{
+		name:   "LoweredCvt32Uto64F",
+		argLen: 1,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			clobbers: 4611686018427387904, // F31
+			outputs: []outputInfo{
+				{0, 2305843007066210304}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29
+			},
+		},
+	},
+	{
+		name:   "LoweredCvt64Fto32",
+		argLen: 1,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 2305843007066210304}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29
+			},
+			clobbers: 4611686018427387904, // F31
+			outputs: []outputInfo{
+				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:         "LoweredCvt64Fto32U",
+		argLen:       1,
+		clobberFlags: true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 2305843007066210304}, // F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29
+			},
+			clobbers: 6917529027641081856, // F30 F31
 			outputs: []outputInfo{
 				{0, 536870904}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
 			},
