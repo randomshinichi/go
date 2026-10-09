@@ -70,7 +70,11 @@ func compileFloatFixture(t *testing.T, source string, functions []string, spillF
 	if err := os.WriteFile(src, []byte(source), 0644); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"tool", "compile", "-p", "main", "-d=ssa/check/on", "-S", "-o", filepath.Join(dir, "fixture.o")}
+	pkg := "main"
+	if strings.Contains(source, "package runtime\n") {
+		pkg = "runtime"
+	}
+	args := []string{"tool", "compile", "-p", pkg, "-d=ssa/check/on", "-S", "-o", filepath.Join(dir, "fixture.o")}
 	if spillFunc != "" {
 		args = append(args, "-d=ssa/regalloc/dump="+spillFunc)
 	}
@@ -140,9 +144,13 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 	}
 	asm.WriteString("blr\n")
 	changes := 0
+	pkg := "main"
+	if strings.HasPrefix(dump, "runtime.") {
+		pkg = "runtime"
+	}
 	for _, fn := range functions {
 		fmt.Fprintf(&asm, "fn_%s:\n", fn)
-		words := emittedWords(t, dump, "main."+fn)
+		words := emittedWords(t, dump, pkg+"."+fn)
 		for _, w := range words {
 			if w>>26 == 50 || w>>26 == 54 { // lfd/stfd: only aligned private scratch
 				if (w>>16)&31 != 1 || w&7 != 0 {
@@ -150,13 +158,21 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 				}
 			}
 		}
-		calls := fixtureLocalCalls(t, dump, "main."+fn)
+		calls := fixtureFunctionRelocs(t, dump, pkg+"."+fn)
 		for i, w := range words {
-			if target, ok := calls[i*4]; ok {
-				if w != 0x48000001 {
-					t.Fatalf("non-call relocation: %08x", w)
+			if rel, ok := calls[i*4]; ok {
+				if rel.kind != "R_CALLPOWER" || w != 0x48000001 {
+					t.Fatalf("non-call relocation: %s %08x", rel.kind, w)
 				}
-				fmt.Fprintf(&asm, "bl fn_%s\n", strings.TrimPrefix(target, "main."))
+				target := strings.TrimPrefix(rel.target, pkg+".")
+				found := target == "smash"
+				for _, local := range functions {
+					found = found || target == local
+				}
+				if !found {
+					t.Fatalf("non-fixture target: %s", rel.target)
+				}
+				fmt.Fprintf(&asm, "bl fn_%s\n", target)
 			} else {
 				if mutate != nil {
 					v := mutate(fn, w)
