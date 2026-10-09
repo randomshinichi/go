@@ -19,13 +19,31 @@ func loadRaw(ptr *uint32) uint32
 //go:noescape
 func storeRaw(ptr *uint32, val uint32)
 
-//go:linkname Xadd64
-//go:linkname Xchg64
-//go:linkname Cas64
-//go:linkname Load64
-//go:linkname Store64
-//go:linkname Or64
+// Export atomic operations used by sync and sync/atomic assembly.
+//go:linkname And32
 //go:linkname And64
+//go:linkname Anduintptr
+//go:linkname Cas
+//go:linkname Cas64
+//go:linkname Casuintptr
+//go:linkname Load
+//go:linkname Load64
+//go:linkname LoadAcquintptr
+//go:linkname Loadp
+//go:linkname Loaduintptr
+//go:linkname Or32
+//go:linkname Or64
+//go:linkname Oruintptr
+//go:linkname Store
+//go:linkname Store64
+//go:linkname StoreReluintptr
+//go:linkname Storeuintptr
+//go:linkname Xadd
+//go:linkname Xadd64
+//go:linkname Xadduintptr
+//go:linkname Xchg
+//go:linkname Xchg64
+//go:linkname Xchguintptr
 
 //go:nosplit
 func Cas(ptr *uint32, old, new uint32) bool { return casRaw(ptr, old, new) }
