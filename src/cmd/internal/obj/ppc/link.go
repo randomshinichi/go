@@ -337,7 +337,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 
 	// Loads: To=rd, From=d(ra).
 	case ALWZ, ALBZ, ALHZ, ALHA, ALFS, ALFD:
-		if p.From.Type != obj.TYPE_MEM {
+		if p.From.Type != obj.TYPE_MEM && !(p.From.Type == obj.TYPE_ADDR && (p.From.Name == obj.NAME_AUTO || p.From.Name == obj.NAME_PARAM)) {
 			return bad(fmt.Errorf("%v: %v needs a memory operand", p, Mnemonic(Inst(p.As))))
 		}
 		d, err := resolveOffset(ctxt, p, &p.From, autosize)
@@ -356,7 +356,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 
 	// Stores: To=d(ra), From=rs.
 	case ASTW, ASTWU, ASTB, ASTH, ASTFS, ASTFD:
-		if p.To.Type != obj.TYPE_MEM {
+		if p.To.Type != obj.TYPE_MEM && !(p.To.Type == obj.TYPE_ADDR && (p.To.Name == obj.NAME_AUTO || p.To.Name == obj.NAME_PARAM)) {
 			return bad(fmt.Errorf("%v: %v needs a memory destination", p, Mnemonic(Inst(p.As))))
 		}
 		d, err := resolveOffset(ctxt, p, &p.To, autosize)
@@ -456,7 +456,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		}
 		return emit(int32(p.From.Offset), int32(p.Reg), int32(disp))
 
-	case ASYNC, AISYNC:
+	case ASYNC, AISYNC, ASC:
 		return emit()
 
 	case AMFCR, AMFCTR:
