@@ -26,11 +26,11 @@ loop:
 	BC 4, 2, loop
 equal:
 	ADDI R3, R0, $1
-	STW R3, ret+12(FP)
+	STB R3, ret+12(FP)
 	RET
 unequal:
 	ADDI R3, R0, $0
-	STW R3, ret+12(FP)
+	STB R3, ret+12(FP)
 	RET
 
 // memequal_varlen uses the closure context in R11; its size word follows the
