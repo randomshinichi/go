@@ -27,71 +27,11 @@
 
 package runtime
 
-import "unsafe"
-
 const (
 	sign32 = 1 << (32 - 1)
 	sign64 = 1 << (64 - 1)
 )
 
-func float64toint64(d float64) (y uint64) {
-	_d2v(&y, d)
-	return
-}
-
-func float64touint64(d float64) (y uint64) {
-	_d2v(&y, d)
-	return
-}
-
-func _d2v(y *uint64, d float64) {
-	x := *(*uint64)(unsafe.Pointer(&d))
-
-	xhi := uint32(x>>32)&0xfffff | 0x100000
-	xlo := uint32(x)
-	sh := 1075 - int32(uint32(x>>52)&0x7ff)
-
-	var ylo, yhi uint32
-	if sh >= 0 {
-		sh := uint32(sh)
-		/* v = (hi||lo) >> sh */
-		if sh < 32 {
-			if sh == 0 {
-				ylo = xlo
-				yhi = xhi
-			} else {
-				ylo = xlo>>sh | xhi<<(32-sh)
-				yhi = xhi >> sh
-			}
-		} else {
-			if sh == 32 {
-				ylo = xhi
-			} else if sh < 64 {
-				ylo = xhi >> (sh - 32)
-			}
-		}
-	} else {
-		/* v = (hi||lo) << -sh */
-		sh := uint32(-sh)
-		if sh <= 11 {
-			ylo = xlo << sh
-			yhi = xhi<<sh | xlo>>(32-sh)
-		} else {
-			/* overflow */
-			yhi = uint32(d) /* causes something awful */
-		}
-	}
-	if x&sign64 != 0 {
-		if ylo != 0 {
-			ylo = -ylo
-			yhi = ^yhi
-		} else {
-			yhi = -yhi
-		}
-	}
-
-	*y = uint64(yhi)<<32 | uint64(ylo)
-}
 func uint64div(n, d uint64) uint64 {
 	// Check for 32 bit operands
 	if uint32(n>>32) == 0 && uint32(d>>32) == 0 {
