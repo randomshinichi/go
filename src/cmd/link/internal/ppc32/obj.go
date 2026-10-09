@@ -15,7 +15,8 @@ import (
 func Init() (*sys.Arch, ld.Arch) {
 	return sys.ArchPPC, ld.Arch{
 		Funcalign: 4, Maxalign: 32, Minalign: 4, TrampLimit: 0x1c00000,
-		Archinit: archinit, Archreloc: archreloc, Gentext: gentext,
+		Adddynrel: adddynrel, Archinit: archinit, Archreloc: archreloc,
+		Extreloc: extreloc, Gentext: gentext,
 		Machoreloc1: machoreloc1, MachorelocSize: 8,
 	}
 }
@@ -54,6 +55,20 @@ func archreloc(target *ld.Target, ldr *loader.Loader, _ *ld.ArchSyms, r loader.R
 	default:
 		return val, 0, false
 	}
+}
+
+// adddynrel rejects dynamic relocations until the ppc32 dynamic relocation
+// and call-stub machinery is implemented.
+func adddynrel(_ *ld.Target, ldr *loader.Loader, _ *ld.ArchSyms, s loader.Sym, _ loader.Reloc, _ int) bool {
+	ldr.Errorf(s, "ppc32 dynamic relocations are not supported")
+	return false
+}
+
+// extreloc rejects external linking until ppc32 Mach-O external relocations
+// are implemented. Returning false alone would silently omit the relocation.
+func extreloc(_ *ld.Target, ldr *loader.Loader, r loader.Reloc, s loader.Sym) (loader.ExtReloc, bool) {
+	ldr.Errorf(s, "ppc32 external relocations are not supported (type %d)", r.Type())
+	return loader.ExtReloc{}, false
 }
 
 // gentext is intentionally empty for the initial ppc32 internal-link path:
