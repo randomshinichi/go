@@ -414,8 +414,43 @@ func sigFetchG(c *sigctxt) *g {
 			}
 			return nil
 		}
+	case "ppc":
+		if GOOS == "darwin" && findmoduledatap(c.sigpc()) == nil {
+			// Darwin ppc32 keeps g only in R30, and the signal
+			// interrupted C code (every system call runs in libc),
+			// where R30 is an ordinary callee-saved register.
+			return sigFetchGInC(sys.GetCallerSP(), c.sigsp())
+		}
 	}
 	return getg()
+}
+
+// sigFetchGInC returns the g whose stack C code was running on when a signal
+// interrupted it, for a port that has no thread-local copy of g. sp is an SP
+// in the signal handler and csp is the interrupted SP. The handler runs on the
+// current thread's signal stack, which identifies the m; Go calls C only on
+// that m's g0 stack, or on its gsignal stack from a signal handler, so csp
+// selects between them. It returns nil, and the caller treats the signal as
+// arriving on a non-Go thread, if sp is on no m's signal stack or csp is on
+// neither stack.
+//
+//go:nosplit
+//go:nowritebarrierrec
+func sigFetchGInC(sp, csp uintptr) *g {
+	for mp := (*m)(atomic.Loadp(unsafe.Pointer(&allm))); mp != nil; mp = mp.alllink {
+		gs := mp.gsignal
+		if gs == nil || sp < gs.stack.lo || sp >= gs.stack.hi {
+			continue
+		}
+		if gp := mp.g0; gp != nil && gp.stack.lo <= csp && csp < gp.stack.hi {
+			return gp
+		}
+		if gs.stack.lo <= csp && csp < gs.stack.hi {
+			return gs
+		}
+		return nil
+	}
+	return nil
 }
 
 // sigtrampgo is called from the signal handler function, sigtramp,

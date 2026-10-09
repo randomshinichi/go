@@ -97,3 +97,20 @@ const (
 	O_CREAT  = _O_CREAT
 	O_TRUNC  = _O_TRUNC
 )
+
+// SigFetchGInCResults calls sigFetchGInC with a signal-handler SP on the
+// current m's gsignal stack and an interrupted SP on its g0 stack, on its
+// gsignal stack and on neither, and with a signal-handler SP on no signal
+// stack. It reports whether each result was the expected g (nil for the last
+// two).
+func SigFetchGInCResults() (onG0, onGsignal, onNeither, offSignalStack bool) {
+	mp := getg().m
+	sp := mp.gsignal.stack.hi - 64
+	var local byte
+	here := uintptr(unsafe.Pointer(&local)) // on this goroutine's stack
+	onG0 = sigFetchGInC(sp, mp.g0.stack.hi-64) == mp.g0
+	onGsignal = sigFetchGInC(sp, mp.gsignal.stack.lo+64) == mp.gsignal
+	onNeither = sigFetchGInC(sp, here) == nil
+	offSignalStack = sigFetchGInC(here, mp.g0.stack.hi-64) == nil
+	return
+}
