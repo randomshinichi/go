@@ -385,8 +385,12 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		}
 		return emit(0, ra(), int32(p.To.Offset))
 
-	case AFMR, AFRSP:
+	case AFMR, AFRSP, AFNEG:
 		return emit(int32(p.To.Reg-REG_F0), int32(p.From.Reg-REG_F0))
+	case AFADD, AFADDS, AFSUB, AFSUBS, AFMUL, AFMULS, AFDIV, AFDIVS:
+		return emit(int32(p.To.Reg-REG_F0), int32(p.From.Reg-REG_F0), int32(p.Reg-REG_F0))
+	case AFCMPU:
+		return emit(0, int32(p.From.Reg-REG_F0), int32(p.To.Reg-REG_F0))
 
 	case obj.ACALL, ABL:
 		if p.To.Sym != nil && p.To.Name == obj.NAME_EXTERN && p.To.Type == obj.TYPE_MEM {

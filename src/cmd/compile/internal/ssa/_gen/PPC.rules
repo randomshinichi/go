@@ -106,6 +106,24 @@
 (Store {t} ptr val mem) && is32BitFloat(t) => (FMOVSstore ptr val mem)
 (Store {t} ptr val mem) && is64BitFloat(t) => (FMOVDstore ptr val mem)
 
+// Single operations round before their result can be widened or reused.
+(Add32F x y) => (FRSP (FADDS <typ.Float32> x y))
+(Sub32F x y) => (FRSP (FSUBS <typ.Float32> x y))
+(Mul32F x y) => (FRSP (FMULS <typ.Float32> x y))
+(Div32F x y) => (FRSP (FDIVS <typ.Float32> x y))
+(Neg32F x) => (FRSP (FNEG <typ.Float32> x))
+(Add64F x y) => (FADD x y)
+(Sub64F x y) => (FSUB x y)
+(Mul64F x y) => (FMUL x y)
+(Div64F x y) => (FDIV x y)
+(Neg64F x) => (FNEG x)
+(Eq(32|64)F x y) => (Equal (FCMPU x y))
+(Neq(32|64)F x y) => (NotEqual (FCMPU x y))
+(Less(32|64)F x y) => (LessThan (FCMPU x y))
+(Leq(32|64)F x y) => (FLessEqual (FCMPU x y))
+(If (FLessEqual cc) yes no) => (FLE cc yes no)
+(NE (CMPWconst [0] (FLessEqual cc)) yes no) => (FLE cc yes no)
+
 // Comparisons use word forms: the 32-bit backend has no 64-bit GPR compare.
 // PPC's signed and unsigned compares set different CR0 LT/GT bits, unlike
 // architectures whose flags can be interpreted in either signedness.

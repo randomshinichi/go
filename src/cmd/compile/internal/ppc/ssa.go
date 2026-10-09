@@ -215,7 +215,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 	case ssa.OpPPCMOVWconst:
 		emitMOVWconst(s, v)
-	case ssa.OpPPCFMR, ssa.OpPPCFRSP:
+	case ssa.OpPPCFADD, ssa.OpPPCFADDS, ssa.OpPPCFSUB, ssa.OpPPCFSUBS,
+		ssa.OpPPCFMUL, ssa.OpPPCFMULS, ssa.OpPPCFDIV, ssa.OpPPCFDIVS:
+		reg3(s, v.Op.Asm(), v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())
+	case ssa.OpPPCFMR, ssa.OpPPCFRSP, ssa.OpPPCFNEG:
 		reg2(s, v.Op.Asm(), v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCFMOVSconst, ssa.OpPPCFMOVDconst:
 		addr := s.ScratchAddr(ppc.REGSP)
@@ -239,7 +242,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		}
 		emitFloatStore(s, v.Args[1].Reg(), addr, size)
 
-	case ssa.OpPPCCMPW, ssa.OpPPCCMPWU:
+	case ssa.OpPPCCMPW, ssa.OpPPCCMPWU, ssa.OpPPCFCMPU:
 		p := s.Prog(v.Op.Asm())
 		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[1].Reg()}
@@ -272,7 +275,7 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 	case ssa.OpPPCInvertFlags, ssa.OpPPCFlagEQ, ssa.OpPPCFlagLT, ssa.OpPPCFlagGT:
 		return
 	case ssa.OpPPCEqual, ssa.OpPPCNotEqual, ssa.OpPPCLessThan, ssa.OpPPCLessEqual,
-		ssa.OpPPCGreaterThan, ssa.OpPPCGreaterEqual:
+		ssa.OpPPCGreaterThan, ssa.OpPPCGreaterEqual, ssa.OpPPCFLessEqual:
 		emitPredicate(s, v)
 	case ssa.OpPPCCALLstatic:
 		s.Call(v)
@@ -462,6 +465,13 @@ func emitPredicate(s *ssagen.State, v *ssa.Value) {
 	p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
 	p.Reg = ppc.REG_R0
 	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
+	var unordered *obj.Prog
+	if v.Op == ssa.OpPPCFLessEqual {
+		// Integer <= is !GT, which is true for unordered. Floating <=
+		// must reject unordered as well as GT before setting the result.
+		bo, bi = 12, 1
+		unordered = localBranch(s, 12, 3)
+	}
 	branch := s.Prog(ppc.ABC)
 	branch.From = obj.Addr{Type: obj.TYPE_CONST, Offset: int64(bo)}
 	branch.Reg = int16(bi)
@@ -476,6 +486,9 @@ func emitPredicate(s *ssagen.State, v *ssa.Value) {
 	p.Reg = v.Reg()
 	p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
 	branch.To.SetTarget(p)
+	if unordered != nil {
+		unordered.To.SetTarget(p)
+	}
 }
 
 func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
