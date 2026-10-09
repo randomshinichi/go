@@ -10,6 +10,7 @@ import (
 	"cmd/internal/sys"
 	"cmd/link/internal/ld"
 	"cmd/link/internal/loader"
+	"cmd/link/internal/sym"
 )
 
 func Init() (*sys.Arch, ld.Arch) {
@@ -57,9 +58,31 @@ func archreloc(target *ld.Target, ldr *loader.Loader, _ *ld.ArchSyms, r loader.R
 	}
 }
 
-// adddynrel rejects dynamic relocations until the ppc32 dynamic relocation
-// and call-stub machinery is implemented.
-func adddynrel(_ *ld.Target, ldr *loader.Loader, _ *ld.ArchSyms, s loader.Sym, _ loader.Reloc, _ int) bool {
+// adddynrel redirects the address in a generated import-call stub through
+// the Mach-O non-lazy symbol pointer table. Other dynamic relocations remain
+// errors rather than being silently dropped.
+func adddynrel(target *ld.Target, ldr *loader.Loader, syms *ld.ArchSyms, s loader.Sym, r loader.Reloc, rIdx int) bool {
+	if !target.IsExternal() && ldr.SymType(r.Sym()) == sym.SDYNIMPORT && r.Type() == objabi.R_ADDRPOWER {
+		if r.Add() != 0 {
+			ldr.Errorf(s, "Mach-O dynamic call requires a zero addend: %s%+d", ldr.SymName(r.Sym()), r.Add())
+			return false
+		}
+		if r.Siz() != 8 {
+			ldr.Errorf(s, "Mach-O dynamic call has invalid relocation size %d", r.Siz())
+			return false
+		}
+		su := ldr.MakeSymbolUpdater(s)
+		data := su.Data()[r.Off():]
+		if target.Arch.ByteOrder.Uint32(data) != opLisR12 || target.Arch.ByteOrder.Uint32(data[4:]) != opLwzR12R12 {
+			ldr.Errorf(s, "Mach-O dynamic call stub is not lis;lwz for %s", ldr.SymName(r.Sym()))
+			return false
+		}
+		targ := r.Sym()
+		ld.AddGotSym(target, ldr, syms, targ, 0)
+		su.SetRelocSym(rIdx, syms.GOT)
+		su.SetRelocAdd(rIdx, int64(ldr.SymGot(targ)))
+		return true
+	}
 	ldr.Errorf(s, "ppc32 dynamic relocations are not supported")
 	return false
 }
@@ -71,11 +94,53 @@ func extreloc(_ *ld.Target, ldr *loader.Loader, r loader.Reloc, s loader.Sym) (l
 	return loader.ExtReloc{}, false
 }
 
-// gentext is intentionally empty for the initial ppc32 internal-link path:
-// it has no dynamic call stubs or other generated text yet. Unsupported
-// external relocations still fail in machoreloc1 rather than being emitted
-// without the required stub machinery.
-func gentext(_ *ld.Link, _ *loader.Loader) {}
+// gentext creates a 32-bit Mach-O call stub for each call to an imported
+// function. The stub loads the function pointer from the non-lazy symbol
+// pointer table, then branches through CTR. dyld fills that table at launch.
+func gentext(ctxt *ld.Link, ldr *loader.Loader) {
+	if ctxt.LinkMode != ld.LinkInternal || !ctxt.IsDarwin() {
+		return
+	}
+
+	var stubs []loader.Sym
+	for _, s := range ctxt.Textp {
+		relocs := ldr.Relocs(s)
+		for i := 0; i < relocs.Count(); i++ {
+			r := relocs.At(i)
+			if r.Type() != objabi.R_CALLPOWER || ldr.SymType(r.Sym()) != sym.SDYNIMPORT {
+				continue
+			}
+			if r.Add() != 0 {
+				ldr.Errorf(s, "Mach-O dynamic call requires a zero addend: %s%+d", ldr.SymName(r.Sym()), r.Add())
+				continue
+			}
+
+			targ := r.Sym()
+			stub := ldr.CreateSymForUpdate("_macho_callstub."+ldr.SymName(targ), 0)
+			if stub.Size() == 0 {
+				stub.SetType(sym.STEXT)
+				stub.SetReachable(true)
+				// The dynamic relocation pass allocates the non-lazy GOT
+				// slot after Mach-O symbol IDs have been assigned.
+				stub.AddSymRef(ctxt.Arch, targ, 0, objabi.R_ADDRPOWER, 8)
+				stub.SetUint32(ctxt.Arch, 0, opLisR12)
+				stub.SetUint32(ctxt.Arch, 4, opLwzR12R12)
+				stub.AddUint32(ctxt.Arch, opMtctrR12)
+				stub.AddUint32(ctxt.Arch, opBctr)
+				stubs = append(stubs, stub.Sym())
+			}
+			ldr.MakeSymbolUpdater(s).SetRelocSym(i, stub.Sym())
+		}
+	}
+	ctxt.Textp = append(stubs, ctxt.Textp...)
+}
+
+const (
+	opLisR12    = 0x3d800000 // lis r12,0
+	opLwzR12R12 = 0x818c0000 // lwz r12,0(r12)
+	opMtctrR12  = 0x7d8903a6 // mtctr r12
+	opBctr      = 0x4e800420 // bctr
+)
 
 func machoreloc1(_ *sys.Arch, _ *ld.OutBuf, _ *loader.Loader, _ loader.Sym, _ loader.ExtReloc, _ int64) bool {
 	// This milestone links internally; external Mach-O relocations are not yet
