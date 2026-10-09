@@ -7,12 +7,15 @@
 #include "go_asm.h"
 #include "textflag.h"
 
-// Darwin enters the PPC32 executable with argc and argv in the measured C ABI
-// argument registers. The Go runtime uses stack-passed ABI0 arguments instead.
+// Darwin process entry is not a C function call: argc and argv are on the
+// initial stack. The measured C ABI's R3-R10 argument registers apply to calls,
+// not to the LC_UNIXTHREAD state that transfers control to this entry.
 TEXT _rt0_ppc_darwin(SB), NOSPLIT|NOFRAME, $0-0
 	ADDI R0, R0, $0
 	ADDI R1, R1, $-32
-	// Darwin enters with argc at the initial SP and argv immediately after it.
+	// Preserve the kernel's initial stack block: argc is at entry SP+0, and
+	// argv starts at entry SP+8. The 32-byte adjustment above creates the
+	// measured Go linkage area without moving that block.
 	LWZ R3, 32(R1)
 	ADDI R4, R1, $36
 	STW R3, 24(R1)
