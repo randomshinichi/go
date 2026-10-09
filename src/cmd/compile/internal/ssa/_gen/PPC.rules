@@ -95,7 +95,7 @@
 (Const32 [c]) => (MOVWconst [c])
 (ConstBool [t]) => (MOVWconst [b2i32(t)])
 (ConstNil) => (MOVWconst [0])
-(Copy <t> x) && !t.IsFloat() => (MOVWreg x)
+(Copy <t> x) && !t.IsFloat() && !t.IsMemory() => (MOVWreg x)
 (Copy <t> x) && t.IsFloat() => (FMR x)
 (Const32F [c]) => (FMOVSconst [float64(c)])
 (Const64F [c]) => (FMOVDconst [c])
