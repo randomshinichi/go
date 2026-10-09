@@ -3097,27 +3097,96 @@ func rewriteValuePPC_OpRotateLeft16(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	// match: (RotateLeft16 x y)
-	// result: (Or16 <x.Type> (Lsh16x32 <x.Type> x (And32 <y.Type> y (MOVWconst <y.Type> [15]))) (Rsh16Ux32 <x.Type> x (Sub32 <y.Type> (MOVWconst <y.Type> [16]) (And32 <y.Type> y (MOVWconst <y.Type> [15])))))
+	// cond: y.Type.Size() == 1
+	// result: (Or16 <x.Type> (Lsh16x8 <x.Type> x (And8 <y.Type> y (Const8 <y.Type> [15]))) (Rsh16Ux8 <x.Type> x (Sub8 <y.Type> (Const8 <y.Type> [16]) (And8 <y.Type> y (Const8 <y.Type> [15])))))
 	for {
 		x := v_0
 		y := v_1
+		if !(y.Type.Size() == 1) {
+			break
+		}
+		v.reset(OpOr16)
+		v.Type = x.Type
+		v0 := b.NewValue0(v.Pos, OpLsh16x8, x.Type)
+		v1 := b.NewValue0(v.Pos, OpAnd8, y.Type)
+		v2 := b.NewValue0(v.Pos, OpConst8, y.Type)
+		v2.AuxInt = int8ToAuxInt(15)
+		v1.AddArg2(y, v2)
+		v0.AddArg2(x, v1)
+		v3 := b.NewValue0(v.Pos, OpRsh16Ux8, x.Type)
+		v4 := b.NewValue0(v.Pos, OpSub8, y.Type)
+		v5 := b.NewValue0(v.Pos, OpConst8, y.Type)
+		v5.AuxInt = int8ToAuxInt(16)
+		v4.AddArg2(v5, v1)
+		v3.AddArg2(x, v4)
+		v.AddArg2(v0, v3)
+		return true
+	}
+	// match: (RotateLeft16 x y)
+	// cond: y.Type.Size() == 2
+	// result: (Or16 <x.Type> (Lsh16x16 <x.Type> x (And16 <y.Type> y (Const16 <y.Type> [15]))) (Rsh16Ux16 <x.Type> x (Sub16 <y.Type> (Const16 <y.Type> [16]) (And16 <y.Type> y (Const16 <y.Type> [15])))))
+	for {
+		x := v_0
+		y := v_1
+		if !(y.Type.Size() == 2) {
+			break
+		}
+		v.reset(OpOr16)
+		v.Type = x.Type
+		v0 := b.NewValue0(v.Pos, OpLsh16x16, x.Type)
+		v1 := b.NewValue0(v.Pos, OpAnd16, y.Type)
+		v2 := b.NewValue0(v.Pos, OpConst16, y.Type)
+		v2.AuxInt = int16ToAuxInt(15)
+		v1.AddArg2(y, v2)
+		v0.AddArg2(x, v1)
+		v3 := b.NewValue0(v.Pos, OpRsh16Ux16, x.Type)
+		v4 := b.NewValue0(v.Pos, OpSub16, y.Type)
+		v5 := b.NewValue0(v.Pos, OpConst16, y.Type)
+		v5.AuxInt = int16ToAuxInt(16)
+		v4.AddArg2(v5, v1)
+		v3.AddArg2(x, v4)
+		v.AddArg2(v0, v3)
+		return true
+	}
+	// match: (RotateLeft16 x y)
+	// cond: y.Type.Size() == 4
+	// result: (Or16 <x.Type> (Lsh16x32 <x.Type> x (And32 <y.Type> y (Const32 <y.Type> [15]))) (Rsh16Ux32 <x.Type> x (Sub32 <y.Type> (Const32 <y.Type> [16]) (And32 <y.Type> y (Const32 <y.Type> [15])))))
+	for {
+		x := v_0
+		y := v_1
+		if !(y.Type.Size() == 4) {
+			break
+		}
 		v.reset(OpOr16)
 		v.Type = x.Type
 		v0 := b.NewValue0(v.Pos, OpLsh16x32, x.Type)
 		v1 := b.NewValue0(v.Pos, OpAnd32, y.Type)
-		v2 := b.NewValue0(v.Pos, OpPPCMOVWconst, y.Type)
+		v2 := b.NewValue0(v.Pos, OpConst32, y.Type)
 		v2.AuxInt = int32ToAuxInt(15)
 		v1.AddArg2(y, v2)
 		v0.AddArg2(x, v1)
 		v3 := b.NewValue0(v.Pos, OpRsh16Ux32, x.Type)
 		v4 := b.NewValue0(v.Pos, OpSub32, y.Type)
-		v5 := b.NewValue0(v.Pos, OpPPCMOVWconst, y.Type)
+		v5 := b.NewValue0(v.Pos, OpConst32, y.Type)
 		v5.AuxInt = int32ToAuxInt(16)
 		v4.AddArg2(v5, v1)
 		v3.AddArg2(x, v4)
 		v.AddArg2(v0, v3)
 		return true
 	}
+	// match: (RotateLeft16 x (Int64Make _ lo))
+	// result: (RotateLeft16 x lo)
+	for {
+		x := v_0
+		if v_1.Op != OpInt64Make {
+			break
+		}
+		lo := v_1.Args[1]
+		v.reset(OpRotateLeft16)
+		v.AddArg2(x, lo)
+		return true
+	}
+	return false
 }
 func rewriteValuePPC_OpRotateLeft32(v *Value) bool {
 	v_1 := v.Args[1]
@@ -3137,27 +3206,96 @@ func rewriteValuePPC_OpRotateLeft8(v *Value) bool {
 	v_0 := v.Args[0]
 	b := v.Block
 	// match: (RotateLeft8 x y)
-	// result: (Or8 <x.Type> (Lsh8x32 <x.Type> x (And32 <y.Type> y (MOVWconst <y.Type> [7]))) (Rsh8Ux32 <x.Type> x (Sub32 <y.Type> (MOVWconst <y.Type> [8]) (And32 <y.Type> y (MOVWconst <y.Type> [7])))))
+	// cond: y.Type.Size() == 1
+	// result: (Or8 <x.Type> (Lsh8x8 <x.Type> x (And8 <y.Type> y (Const8 <y.Type> [7]))) (Rsh8Ux8 <x.Type> x (Sub8 <y.Type> (Const8 <y.Type> [8]) (And8 <y.Type> y (Const8 <y.Type> [7])))))
 	for {
 		x := v_0
 		y := v_1
+		if !(y.Type.Size() == 1) {
+			break
+		}
+		v.reset(OpOr8)
+		v.Type = x.Type
+		v0 := b.NewValue0(v.Pos, OpLsh8x8, x.Type)
+		v1 := b.NewValue0(v.Pos, OpAnd8, y.Type)
+		v2 := b.NewValue0(v.Pos, OpConst8, y.Type)
+		v2.AuxInt = int8ToAuxInt(7)
+		v1.AddArg2(y, v2)
+		v0.AddArg2(x, v1)
+		v3 := b.NewValue0(v.Pos, OpRsh8Ux8, x.Type)
+		v4 := b.NewValue0(v.Pos, OpSub8, y.Type)
+		v5 := b.NewValue0(v.Pos, OpConst8, y.Type)
+		v5.AuxInt = int8ToAuxInt(8)
+		v4.AddArg2(v5, v1)
+		v3.AddArg2(x, v4)
+		v.AddArg2(v0, v3)
+		return true
+	}
+	// match: (RotateLeft8 x y)
+	// cond: y.Type.Size() == 2
+	// result: (Or8 <x.Type> (Lsh8x16 <x.Type> x (And16 <y.Type> y (Const16 <y.Type> [7]))) (Rsh8Ux16 <x.Type> x (Sub16 <y.Type> (Const16 <y.Type> [8]) (And16 <y.Type> y (Const16 <y.Type> [7])))))
+	for {
+		x := v_0
+		y := v_1
+		if !(y.Type.Size() == 2) {
+			break
+		}
+		v.reset(OpOr8)
+		v.Type = x.Type
+		v0 := b.NewValue0(v.Pos, OpLsh8x16, x.Type)
+		v1 := b.NewValue0(v.Pos, OpAnd16, y.Type)
+		v2 := b.NewValue0(v.Pos, OpConst16, y.Type)
+		v2.AuxInt = int16ToAuxInt(7)
+		v1.AddArg2(y, v2)
+		v0.AddArg2(x, v1)
+		v3 := b.NewValue0(v.Pos, OpRsh8Ux16, x.Type)
+		v4 := b.NewValue0(v.Pos, OpSub16, y.Type)
+		v5 := b.NewValue0(v.Pos, OpConst16, y.Type)
+		v5.AuxInt = int16ToAuxInt(8)
+		v4.AddArg2(v5, v1)
+		v3.AddArg2(x, v4)
+		v.AddArg2(v0, v3)
+		return true
+	}
+	// match: (RotateLeft8 x y)
+	// cond: y.Type.Size() == 4
+	// result: (Or8 <x.Type> (Lsh8x32 <x.Type> x (And32 <y.Type> y (Const32 <y.Type> [7]))) (Rsh8Ux32 <x.Type> x (Sub32 <y.Type> (Const32 <y.Type> [8]) (And32 <y.Type> y (Const32 <y.Type> [7])))))
+	for {
+		x := v_0
+		y := v_1
+		if !(y.Type.Size() == 4) {
+			break
+		}
 		v.reset(OpOr8)
 		v.Type = x.Type
 		v0 := b.NewValue0(v.Pos, OpLsh8x32, x.Type)
 		v1 := b.NewValue0(v.Pos, OpAnd32, y.Type)
-		v2 := b.NewValue0(v.Pos, OpPPCMOVWconst, y.Type)
+		v2 := b.NewValue0(v.Pos, OpConst32, y.Type)
 		v2.AuxInt = int32ToAuxInt(7)
 		v1.AddArg2(y, v2)
 		v0.AddArg2(x, v1)
 		v3 := b.NewValue0(v.Pos, OpRsh8Ux32, x.Type)
 		v4 := b.NewValue0(v.Pos, OpSub32, y.Type)
-		v5 := b.NewValue0(v.Pos, OpPPCMOVWconst, y.Type)
+		v5 := b.NewValue0(v.Pos, OpConst32, y.Type)
 		v5.AuxInt = int32ToAuxInt(8)
 		v4.AddArg2(v5, v1)
 		v3.AddArg2(x, v4)
 		v.AddArg2(v0, v3)
 		return true
 	}
+	// match: (RotateLeft8 x (Int64Make _ lo))
+	// result: (RotateLeft8 x lo)
+	for {
+		x := v_0
+		if v_1.Op != OpInt64Make {
+			break
+		}
+		lo := v_1.Args[1]
+		v.reset(OpRotateLeft8)
+		v.AddArg2(x, lo)
+		return true
+	}
+	return false
 }
 func rewriteValuePPC_OpRound32F(v *Value) bool {
 	v_0 := v.Args[0]
