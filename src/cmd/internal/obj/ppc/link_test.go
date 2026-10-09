@@ -16,6 +16,31 @@ import (
 // b .+12; lis 3,(target+12)@ha; addi 3,3,(target+12)@l; bl callee+4; blr.
 // A local branch crosses the expanded address pair, so a one-word PC estimate
 // would produce the wrong displacement even if the pair itself were correct.
+func TestLargeNamedAddressMaterialized(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	text := &obj.Prog{As: obj.ATEXT, To: obj.Addr{Offset: 32768}}
+	addr := &obj.Prog{
+		As:   AADDI,
+		From: obj.Addr{Type: obj.TYPE_ADDR, Name: obj.NAME_AUTO, Offset: 33356},
+		Reg:  REGSP,
+		To:   obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3},
+	}
+	text.Link = addr
+	s := ctxt.Lookup("large")
+	s.NewFuncInfo().Text = text
+	assemble(ctxt, s, nil)
+	if len(s.P) != 8 {
+		t.Fatalf("large named address emitted %d bytes, want addis/addi pair: %x", len(s.P), s.P)
+	}
+	if got := binary.BigEndian.Uint32(s.P[:4]); got != 0x3c610001 {
+		t.Errorf("addis = %08x, want 3c610001", got)
+	}
+	if got := binary.BigEndian.Uint32(s.P[4:]); got != 0x3863024c {
+		t.Errorf("addi = %08x, want 3863024c", got)
+	}
+}
+
 func TestAssembleSymbolAddressAndCall(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }

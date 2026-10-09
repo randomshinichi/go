@@ -190,6 +190,7 @@ func branch() int { if G < 0 { return 1 }; return 2 }
 func signed() int { if G < H { return 1 }; return 2 }
 func unsigned() int { if uint32(G) < uint32(H) { return 1 }; return 2 }
 func callee()
+//go:nosplit
 func call() { callee() }
 
 func add(a, b uint64) uint64 { return a + b }
