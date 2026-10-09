@@ -207,10 +207,7 @@ func censusPPCObjects(t *testing.T, dir string, objects ...string) {
 			if !strings.HasPrefix(line, "  ") {
 				continue
 			}
-			if strings.Contains(line, "R_CALLPOWER:runtime.") {
-				if !strings.Contains(line, "48000001") {
-					t.Fatalf("unexpected panicdivide call instruction: %s", line)
-				}
+			if isPPC750RelocatedCall(line) {
 				n++
 				continue
 			}
@@ -235,4 +232,50 @@ func censusPPCObjects(t *testing.T, dir string, objects ...string) {
 		lines = append(lines, op+"\t"+strconv.Itoa(n))
 	}
 	writePPCFixture(t, filepath.Join(dir, "census.tsv"), []byte(strings.Join(lines, "\n")+"\n"), 0644)
+}
+
+// A relocatable CALL is Go objdump's spelling for the base PPC branch-and-link
+// instruction. Its displacement is linker data; opcode 18, AA=0, LK=1 identify
+// the relative branch-and-link form that is legal on the scalar 750 floor.
+func isPPC750RelocatedCall(line string) bool {
+	code, comment, ok := strings.Cut(line, " // ")
+	if !ok || !strings.Contains(comment, "R_CALLPOWER:") {
+		return false
+	}
+	fields := strings.Fields(code)
+	var word uint64
+	hasWord, hasCall := false, false
+	for _, field := range fields {
+		if len(field) == 8 {
+			value, err := strconv.ParseUint(field, 16, 32)
+			if err == nil {
+				word, hasWord = value, true
+			}
+		}
+		if field == "CALL" {
+			hasCall = true
+		}
+	}
+	commentFields := strings.Fields(comment)
+	return hasWord && (word&0xfc000003) == 0x48000001 && hasCall && len(commentFields) > 0 && commentFields[0] == "bl"
+}
+
+func TestPPC750RelocatedCallFloorRule(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"branch-link-call-relocation", "  pc.go:9   0xbe1   48000001   CALL 0xbe1   // bl .+0x0 [0:4]R_CALLPOWER:internal/runtime/sys.other", true},
+		{"displacement-is-not-link", "  pc.go:9   0xbe1   48000000   CALL 0xbe1   // bl .+0x0 [0:4]R_CALLPOWER:internal/runtime/sys.other", false},
+		{"relocated-displacement", "  pc.go:9   0xbe1   48000005   CALL 0xbe1   // bl .+0x4 [0:4]R_CALLPOWER:internal/runtime/sys.other", true},
+		{"missing-relocation", "  pc.go:9   0xbe1   48000001   CALL 0xbe1   // bl .+0x0", false},
+		{"other-mnemonic", "  pc.go:9   0xbe1   48000001   B 0xbe1   // bl .+0x0 [0:4]R_CALLPOWER:internal/runtime/sys.other", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPPC750RelocatedCall(tc.line); got != tc.want {
+				t.Fatalf("isPPC750RelocatedCall() = %t, want %t", got, tc.want)
+			}
+		})
+	}
 }
