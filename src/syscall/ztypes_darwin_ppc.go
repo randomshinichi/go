@@ -29,6 +29,9 @@ type Timeval struct {
 	Usec int32
 }
 
+// Timeval32 represents the 32-bit timeval fields embedded in IfData and BpfHdr.
+// Leopard's ppc32 headers use struct timeval there, not a separate struct timeval32;
+// the C probes measured sizeof(timeval)=8, field offsets 0 and 4, and both embedding offsets.
 type Timeval32 struct {
 	Sec  int32
 	Usec int32
