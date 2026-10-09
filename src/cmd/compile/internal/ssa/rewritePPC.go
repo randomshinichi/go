@@ -288,6 +288,10 @@ func rewriteValuePPC(v *Value) bool {
 		return true
 	case OpRotateLeft32:
 		return rewriteValuePPC_OpRotateLeft32(v)
+	case OpRound32F:
+		return rewriteValuePPC_OpRound32F(v)
+	case OpRound64F:
+		return rewriteValuePPC_OpRound64F(v)
 	case OpRsh16Ux16:
 		return rewriteValuePPC_OpRsh16Ux16(v)
 	case OpRsh16Ux32:
@@ -3040,6 +3044,28 @@ func rewriteValuePPC_OpRotateLeft32(v *Value) bool {
 		y := v_1
 		v.reset(OpPPCROTLW)
 		v.AddArg2(x, y)
+		return true
+	}
+}
+func rewriteValuePPC_OpRound32F(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Round32F x)
+	// result: (FRSP x)
+	for {
+		x := v_0
+		v.reset(OpPPCFRSP)
+		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpRound64F(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Round64F x)
+	// result: (Copy x)
+	for {
+		x := v_0
+		v.reset(OpCopy)
+		v.AddArg(x)
 		return true
 	}
 }

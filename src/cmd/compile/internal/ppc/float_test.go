@@ -26,6 +26,12 @@ func echo64(x float64) float64 { return x }
 func echo32(x float32) float32 { return x }
 //go:noinline
 //go:nosplit
+func round64(x float64) float64 { return x }
+//go:noinline
+//go:nosplit
+func round32(x float32) float32 { return x }
+//go:noinline
+//go:nosplit
 func nested64(pad uint32, x float64) float64 { return echo64(x) }
 //go:noinline
 //go:nosplit
@@ -273,12 +279,13 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 }
 
 func TestFloatTransportQEMU(t *testing.T) {
-	fns := []string{"echo64", "echo32", "round", "copy64", "copy32", "constant64", "constant32", "survive", "survive32", "nested32", "nested64"}
+	fns := []string{"echo64", "echo32", "round64", "round32", "round", "copy64", "copy32", "constant64", "constant32", "survive", "survive32", "nested32", "nested64"}
 	dir, dump := compileFloatFixture(t, floatTransportFixture, fns, "")
 	var body strings.Builder
 	// Both stack alignments; pointer accesses and call arguments/results.
-	for _, b := range []uint64{0, 1 << 63, 0x3ff23456789abcde, 0x7ff0000000000000, 0xfff0000000000000, 1, 0x000fffffffffffff} {
+	for _, b := range []uint64{0, 1 << 63, 0x3fdfffffffffffff, 0x3fe0000000000000, 0x3fe0000000000001, 0x3ff7ffffffffffff, 0x3ff8000000000000, 0x3ff8000000000001, 0x4003ffffffffffff, 0x4004000000000000, 0x4004000000000001, 0xbfdfffffffffffff, 0xbfe0000000000000, 0xbfe0000000000001, 0xbff7ffffffffffff, 0xbff8000000000000, 0xbff8000000000001, 0xc003ffffffffffff, 0xc004000000000000, 0xc004000000000001, 0x7ff8000000000001, 0x7ff0000000000000, 0xfff0000000000000, 1, 0x000fffffffffffff} {
 		body.WriteString(setDouble(24, b) + "bl fn_echo64\n" + checkDouble(32, b))
+		body.WriteString(setDouble(24, b) + "bl fn_round64\n" + checkDouble(32, b))
 		body.WriteString(setWord(24, 17) + setDouble(28, b) + "bl fn_nested64\n" + checkDouble(36, b))
 		for _, off := range []int{256, 260} {
 			body.WriteString(setDouble(off, b) + fmt.Sprintf("addi 3,1,%d\nstw 3,24(1)\naddi 3,1,280\nstw 3,28(1)\nbl fn_copy64\n", off) + checkDouble(280, b))
@@ -287,6 +294,7 @@ func TestFloatTransportQEMU(t *testing.T) {
 	}
 	for _, b := range []uint32{0, 1 << 31, 0x3f923456, 0x7f800000, 0xff800000, 1, 0x007fffff} {
 		body.WriteString(setWord(24, b) + "bl fn_echo32\n" + checkWord(28, b))
+		body.WriteString(setWord(24, b) + "bl fn_round32\n" + checkWord(28, b))
 		body.WriteString(setWord(24, b) + "bl fn_nested32\n" + checkWord(28, b))
 		body.WriteString(setWord(256, b) + "addi 3,1,256\nstw 3,24(1)\naddi 3,1,260\nstw 3,28(1)\nbl fn_survive32\n" + checkWord(260, b))
 		body.WriteString(setWord(256, b) + "addi 3,1,256\nstw 3,24(1)\naddi 3,1,260\nstw 3,28(1)\nbl fn_copy32\n" + checkWord(260, b))
