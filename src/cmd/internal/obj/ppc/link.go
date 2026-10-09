@@ -54,7 +54,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	leaf := true
 	for p := text.Link; p != nil; p = p.Link {
 		switch p.As {
-		case obj.ACALL, ABL, obj.ADUFFCOPY, obj.ADUFFZERO:
+		case obj.ACALL, ABL, ABCTRL, obj.ADUFFCOPY, obj.ADUFFZERO:
 			leaf = false
 		}
 	}
@@ -103,12 +103,23 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		if p.As != ABLR && p.As != obj.ARET {
 			continue
 		}
-		if p.To.Sym != nil || p.From.Type != obj.TYPE_NONE {
-			ctxt.Diag("ppc32: unsupported return target or BECOME: %v", p)
+		if p.From.Type != obj.TYPE_NONE {
+			ctxt.Diag("ppc32: unsupported BECOME: %v", p)
 			continue
 		}
+		// As on ppc64, RET symbol is a tail call, not a call followed by
+		// a return. Keep the target while replacing RET with the epilogue.
+		// SSA's tail-call expansion reuses incoming arguments/results, so
+		// restoring SP exposes the original caller's result area unchanged.
+		target := p.To
+		retAs := ABLR
+		if target.Sym != nil {
+			retAs = AB
+		} else {
+			target = obj.Addr{}
+		}
 		if frame == 0 {
-			p.As = ABLR
+			p.As, p.To = retAs, target
 			continue
 		}
 		// Rewrite in place so branches to a return also execute its epilogue.
@@ -119,7 +130,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendOp(p, ALWZ, mem(8), reg(REG_R31))
 			p = appendOp(p, AMTLR, reg(REG_R31), obj.Addr{})
 		}
-		p = appendOp(p, ABLR, obj.Addr{}, obj.Addr{})
+		p = appendOp(p, retAs, obj.Addr{}, target)
 		// Balance the linear PC/SP table after the return (ppc64 does likewise).
 		p.Spadj = int32(frame)
 	}
@@ -170,7 +181,7 @@ func assemble(ctxt *obj.Link, s *obj.LSym, _ obj.ProgAlloc) {
 		}
 		if isSymbolAddress(q) {
 			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 8, Type: objabi.R_ADDRPOWER, Sym: q.From.Sym, Add: q.From.Offset})
-		} else if (q.As == obj.ACALL || q.As == ABL) && q.To.Sym != nil {
+		} else if (q.As == obj.ACALL || q.As == ABL || q.As == AB) && q.To.Sym != nil {
 			s.AddRel(ctxt, obj.Reloc{Off: int32(q.Pc), Siz: 4, Type: objabi.R_CALLPOWER, Sym: q.To.Sym, Add: q.To.Offset})
 		}
 		words = append(words, w...)
@@ -358,6 +369,14 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		return bad(fmt.Errorf("%v: direct call needs an external symbol or local BL target", p))
 
 	case AB, ABC:
+		if p.As == AB && p.To.Sym != nil &&
+			(p.To.Type == obj.TYPE_BRANCH || (p.To.Type == obj.TYPE_MEM && p.To.Name == obj.NAME_EXTERN)) {
+			if p.To.Offset&3 != 0 {
+				return bad(fmt.Errorf("%v: unaligned tail branch addend", p))
+			}
+			// R_CALLPOWER also relocates non-linking branches on ppc64.
+			return emit(0)
+		}
 		if p.To.Type != obj.TYPE_BRANCH || p.To.Target() == nil {
 			return bad(fmt.Errorf("%v: %v has no local branch target", p, Mnemonic(Inst(p.As))))
 		}
@@ -369,9 +388,9 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 
 	case AMFLR:
 		return emit(rd())
-	case AMTLR:
+	case AMTLR, AMTCTR:
 		return emit(ra())
-	case ABLR:
+	case ABLR, ABCTRL:
 		return emit()
 	}
 
