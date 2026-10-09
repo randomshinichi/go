@@ -8,7 +8,7 @@ import "strings"
 
 // Notes:
 //  - The ppc32 baseline has 32-bit general registers. A 64-bit Go value is split
-//    into a (hi, lo) pair of 32-bit registers by the generic dec64 decomposition
+//    integer into a (hi, lo) pair of 32-bit registers by the generic dec64 decomposition
 //    before lowering runs (DESIGN.md §5 strategy D-3), so this table registers
 //    the 32-bit residue that decomposition leaves behind, not 64-bit forms.
 //  - XER[CA] is the carry bit. It is not a general-purpose register and it cannot
@@ -149,9 +149,23 @@ func init() {
 		gp22           = regInfo{inputs: []regMask{gpg, gpg}, outputs: []regMask{gp, gp}}
 		gpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{gp}}
 		gpstore        = regInfo{inputs: []regMask{gpspsb, gp, 0}}
+		fp01           = regInfo{outputs: []regMask{fp}}
+		fp11           = regInfo{inputs: []regMask{fp}, outputs: []regMask{fp}}
+		fpload         = regInfo{inputs: []regMask{gpspsb, 0}, outputs: []regMask{fp}}
+		fpstore        = regInfo{inputs: []regMask{gpspsb, fp, 0}}
 	)
 
 	ops := []opData{
+		// Doubles stay in one FPR. All double memory transfers go through
+		// aligned private scratch and two words: Go slots may be 4 mod 8.
+		{name: "FMOVSconst", reg: fp01, aux: "Float64", typ: "Float32"},
+		{name: "FMOVDconst", reg: fp01, aux: "Float64", typ: "Float64"},
+		{name: "FMR", argLength: 1, reg: fp11, asm: "FMR"},
+		{name: "FRSP", argLength: 1, reg: fp11, asm: "FRSP"},
+		{name: "FMOVSload", argLength: 2, reg: fpload, aux: "SymOff", typ: "Float32", faultOnNilArg0: true, symEffect: "Read"},
+		{name: "FMOVDload", argLength: 2, reg: fpload, aux: "SymOff", typ: "Float64", faultOnNilArg0: true, symEffect: "Read"},
+		{name: "FMOVSstore", argLength: 3, reg: fpstore, aux: "SymOff", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"},
+		{name: "FMOVDstore", argLength: 3, reg: fpstore, aux: "SymOff", typ: "Mem", faultOnNilArg0: true, symEffect: "Write"},
 		// 32-bit arithmetic. ADD/SUB are the plain forms the residue needs;
 		// ADDC/SUBC/adde/subfe are the carry pair.
 		{name: "ADD", argLength: 2, reg: gp21, asm: "ADD", commutative: true},                            // arg0 + arg1

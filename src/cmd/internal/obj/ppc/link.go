@@ -335,7 +335,7 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		return emit(rd(), rs(), int32(p.From.Offset))
 
 	// Loads: To=rd, From=d(ra).
-	case ALWZ, ALBZ, ALHZ, ALHA:
+	case ALWZ, ALBZ, ALHZ, ALHA, ALFS, ALFD:
 		if p.From.Type != obj.TYPE_MEM {
 			return bad(fmt.Errorf("%v: %v needs a memory operand", p, Mnemonic(Inst(p.As))))
 		}
@@ -347,10 +347,14 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if p.From.Name == obj.NAME_AUTO || p.From.Name == obj.NAME_PARAM {
 			base = int32(REGSP - REG_R0)
 		}
-		return emit(rd(), int32(d), base)
+		dest := rd()
+		if p.As == ALFS || p.As == ALFD {
+			dest = int32(p.To.Reg - REG_F0)
+		}
+		return emit(dest, int32(d), base)
 
 	// Stores: To=d(ra), From=rs.
-	case ASTW, ASTWU, ASTB, ASTH:
+	case ASTW, ASTWU, ASTB, ASTH, ASTFS, ASTFD:
 		if p.To.Type != obj.TYPE_MEM {
 			return bad(fmt.Errorf("%v: %v needs a memory destination", p, Mnemonic(Inst(p.As))))
 		}
@@ -362,7 +366,11 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		if p.To.Name == obj.NAME_AUTO || p.To.Name == obj.NAME_PARAM {
 			base = REGSP - REG_R0
 		}
-		return emit(int32(p.From.Reg-REG_R0), int32(d), int32(base))
+		src := int32(p.From.Reg - REG_R0)
+		if p.As == ASTFS || p.As == ASTFD {
+			src = int32(p.From.Reg - REG_F0)
+		}
+		return emit(src, int32(d), int32(base))
 
 	// All integer comparisons target CR0. Unlike a three-GPR operation,
 	// From and To are the two inputs, not a source and a destination.
@@ -376,6 +384,9 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 			return bad(fmt.Errorf("%v: immediate compare needs a register and constant", p))
 		}
 		return emit(0, ra(), int32(p.To.Offset))
+
+	case AFMR, AFRSP:
+		return emit(int32(p.To.Reg-REG_F0), int32(p.From.Reg-REG_F0))
 
 	case obj.ACALL, ABL:
 		if p.To.Sym != nil && p.To.Name == obj.NAME_EXTERN && p.To.Type == obj.TYPE_MEM {
