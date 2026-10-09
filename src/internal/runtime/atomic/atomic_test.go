@@ -469,6 +469,18 @@ func TestCasRel(t *testing.T) {
 	}
 }
 
+func TestCasp1Escape(t *testing.T) {
+	var p [2]unsafe.Pointer
+	for i := range p {
+		if !atomic.Casp1(&p[i], nil, unsafe.Pointer(new(int))) {
+			t.Fatal("Casp1 failed to install pointer")
+		}
+	}
+	if p[0] == p[1] {
+		t.Error("Bad escape analysis of Casp1")
+	}
+}
+
 func TestStorepNoWB(t *testing.T) {
 	var p [2]*int
 	for i := range p {

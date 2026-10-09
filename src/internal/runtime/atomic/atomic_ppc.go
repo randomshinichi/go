@@ -341,13 +341,11 @@ func Xchguintptr(ptr *uintptr, val uintptr) uintptr {
 	return uintptr(Xchg((*uint32)(unsafe.Pointer(ptr)), uint32(val)))
 }
 
-//go:nosplit
-func Casp1(ptr *unsafe.Pointer, old, new unsafe.Pointer) bool {
-	return Cas((*uint32)(unsafe.Pointer(ptr)), uint32(uintptr(old)), uint32(uintptr(new)))
-}
+// Not noescape: a successful compare-and-swap installs new in *ptr.
+func Casp1(ptr *unsafe.Pointer, old, new unsafe.Pointer) bool
 
 //go:nosplit
 func Loadp(ptr unsafe.Pointer) unsafe.Pointer { return unsafe.Pointer(uintptr(Load((*uint32)(ptr)))) }
 
-//go:nosplit
-func StorepNoWB(ptr unsafe.Pointer, val unsafe.Pointer) { Store((*uint32)(ptr), uint32(uintptr(val))) }
+// Not noescape: the stored pointer must escape, even without a write barrier.
+func StorepNoWB(ptr unsafe.Pointer, val unsafe.Pointer)

@@ -6,6 +6,14 @@
 
 #include "textflag.h"
 
+// Keep the pointer arguments visible to escape analysis in the Go declarations.
+// The 32-bit pointer ABI slots match the raw word operations.
+TEXT ·Casp1(SB),NOSPLIT,$0-13
+	B ·casRaw(SB)
+
+TEXT ·StorepNoWB(SB),NOSPLIT,$0-8
+	B ·storeRaw(SB)
+
 TEXT ·casRaw(SB),NOSPLIT,$0-13
 	LWZ R3, ptr+0(FP)
 	LWZ R4, old+4(FP)
