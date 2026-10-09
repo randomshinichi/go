@@ -183,19 +183,27 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 	// Address formation and memory.
 	case ssa.OpPPCMOVWaddr:
-		// addi rd, base, off puts the offset in the immediate field. A symbol
-		// needs the relocation path that brief 3.4 owns; obj/ppc's assembler
-		// refuses one rather than emitting a wrong address.
+		// addi's displacement is a signed 16-bit immediate. Large plain
+		// offsets must be materialized before adding; relying on the assembler
+		// to encode them would either truncate or reject a valid Go address.
+		addr := obj.Addr{Type: obj.TYPE_ADDR}
+		ssagen.AddAux(&addr, v)
+		if addr.Sym == nil && addr.Name == 0 {
+			if addr.Offset < -32768 || addr.Offset > 32767 {
+				// R31 is reserved by the ppc32 backend for address and
+				// constant materialization.
+				emitConst32(s, ppc.REG_R31, int32(addr.Offset))
+				reg3(s, ppc.AADD, v.Reg(), v.Args[0].Reg(), ppc.REG_R31)
+				return
+			}
+			// No name to resolve, so this is an ordinary addi immediate; obj's
+			// operand checker requires TYPE_ADDR to carry a name or a symbol.
+			addr.Type = obj.TYPE_CONST
+		}
 		p := s.Prog(ppc.AADDI)
 		p.To = obj.Addr{Type: obj.TYPE_REG, Reg: v.Reg()}
 		p.Reg = v.Args[0].Reg()
-		p.From.Type = obj.TYPE_ADDR
-		ssagen.AddAux(&p.From, v)
-		if p.From.Sym == nil && p.From.Name == 0 {
-			// No name to resolve, so this is an ordinary addi immediate; obj's
-			// operand checker requires TYPE_ADDR to carry a name or a symbol.
-			p.From.Type = obj.TYPE_CONST
-		}
+		p.From = addr
 
 	case ssa.OpPPCMOVBload, ssa.OpPPCMOVBUload, ssa.OpPPCMOVHload,
 		ssa.OpPPCMOVHUload, ssa.OpPPCMOVWload:
