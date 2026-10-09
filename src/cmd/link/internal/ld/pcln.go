@@ -169,7 +169,7 @@ func computeDeferReturn(ctxt *Link, deferReturnSym, s loader.Sym) uint32 {
 				case sys.AMD64:
 					deferreturn--
 
-				case sys.ARM, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64:
+				case sys.ARM, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC, sys.PPC64, sys.RISCV64:
 					// no change
 				case sys.S390X:
 					deferreturn -= 2
