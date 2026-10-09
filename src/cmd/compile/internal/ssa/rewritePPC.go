@@ -61,10 +61,26 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpConstNil(v)
 	case OpCopy:
 		return rewriteValuePPC_OpCopy(v)
+	case OpCvt32Fto32:
+		return rewriteValuePPC_OpCvt32Fto32(v)
+	case OpCvt32Fto32U:
+		return rewriteValuePPC_OpCvt32Fto32U(v)
 	case OpCvt32Fto64F:
 		return rewriteValuePPC_OpCvt32Fto64F(v)
+	case OpCvt32Uto32F:
+		return rewriteValuePPC_OpCvt32Uto32F(v)
+	case OpCvt32Uto64F:
+		return rewriteValuePPC_OpCvt32Uto64F(v)
+	case OpCvt32to32F:
+		return rewriteValuePPC_OpCvt32to32F(v)
+	case OpCvt32to64F:
+		return rewriteValuePPC_OpCvt32to64F(v)
+	case OpCvt64Fto32:
+		return rewriteValuePPC_OpCvt64Fto32(v)
 	case OpCvt64Fto32F:
 		return rewriteValuePPC_OpCvt64Fto32F(v)
+	case OpCvt64Fto32U:
+		return rewriteValuePPC_OpCvt64Fto32U(v)
 	case OpCvtBoolToUint8:
 		return rewriteValuePPC_OpCvtBoolToUint8(v)
 	case OpDiv32:
@@ -689,6 +705,28 @@ func rewriteValuePPC_OpCopy(v *Value) bool {
 	}
 	return false
 }
+func rewriteValuePPC_OpCvt32Fto32(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt32Fto32 x)
+	// result: (LoweredCvt64Fto32 x)
+	for {
+		x := v_0
+		v.reset(OpPPCLoweredCvt64Fto32)
+		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt32Fto32U(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt32Fto32U x)
+	// result: (LoweredCvt64Fto32U x)
+	for {
+		x := v_0
+		v.reset(OpPPCLoweredCvt64Fto32U)
+		v.AddArg(x)
+		return true
+	}
+}
 func rewriteValuePPC_OpCvt32Fto64F(v *Value) bool {
 	v_0 := v.Args[0]
 	// match: (Cvt32Fto64F x)
@@ -700,6 +738,69 @@ func rewriteValuePPC_OpCvt32Fto64F(v *Value) bool {
 		return true
 	}
 }
+func rewriteValuePPC_OpCvt32Uto32F(v *Value) bool {
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Cvt32Uto32F x)
+	// result: (FRSP (LoweredCvt32Uto64F <typ.Float64> x))
+	for {
+		x := v_0
+		v.reset(OpPPCFRSP)
+		v0 := b.NewValue0(v.Pos, OpPPCLoweredCvt32Uto64F, typ.Float64)
+		v0.AddArg(x)
+		v.AddArg(v0)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt32Uto64F(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt32Uto64F x)
+	// result: (LoweredCvt32Uto64F x)
+	for {
+		x := v_0
+		v.reset(OpPPCLoweredCvt32Uto64F)
+		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt32to32F(v *Value) bool {
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Cvt32to32F x)
+	// result: (FRSP (LoweredCvt32to64F <typ.Float64> x))
+	for {
+		x := v_0
+		v.reset(OpPPCFRSP)
+		v0 := b.NewValue0(v.Pos, OpPPCLoweredCvt32to64F, typ.Float64)
+		v0.AddArg(x)
+		v.AddArg(v0)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt32to64F(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt32to64F x)
+	// result: (LoweredCvt32to64F x)
+	for {
+		x := v_0
+		v.reset(OpPPCLoweredCvt32to64F)
+		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt64Fto32(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt64Fto32 x)
+	// result: (LoweredCvt64Fto32 x)
+	for {
+		x := v_0
+		v.reset(OpPPCLoweredCvt64Fto32)
+		v.AddArg(x)
+		return true
+	}
+}
 func rewriteValuePPC_OpCvt64Fto32F(v *Value) bool {
 	v_0 := v.Args[0]
 	// match: (Cvt64Fto32F x)
@@ -707,6 +808,17 @@ func rewriteValuePPC_OpCvt64Fto32F(v *Value) bool {
 	for {
 		x := v_0
 		v.reset(OpPPCFRSP)
+		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpCvt64Fto32U(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (Cvt64Fto32U x)
+	// result: (LoweredCvt64Fto32U x)
+	for {
+		x := v_0
+		v.reset(OpPPCLoweredCvt64Fto32U)
 		v.AddArg(x)
 		return true
 	}

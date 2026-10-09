@@ -215,6 +215,12 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 
 	case ssa.OpPPCMOVWconst:
 		emitMOVWconst(s, v)
+	case ssa.OpPPCLoweredCvt32to64F, ssa.OpPPCLoweredCvt32Uto64F:
+		emitIntToFloat(s, v.Reg(), v.Args[0].Reg(), v.Op == ssa.OpPPCLoweredCvt32to64F)
+	case ssa.OpPPCLoweredCvt64Fto32:
+		emitFloatToInt(s, v.Reg(), v.Args[0].Reg())
+	case ssa.OpPPCLoweredCvt64Fto32U:
+		emitFloatToUint(s, v.Reg(), v.Args[0].Reg())
 	case ssa.OpPPCFADD, ssa.OpPPCFADDS, ssa.OpPPCFSUB, ssa.OpPPCFSUBS,
 		ssa.OpPPCFMUL, ssa.OpPPCFMULS, ssa.OpPPCFDIV, ssa.OpPPCFDIVS:
 		reg3(s, v.Op.Asm(), v.Reg(), v.Args[0].Reg(), v.Args[1].Reg())

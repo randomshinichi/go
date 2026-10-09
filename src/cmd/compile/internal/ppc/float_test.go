@@ -26,6 +26,12 @@ func echo64(x float64) float64 { return x }
 func echo32(x float32) float32 { return x }
 //go:noinline
 //go:nosplit
+func nested64(pad uint32, x float64) float64 { return echo64(x) }
+//go:noinline
+//go:nosplit
+func nested32(x float32) float32 { return echo32(x) }
+//go:noinline
+//go:nosplit
 func round(x float64) float64 { return float64(float32(x)) }
 //go:noinline
 //go:nosplit
@@ -43,6 +49,9 @@ func smash()
 //go:noinline
 //go:nosplit
 func survive(p,q *float64) { x:=*p; smash(); *q=x }
+//go:noinline
+//go:nosplit
+func survive32(p,q *float32) { x:=*p; smash(); *q=x }
 `
 
 // Compile whole functions with the tree's freshly installed compiler. The ELF
@@ -202,12 +211,13 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 }
 
 func TestFloatTransportQEMU(t *testing.T) {
-	fns := []string{"echo64", "echo32", "round", "copy64", "copy32", "constant64", "constant32", "survive"}
+	fns := []string{"echo64", "echo32", "round", "copy64", "copy32", "constant64", "constant32", "survive", "survive32", "nested32", "nested64"}
 	dir, dump := compileFloatFixture(t, floatTransportFixture, fns, "")
 	var body strings.Builder
 	// Both stack alignments; pointer accesses and call arguments/results.
 	for _, b := range []uint64{0, 1 << 63, 0x3ff23456789abcde, 0x7ff0000000000000, 0xfff0000000000000, 1, 0x000fffffffffffff} {
 		body.WriteString(setDouble(24, b) + "bl fn_echo64\n" + checkDouble(32, b))
+		body.WriteString(setWord(24, 17) + setDouble(28, b) + "bl fn_nested64\n" + checkDouble(36, b))
 		for _, off := range []int{256, 260} {
 			body.WriteString(setDouble(off, b) + fmt.Sprintf("addi 3,1,%d\nstw 3,24(1)\naddi 3,1,280\nstw 3,28(1)\nbl fn_copy64\n", off) + checkDouble(280, b))
 			body.WriteString(setDouble(off, b) + fmt.Sprintf("addi 3,1,%d\nstw 3,24(1)\naddi 3,1,284\nstw 3,28(1)\nbl fn_survive\n", off) + checkDouble(284, b))
@@ -215,6 +225,8 @@ func TestFloatTransportQEMU(t *testing.T) {
 	}
 	for _, b := range []uint32{0, 1 << 31, 0x3f923456, 0x7f800000, 0xff800000, 1, 0x007fffff} {
 		body.WriteString(setWord(24, b) + "bl fn_echo32\n" + checkWord(28, b))
+		body.WriteString(setWord(24, b) + "bl fn_nested32\n" + checkWord(28, b))
+		body.WriteString(setWord(256, b) + "addi 3,1,256\nstw 3,24(1)\naddi 3,1,260\nstw 3,28(1)\nbl fn_survive32\n" + checkWord(260, b))
 		body.WriteString(setWord(256, b) + "addi 3,1,256\nstw 3,24(1)\naddi 3,1,260\nstw 3,28(1)\nbl fn_copy32\n" + checkWord(260, b))
 	}
 	body.WriteString("bl fn_constant64\n" + checkDouble(24, math.Float64bits(-123.5)) + "bl fn_constant32\n" + checkWord(24, math.Float32bits(123.5)))
@@ -232,28 +244,54 @@ func TestFloatTransportQEMU(t *testing.T) {
 }
 
 func TestFloatPressureQEMU(t *testing.T) {
-	var src strings.Builder
-	src.WriteString("package main\n//go:noinline\n//go:nosplit\nfunc pressure(")
-	for i := 0; i < 40; i++ {
-		fmt.Fprintf(&src, "p%d,q%d *float64,", i, i)
+	for _, width := range []int{32, 64} {
+		for _, conversion := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/conversion-%t", width, conversion), func(t *testing.T) {
+				var src strings.Builder
+				src.WriteString("package main\n//go:noinline\n//go:nosplit\nfunc pressure(")
+				for i := 0; i < 40; i++ {
+					fmt.Fprintf(&src, "p%d,q%d *float%d,", i, i, width)
+				}
+				src.WriteString(") {\n")
+				for i := 0; i < 40; i++ {
+					fmt.Fprintf(&src, "x%d:=*p%d\n", i, i)
+				}
+				if conversion {
+					src.WriteString("z:=uint32(x39)\n")
+				}
+				for i := 0; i < 40; i++ {
+					if conversion && i == 39 {
+						fmt.Fprintf(&src, "*q39=float%d(z)\n", width)
+					} else {
+						fmt.Fprintf(&src, "*q%d=x%d\n", i, i)
+					}
+				}
+				src.WriteString("}\n")
+				dir, dump := compileFloatFixture(t, src.String(), []string{"pressure"}, "pressure")
+				var body strings.Builder
+				for i := 0; i < 40; i++ {
+					x := float64(i) + 0.25
+					if width == 64 {
+						body.WriteString(setDouble(1028+i*8, math.Float64bits(x)))
+					} else {
+						body.WriteString(setWord(1028+i*8, math.Float32bits(float32(x))))
+					}
+					fmt.Fprintf(&body, "addi 3,1,%d\nstw 3,%d(1)\naddi 3,1,%d\nstw 3,%d(1)\n", 1028+i*8, 24+i*8, 2052+i*8, 28+i*8)
+				}
+				body.WriteString("bl fn_pressure\n")
+				for i := 0; i < 40; i++ {
+					x := float64(i) + 0.25
+					if conversion && i == 39 {
+						x = 39
+					}
+					if width == 64 {
+						body.WriteString(checkDouble(2052+i*8, math.Float64bits(x)))
+					} else {
+						body.WriteString(checkWord(2052+i*8, math.Float32bits(float32(x))))
+					}
+				}
+				runFloatELF(t, dir, dump, []string{"pressure"}, body.String(), nil)
+			})
+		}
 	}
-	src.WriteString(") {\n")
-	for i := 0; i < 40; i++ {
-		fmt.Fprintf(&src, "x%d:=*p%d\n", i, i)
-	}
-	for i := 0; i < 40; i++ {
-		fmt.Fprintf(&src, "*q%d=x%d\n", i, i)
-	}
-	src.WriteString("}\n")
-	dir, dump := compileFloatFixture(t, src.String(), []string{"pressure"}, "pressure")
-	var body strings.Builder
-	for i := 0; i < 40; i++ {
-		body.WriteString(setDouble(1028+i*8, math.Float64bits(float64(i)+0.25)))
-		fmt.Fprintf(&body, "addi 3,1,%d\nstw 3,%d(1)\naddi 3,1,%d\nstw 3,%d(1)\n", 1028+i*8, 24+i*8, 2052+i*8, 28+i*8)
-	}
-	body.WriteString("bl fn_pressure\n")
-	for i := 0; i < 40; i++ {
-		body.WriteString(checkDouble(2052+i*8, math.Float64bits(float64(i)+0.25)))
-	}
-	runFloatELF(t, dir, dump, []string{"pressure"}, body.String(), nil)
 }
