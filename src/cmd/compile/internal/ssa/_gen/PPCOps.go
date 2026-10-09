@@ -30,10 +30,12 @@ import "strings"
 // B (byte)      = 8 bit
 // BU            = 8 bit unsigned
 
-// regNamesPPC lists the registers the register allocator may use. r2 and r13 are
-// deliberately absent: their roles on Darwin ppc32 are open (DESIGN.md §11 Q-2),
-// and a backend must not allocate a register whose meaning it has not measured.
-// R0 is present as an architectural zero, not as a destination.
+// regNamesPPC lists the registers the register allocator may use. R2 and R13
+// remain conservatively reserved, but the Darwin ppc32 probe found neither to
+// be a thread pointer: R13 was zero before and after pthread_self, while R2
+// changed. The pure-Go runtime keeps g in R30 (also restored from signal state),
+// so it needs no separate TLS path. R0 is present as an architectural zero, not
+// as a destination.
 var regNamesPPC = []string{
 	"R0", // architectural zero
 	"SP", // R1

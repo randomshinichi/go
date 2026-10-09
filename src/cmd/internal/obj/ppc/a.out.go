@@ -41,8 +41,9 @@ const (
 // General-purpose registers, by architectural number. R0 reads as the literal
 // zero in the RA position of addi/lwz-style forms, R1 is the stack pointer, R30
 // holds g and R31 is the assembler temporary under the Go-internal convention
-// (DESIGN §4). The r2/r13 roles and the TLS mechanism for g are open questions
-// (Q-2) and nothing is assumed about them here.
+// (DESIGN §4). On Darwin ppc32, R2 and R13 are conservatively reserved but
+// neither is a thread pointer in the measured ABI probe. The Go g register is
+// R30, so core pure-Go runtime access to g needs no separate TLS mechanism.
 const (
 	R0 uint8 = iota
 	R1
