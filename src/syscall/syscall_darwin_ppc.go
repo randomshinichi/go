@@ -50,6 +50,10 @@ func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
 //sys lutimes(path string, timeval *[2]Timeval) (err error)
 //sys lchmod(path string, mode uint32) (err error)
 
+// used by internal/syscall/unix
+//
+//go:linkname lchmod
+
 // Leopard does not implement the POSIX *at calls. Preserve the path-based
 // fallback contract and return ENOTSUP for real directory descriptors.
 func fstatat(fd int, path string, stat *Stat_t, flags int) error {
