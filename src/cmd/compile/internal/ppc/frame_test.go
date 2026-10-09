@@ -157,6 +157,16 @@ func TestGoStackCallsQEMU(t *testing.T) {
 				// the callee's entire (unmodified) emitted function.
 				asm.WriteString("andi. 31,1,15\nbne harness_bad\n")
 				calls := fixtureLocalCalls(t, string(out), "main."+fn)
+				if fn == "largeFrame" {
+					var stackcheck, morestack bool
+					for _, target := range calls {
+						stackcheck = stackcheck || target == "runtime.stackcheck"
+						morestack = morestack || target == "runtime.morestack"
+					}
+					if !stackcheck || !morestack {
+						t.Fatalf("large-frame compile omitted ABI0 stack-growth calls: stackcheck=%v morestack=%v", stackcheck, morestack)
+					}
+				}
 				for i, w := range words {
 					if target, ok := calls[i*4]; ok {
 						if w != 0x48000001 {
