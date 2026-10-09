@@ -316,10 +316,14 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpRsh32Ux64(v)
 	case OpRsh32Ux8:
 		return rewriteValuePPC_OpRsh32Ux8(v)
+	case OpRsh32x16:
+		return rewriteValuePPC_OpRsh32x16(v)
 	case OpRsh32x32:
 		return rewriteValuePPC_OpRsh32x32(v)
 	case OpRsh32x64:
 		return rewriteValuePPC_OpRsh32x64(v)
+	case OpRsh32x8:
+		return rewriteValuePPC_OpRsh32x8(v)
 	case OpRsh8Ux16:
 		return rewriteValuePPC_OpRsh8Ux16(v)
 	case OpRsh8Ux32:
@@ -3452,6 +3456,23 @@ func rewriteValuePPC_OpRsh32Ux8(v *Value) bool {
 		return true
 	}
 }
+func rewriteValuePPC_OpRsh32x16(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Rsh32x16 x y)
+	// result: (Rsh32x32 x (ZeroExt16to32 y))
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpRsh32x32)
+		v0 := b.NewValue0(v.Pos, OpZeroExt16to32, typ.UInt32)
+		v0.AddArg(y)
+		v.AddArg2(x, v0)
+		return true
+	}
+}
 func rewriteValuePPC_OpRsh32x32(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
@@ -3514,6 +3535,23 @@ func rewriteValuePPC_OpRsh32x64(v *Value) bool {
 		return true
 	}
 	return false
+}
+func rewriteValuePPC_OpRsh32x8(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Rsh32x8 x y)
+	// result: (Rsh32x32 x (ZeroExt8to32 y))
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpRsh32x32)
+		v0 := b.NewValue0(v.Pos, OpZeroExt8to32, typ.UInt32)
+		v0.AddArg(y)
+		v.AddArg2(x, v0)
+		return true
+	}
 }
 func rewriteValuePPC_OpRsh8Ux16(v *Value) bool {
 	v_1 := v.Args[1]
