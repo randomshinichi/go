@@ -13,24 +13,25 @@ TEXT runtime·mstart(SB), NOSPLIT|TOPFRAME, $0-0
 	RET // not reached
 
 // goexit marks the end of a goroutine stack and never returns.
-TEXT runtime·goexit(SB), NOSPLIT|NOFRAME|TOPFRAME, $0-0
+TEXT runtime·goexit(SB), NOSPLIT|TOPFRAME, $0-0
 	BL	runtime·goexit1(SB)
-	UNDEF
+	BL	runtime·abort(SB)
+	RET
 
 // getg returns the current goroutine from the reserved Go register R30.
-TEXT runtime·getg(SB), NOSPLIT|NOFRAME, $0-4
-	MOVW	R30, ret+0(FP)
+TEXT runtime·getg(SB), NOSPLIT, $0-4
+	STW	R30, ret+0(FP)
 	RET
 
 // setg changes the current goroutine in the reserved Go register R30.
-TEXT runtime·setg(SB), NOSPLIT|NOFRAME, $0-4
-	MOVW	gg+0(FP), R30
+TEXT runtime·setg(SB), NOSPLIT, $0-4
+	LWZ	R30, gg+0(FP)
 	RET
 
 // mstart_stub is called with the C ABI on a newly created pthread. The
 // pthread_create argument is m; its g0 is already initialized by newm.
-TEXT runtime·mstart_stub(SB), NOSPLIT|NOFRAME, $0-0
-	MOVW	m_g0(R3), R30
+TEXT runtime·mstart_stub(SB), NOSPLIT, $0-0
+	LWZ	R30, m_g0(R3)
 	BL	runtime·mstart(SB)
-	MOVW	$0, R3
+	ADDI	R3, R0, $0
 	RET
