@@ -10,6 +10,9 @@ TEXT ·casRaw(SB),NOSPLIT,$0-13
 	LWZ R3, ptr+0(FP)
 	LWZ R4, old+4(FP)
 	LWZ R5, new+8(FP)
+	// R0 is an ordinary indexed-address register here; establish zero before
+	// using it as the second operand to lwarx/stwcx.
+	ADDI R0, R0, $0
 	SYNC
 cas_again:
 	LWARX R6, R3, R0
