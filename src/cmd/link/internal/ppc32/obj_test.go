@@ -10,8 +10,44 @@ import (
 	"cmd/link/internal/ld"
 	"cmd/link/internal/loader"
 	"cmd/link/internal/sym"
+	"fmt"
 	"testing"
 )
+
+func TestAbsoluteAddressRelocation(t *testing.T) {
+	const (
+		lisR5  = uint32(0x3ca00000) // lis r5,0
+		addiR5 = uint32(0x38a50000) // addi r5,r5,0
+	)
+	for _, addr := range []uint32{0x12347fff, 0x12348000, 0x1234ffff, 0xf2348000} {
+		t.Run(fmt.Sprintf("%08x", addr), func(t *testing.T) {
+			ldr := loader.NewLoader(0, &loader.ErrorReporter{})
+			targetSym := ldr.CreateSymForUpdate("runtime.target", 0)
+			targetSym.SetValue(int64(uint64(addr)))
+			src := ldr.CreateSymForUpdate("runtime.address", 0)
+			r, _ := src.AddRel(objabi.R_ADDRPOWER)
+			r.SetSiz(8)
+			r.SetSym(targetSym.Sym())
+			pair := uint64(lisR5)<<32 | uint64(addiR5)
+			got, _, ok := archreloc(nil, ldr, nil, r, src.Sym(), int64(pair))
+			if !ok {
+				t.Fatal("archreloc rejected R_ADDRPOWER absolute-address pair")
+			}
+			gotPair := uint64(got)
+			hi, lo := uint32(gotPair>>32), uint32(gotPair)
+			if hi&0xffff0000 != lisR5 || lo&0xffff0000 != addiR5 {
+				t.Fatalf("instruction opcodes changed: got %#08x %#08x", hi, lo)
+			}
+			// addis uses a signed high immediate shifted left 16; addi adds
+			// a signed low immediate. The high adjustment must carry exactly
+			// when the low half has bit 15 set.
+			materialized := uint32((int32(int16(uint16(hi))) << 16) + int32(int16(uint16(lo))))
+			if materialized != addr {
+				t.Fatalf("materialized address = %#08x, want %#08x (pair %#08x %#08x)", materialized, addr, hi, lo)
+			}
+		})
+	}
+}
 
 func TestMachOImportCallStub(t *testing.T) {
 	ldr := loader.NewLoader(0, &loader.ErrorReporter{})

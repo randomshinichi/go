@@ -50,6 +50,8 @@ func archreloc(target *ld.Target, ldr *loader.Loader, _ *ld.ArchSyms, r loader.R
 		t := ldr.SymValue(r.Sym()) + r.Add()
 		hi := uint32(val >> 32)
 		lo := uint32(val)
+		// addis plus addi consumes a signed low half, so carry into the
+		// high half when bit 15 of the low half is set (@ha/@l semantics).
 		hi = hi&^0xffff | uint32((t+0x8000)>>16)&0xffff
 		lo = lo&^0xffff | uint32(t)&0xffff
 		return int64(hi)<<32 | int64(lo), 0, true
