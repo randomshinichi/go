@@ -20,6 +20,22 @@ import (
 	"time"
 )
 
+func TestIsExecutableProtection(t *testing.T) {
+	for _, test := range []struct {
+		protection int32
+		want       bool
+	}{
+		{_VM_PROT_READ | _VM_PROT_EXECUTE, true},
+		{_VM_PROT_READ, false},
+		{_VM_PROT_EXECUTE, false},
+		{_VM_PROT_READ | _VM_PROT_WRITE, false},
+	} {
+		if got := isExecutable(test.protection); got != test.want {
+			t.Errorf("isExecutable(%#x) = %t, want %t", test.protection, got, test.want)
+		}
+	}
+}
+
 func TestVMInfo(t *testing.T) {
 	var begin, end, offset uint64
 	var filename string

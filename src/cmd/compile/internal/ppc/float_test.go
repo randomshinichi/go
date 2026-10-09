@@ -283,7 +283,7 @@ func TestFloatTransportQEMU(t *testing.T) {
 	dir, dump := compileFloatFixture(t, floatTransportFixture, fns, "")
 	var body strings.Builder
 	// Both stack alignments; pointer accesses and call arguments/results.
-	for _, b := range []uint64{0, 1 << 63, 0x3ff0000000000000, 0x3ff8000000000000, 0x4004000000000000, 0xbfe0000000000000, 0xbff8000000000000, 0x7ff8000000000001, 0x7ff0000000000000, 0xfff0000000000000, 1, 0x000fffffffffffff} {
+	for _, b := range []uint64{0, 1 << 63, 0x3fdfffffffffffff, 0x3fe0000000000000, 0x3fe0000000000001, 0x3ff7ffffffffffff, 0x3ff8000000000000, 0x3ff8000000000001, 0x4003ffffffffffff, 0x4004000000000000, 0x4004000000000001, 0xbfdfffffffffffff, 0xbfe0000000000000, 0xbfe0000000000001, 0xbff7ffffffffffff, 0xbff8000000000000, 0xbff8000000000001, 0xc003ffffffffffff, 0xc004000000000000, 0xc004000000000001, 0x7ff8000000000001, 0x7ff0000000000000, 0xfff0000000000000, 1, 0x000fffffffffffff} {
 		body.WriteString(setDouble(24, b) + "bl fn_echo64\n" + checkDouble(32, b))
 		body.WriteString(setDouble(24, b) + "bl fn_round64\n" + checkDouble(32, b))
 		body.WriteString(setWord(24, 17) + setDouble(28, b) + "bl fn_nested64\n" + checkDouble(36, b))

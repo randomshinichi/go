@@ -6,8 +6,9 @@
 
 package pprof
 
-// machVMRegionBasicInfoData matches vm_region_basic_info_data_64_t, which is
-// used by the 64-bit region query on Darwin PPC.
+// machVMRegionBasicInfoData matches vm_region_basic_info_data_64_t. On the
+// PowerPC Leopard target, a C probe including <mach/vm_region.h> measured size
+// 36 and offsets protection=0, offset=20, behavior=28, user_wired_count=32.
 type machVMRegionBasicInfoData struct {
 	Protection       int32
 	Max_protection   int32
@@ -20,8 +21,8 @@ type machVMRegionBasicInfoData struct {
 	Pad_cgo_1        [2]byte
 }
 
-// VM_PROT flags measured from /usr/include/mach/vm_prot.h on the PowerPC
-// Leopard target (Mac OS X 10.5.8).
+// VM_PROT flags from /usr/include/mach/vm_prot.h, read on the PowerPC Leopard
+// target (Mac OS X 10.5.8): READ=0x01, WRITE=0x02, EXECUTE=0x04.
 const (
 	_VM_PROT_READ    = 0x1
 	_VM_PROT_WRITE   = 0x2

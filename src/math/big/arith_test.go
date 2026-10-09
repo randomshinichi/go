@@ -27,6 +27,27 @@ var adds = []Word{0, 1, _M - 1, _M}
 var shifts = []uint{1, 2, 3, _W/4 - 1, _W / 4, _W/4 + 1, _W/2 - 1, _W / 2, _W/2 + 1, _W - 3, _W - 2, _W - 1}
 
 func TestAddVV(t *testing.T)      { testVV(t, "addVV", addVV, addVV_g) }
+
+func TestAddVVCarryChain(t *testing.T) {
+	for _, test := range []struct {
+		x, y []Word
+		z    []Word
+		c    Word
+	}{
+		{[]Word{_M, _M, 0}, []Word{1, 0, 0}, []Word{0, 0, 1}, 0},
+		{[]Word{_M, _M}, []Word{1, 0}, []Word{0, 0}, 1},
+	} {
+		z := make([]Word, len(test.x))
+		if c := addVV(z, test.x, test.y); c != test.c {
+			t.Errorf("addVV carry = %d, want %d", c, test.c)
+		}
+		for i := range z {
+			if z[i] != test.z[i] {
+				t.Errorf("addVV word %d = %#x, want %#x", i, z[i], test.z[i])
+			}
+		}
+	}
+}
 func TestSubVV(t *testing.T)      { testVV(t, "subVV", subVV, subVV_g) }
 func TestAddVW(t *testing.T)      { testVW(t, "addVW", addVW, addVW_ref, words4) }
 func TestSubVW(t *testing.T)      { testVW(t, "subVW", subVW, subVW_ref, words4) }
