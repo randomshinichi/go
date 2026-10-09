@@ -288,18 +288,18 @@ TEXT runtime·asmcgocall(SB), NOSPLIT, $0-12
 	OR R17, R30, R30
 	ADDI R20, R0, $0
 	CMPW R0, R30
-	BC 12, 2, asmcgocall_stack
+	BC 4, 2, asmcgocall_stack
 	B asmcgocall_call
 asmcgocall_stack:
 	LWZ R18, g_m(R30)
 	LWZ R19, m_gsignal(R18)
 	CMPW R19, R30
-	BC 12, 2, asmcgocall_checkg0
+	BC 4, 2, asmcgocall_checkg0
 	B asmcgocall_call
 asmcgocall_checkg0:
 	LWZ R19, m_g0(R18)
 	CMPW R19, R30
-	BC 12, 2, asmcgocall_switch
+	BC 4, 2, asmcgocall_switch
 	B asmcgocall_call
 asmcgocall_switch:
 	BL runtime·gosave_systemstack_switch(SB)
