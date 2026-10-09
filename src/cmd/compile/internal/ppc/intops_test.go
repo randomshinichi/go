@@ -59,6 +59,24 @@ func extendU(p *[4]byte, i uint64) byte { return p[i] }
 func pointerCopy(d,s *struct { p [8]*byte }) { *d = *s }
 //go:nosplit
 func pointerStore(d **byte,s *byte) { *d = s }
+//go:nosplit
+func lsh8u(x uint32, n uint64) uint32 { return uint32(uint8(x) << n) }
+//go:nosplit
+func rsh8u(x uint32, n uint64) uint32 { return uint32(uint8(x) >> n) }
+//go:nosplit
+func rsh8s(x int32, n uint64) int32 { return int32(int8(x) >> n) }
+//go:nosplit
+func lsh16u(x uint32, n uint64) uint32 { return uint32(uint16(x) << n) }
+//go:nosplit
+func rsh16u(x uint32, n uint64) uint32 { return uint32(uint16(x) >> n) }
+//go:nosplit
+func rsh16s(x int32, n uint64) int32 { return int32(int16(x) >> n) }
+//go:nosplit
+func lsh32u(x uint32, n uint64) uint32 { return x << n }
+//go:nosplit
+func rsh32u(x uint32, n uint64) uint32 { return x >> n }
+//go:nosplit
+func rsh32s(x int32, n uint64) int32 { return x >> n }
 `
 
 // This is the existing whole-function ELF adapter, extended to arithmetic,
@@ -321,6 +339,43 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		for _, op := range []string{"zero", "move"} {
 			setup, check := memoryCase(n*4, op == "move", false, true)
 			run(fmt.Sprintf("word-%s-%d", op, n), fmt.Sprintf("main.word%s%d", op, n), setup, check, "", 0)
+		}
+	}
+	shiftCases := []struct {
+		name   string
+		width  int
+		input  uint32
+		signed bool
+	}{
+		{"lsh8u", 8, 0x5a, false}, {"rsh8u", 8, 0xd3, false}, {"rsh8s", 8, 0xd3, true},
+		{"lsh16u", 16, 0x5a3c, false}, {"rsh16u", 16, 0xd35a, false}, {"rsh16s", 16, 0xd35a, true},
+		{"lsh32u", 32, 0x5a3c7e91, false}, {"rsh32u", 32, 0xd35a7e91, false}, {"rsh32s", 32, 0xd35a7e91, true},
+	}
+	for _, tc := range shiftCases {
+		counts := []uint64{0, uint64(tc.width - 1), uint64(tc.width), uint64(tc.width + 1), 64}
+		if tc.width == 8 {
+			// For uint8(0x5a), count 32 must be handled as >= width. A
+			// PPC word shift masks 32 to zero and would incorrectly return 0x5a.
+			counts = append(counts, 32)
+		}
+		for _, count := range counts {
+			var want uint32
+			if strings.HasPrefix(tc.name, "lsh") {
+				want = uint32((uint64(tc.input) << count) & ((uint64(1) << tc.width) - 1))
+			} else if tc.signed {
+				signedValue := int64(int32(tc.input))
+				if tc.width == 8 {
+					signedValue = int64(int8(tc.input))
+				} else if tc.width == 16 {
+					signedValue = int64(int16(tc.input))
+				}
+				want = uint32(int32(signedValue >> count))
+			} else {
+				want = uint32(uint64(tc.input&uint32((uint64(1)<<tc.width)-1)) >> count)
+			}
+			setup := stackWords(tc.input, uint32(count>>32)) + storeWord(32, uint32(count))
+			check := "lwz 3,36(1)\n" + checkReg(3, want)
+			run(fmt.Sprintf("shift-%s-count-%d", tc.name, count), "main."+tc.name, setup, check, "", 0)
 		}
 	}
 	censusPPCObjects(t, dir, "ints.o", "rotate.o", "panic.o")
