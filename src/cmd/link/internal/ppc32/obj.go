@@ -15,8 +15,8 @@ import (
 func Init() (*sys.Arch, ld.Arch) {
 	return sys.ArchPPC, ld.Arch{
 		Funcalign: 4, Maxalign: 32, Minalign: 4, TrampLimit: 0x1c00000,
-		Archinit: archinit, Archreloc: archreloc, Machoreloc1: machoreloc1,
-		MachorelocSize: 8,
+		Archinit: archinit, Archreloc: archreloc, Gentext: gentext,
+		Machoreloc1: machoreloc1, MachorelocSize: 8,
 	}
 }
 
@@ -55,6 +55,12 @@ func archreloc(target *ld.Target, ldr *loader.Loader, _ *ld.ArchSyms, r loader.R
 		return val, 0, false
 	}
 }
+
+// gentext is intentionally empty for the initial ppc32 internal-link path:
+// it has no dynamic call stubs or other generated text yet. Unsupported
+// external relocations still fail in machoreloc1 rather than being emitted
+// without the required stub machinery.
+func gentext(_ *ld.Link, _ *loader.Loader) {}
 
 func machoreloc1(_ *sys.Arch, _ *ld.OutBuf, _ *loader.Loader, _ loader.Sym, _ loader.ExtReloc, _ int64) bool {
 	// This milestone links internally; external Mach-O relocations are not yet
