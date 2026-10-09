@@ -11,6 +11,7 @@ package ssa
 // without producing it cannot be allowed to sit between the pair.
 
 import (
+	"fmt"
 	"testing"
 
 	"cmd/compile/internal/types"
@@ -63,6 +64,62 @@ func carryChainFunc(c *Conf) fun {
 // TestPPCLowerCarryChain checks that the residue lowers to the carry pair, that
 // the carry argument of the high word is the Flags value produced by the low
 // word, and that no generic op is left behind.
+func TestPPCLowerNarrowRotate(t *testing.T) {
+	for _, width := range []int{8, 16} {
+		for _, countWidth := range []int{8, 16, 32, 64} {
+			t.Run(fmt.Sprintf("%d/count%d", width, countWidth), func(t *testing.T) {
+				c := testConfigPPC32(t)
+				valueType, rotateOp, store := c.config.Types.UInt8, OpRotateLeft8, OpPPCMOVBstore
+				if width == 16 {
+					valueType, rotateOp, store = c.config.Types.UInt16, OpRotateLeft16, OpPPCMOVHstore
+				}
+				countType := c.config.Types.UInt8
+				switch countWidth {
+				case 16:
+					countType = c.config.Types.UInt16
+				case 32:
+					countType = c.config.Types.UInt32
+				}
+				values := []any{
+					Valu("mem", OpInitMem, types.TypeMem, 0, nil),
+					Valu("x", OpArg, valueType, 0, nil),
+				}
+				if countWidth == 64 {
+					values = append(values,
+						Valu("khi", OpArg, c.config.Types.UInt32, 0, nil),
+						Valu("klo", OpArg, c.config.Types.UInt32, 0, nil),
+						Valu("k", OpInt64Make, c.config.Types.UInt64, 0, nil, "khi", "klo"),
+					)
+				} else {
+					values = append(values, Valu("k", OpArg, countType, 0, nil))
+				}
+				values = append(values,
+					Valu("rot", rotateOp, valueType, 0, nil, "x", "k"),
+					Valu("sp", OpSP, c.config.Types.Uintptr, 0, nil),
+					Valu("off", OpOffPtr, types.NewPtr(valueType), 0, nil, "sp"),
+					Valu("st", store, types.TypeMem, 0, nil, "off", "rot", "mem"),
+					Exit("st"),
+				)
+				f := c.Fun("entry", Bloc("entry", values...))
+				lower(f.f)
+				checkLower(f.f)
+				foundLeft, foundRight := false, false
+				for _, v := range f.blocks["entry"].Values {
+					if v.Op == OpPPCSLW {
+						foundLeft = true
+					}
+					if v.Op == OpPPCSRW {
+						foundRight = true
+					}
+				}
+				if !foundLeft || !foundRight {
+					t.Fatalf("RotateLeft%d lowered without both word shifts: left=%t right=%t", width, foundLeft, foundRight)
+				}
+			})
+		}
+	}
+}
+
 func TestPPCLowerCarryChain(t *testing.T) {
 	c := testConfigPPC32(t)
 	f := carryChainFunc(c)

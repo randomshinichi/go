@@ -70,17 +70,23 @@ func pointerStore(d **byte,s *byte) { *d = s }
 //go:nosplit
 func lsh8u(x uint32, n uint64) uint32 { return uint32(uint8(x) << n) }
 //go:nosplit
+func lsh8s(x int32, n uint64) int32 { return int32(int8(x) << n) }
+//go:nosplit
 func rsh8u(x uint32, n uint64) uint32 { return uint32(uint8(x) >> n) }
 //go:nosplit
 func rsh8s(x int32, n uint64) int32 { return int32(int8(x) >> n) }
 //go:nosplit
 func lsh16u(x uint32, n uint64) uint32 { return uint32(uint16(x) << n) }
 //go:nosplit
+func lsh16s(x int32, n uint64) int32 { return int32(int16(x) << n) }
+//go:nosplit
 func rsh16u(x uint32, n uint64) uint32 { return uint32(uint16(x) >> n) }
 //go:nosplit
 func rsh16s(x int32, n uint64) int32 { return int32(int16(x) >> n) }
 //go:nosplit
 func lsh32u(x uint32, n uint64) uint32 { return x << n }
+//go:nosplit
+func lsh32s(x int32, n uint64) int32 { return x << n }
 //go:nosplit
 func rsh32u(x uint32, n uint64) uint32 { return x >> n }
 //go:nosplit
@@ -109,6 +115,40 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		}
 	}
 	src := intFixture
+	var shiftMatrix []struct {
+		name, op          string
+		width, countWidth int
+		signed            bool
+	}
+	for _, width := range []int{8, 16, 32, 64} {
+		for _, signed := range []bool{false, true} {
+			for _, op := range []string{"lsh", "rsh"} {
+				for _, countWidth := range []int{8, 16, 32, 64} {
+					name := fmt.Sprintf("shift_%s_w%d_s%t_c%d", op, width, signed, countWidth)
+					valueType, resultType, valueExpr := "uint32", "uint32", "x"
+					if width == 64 {
+						valueType, resultType = "uint64", "uint64"
+						if signed {
+							valueType, resultType = "int64", "int64"
+						}
+					} else if signed {
+						valueType, resultType = "int32", "int32"
+						if width < 32 {
+							valueExpr = fmt.Sprintf("int%d(x)", width)
+						}
+					} else if width < 32 {
+						valueExpr = fmt.Sprintf("uint%d(x)", width)
+					}
+					src += fmt.Sprintf("\n//go:nosplit\nfunc %s(x %s, n uint%d) %s { return %s(%s %s n) }\n", name, valueType, countWidth, resultType, resultType, valueExpr, map[string]string{"lsh": "<<", "rsh": ">>"}[op])
+					shiftMatrix = append(shiftMatrix, struct {
+						name, op          string
+						width, countWidth int
+						signed            bool
+					}{name, op, width, countWidth, signed})
+				}
+			}
+		}
+	}
 	vlrt, err := os.ReadFile(filepath.Join(testenv.GOROOT(t), "src/runtime/vlrt.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +194,7 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	// Intrinsification is source-symbol based. Compile a real math/bits caller
 	// so this exercises the generic RotateLeft32 op, not a hand-emitted opcode.
 	rotateSrc := filepath.Join(dir, "rotate.go")
-	writePPCFixture(t, rotateSrc, []byte("package bits\nfunc RotateLeft32(x uint32, k int) uint32\n//go:nosplit\nfunc rotate(x uint32,k int) uint32 { return RotateLeft32(x,k) }\n"), 0644)
+	writePPCFixture(t, rotateSrc, []byte("package bits\nfunc RotateLeft32(x uint32, k int) uint32\n//go:nosplit\nfunc rotate8(x uint32,k int) uint32 { x8 := uint8(x); return uint32(x8<<uint(k&7) | x8>>uint((-k)&7)) }\n//go:nosplit\nfunc rotate16(x uint32,k int) uint32 { x16 := uint16(x); return uint32(x16<<uint(k&15) | x16>>uint((-k)&15)) }\n//go:nosplit\nfunc rotate64(x uint64,k int) uint64 { return x<<uint(k&63) | x>>uint((-k)&63) }\n//go:nosplit\nfunc rotate(x uint32,k int) uint32 { return RotateLeft32(x,k) }\n"), 0644)
 	cmd = exec.Command(testenv.GoToolPath(t), "tool", "compile", "-p", "math/bits", "-d=ssa/check/on", "-S", "-o", filepath.Join(dir, "rotate.o"), rotateSrc)
 	cmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=ppc")
 	output, err = cmd.CombinedOutput()
@@ -165,6 +205,12 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	dump += string(output)
 	if !strings.Contains(functionDump(dump, "math/bits.rotate"), "ROTLW") {
 		t.Fatal("rotation fixture does not exercise RotateLeft32 lowering")
+	}
+	for _, fn := range []string{"math/bits.rotate8", "math/bits.rotate16"} {
+		body := functionDump(dump, fn)
+		if !strings.Contains(body, "SLW") || !strings.Contains(body, "SRW") {
+			t.Fatalf("%s does not exercise both narrow shift lowerings:\n%s", fn, body)
+		}
 	}
 	// Pointer aggregate copies must retain the compiler-inserted bulk barrier.
 	copyDump := functionDump(dump, "main.pointerCopy")
@@ -396,6 +442,26 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	for _, k := range []int{-1, 0, 31, 32, 65} {
 		run(fmt.Sprintf("rotate-%d", k), "math/bits.rotate", stackWords(0x89abcdef, uint32(k)), "lwz 3,32(1)\n"+checkReg(3, bits.RotateLeft32(0x89abcdef, k)), "", 0)
 	}
+	for _, tc := range []struct {
+		width int
+		input uint32
+	}{
+		{8, 0xd3}, {16, 0xd35a},
+	} {
+		fn := "rotate8"
+		if tc.width == 16 {
+			fn = "rotate16"
+		}
+		for _, k := range []int{-1, 0, tc.width - 1, tc.width, tc.width + 1, 64} {
+			var want uint32
+			if tc.width == 8 {
+				want = uint32(bits.RotateLeft8(uint8(tc.input), k))
+			} else {
+				want = uint32(bits.RotateLeft16(uint16(tc.input), k))
+			}
+			run(fmt.Sprintf("%s-%d", fn, k), "math/bits."+fn, stackWords(tc.input, uint32(k)), "lwz 3,32(1)\n"+checkReg(3, want), "", 0)
+		}
+	}
 	for _, fn := range []string{"index", "indexU", "extend", "extendU"} {
 		setup := "addi 3,1,512\nstw 3,24(1)\n" + storeWord(28, 0xffffffff)
 		if strings.Contains(fn, "extend") {
@@ -430,9 +496,9 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		input  uint32
 		signed bool
 	}{
-		{"lsh8u", 8, 0x5a, false}, {"rsh8u", 8, 0xd3, false}, {"rsh8s", 8, 0xd3, true},
-		{"lsh16u", 16, 0x5a3c, false}, {"rsh16u", 16, 0xd35a, false}, {"rsh16s", 16, 0xd35a, true},
-		{"lsh32u", 32, 0x5a3c7e91, false}, {"rsh32u", 32, 0xd35a7e91, false}, {"rsh32s", 32, 0xd35a7e91, true},
+		{"lsh8u", 8, 0xd3, false}, {"lsh8s", 8, 0xd3, true}, {"rsh8u", 8, 0xd3, false}, {"rsh8s", 8, 0xd3, true},
+		{"lsh16u", 16, 0xd35a, false}, {"lsh16s", 16, 0xd35a, true}, {"rsh16u", 16, 0xd35a, false}, {"rsh16s", 16, 0xd35a, true},
+		{"lsh32u", 32, 0xd35a7e91, false}, {"lsh32s", 32, 0xd35a7e91, true}, {"rsh32u", 32, 0xd35a7e91, false}, {"rsh32s", 32, 0xd35a7e91, true},
 	}
 	for _, tc := range shiftCases {
 		counts := []uint64{0, uint64(tc.width - 1), uint64(tc.width), uint64(tc.width + 1), 64}
@@ -444,7 +510,11 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		for _, count := range counts {
 			var want uint32
 			if strings.HasPrefix(tc.name, "lsh") {
-				want = uint32((uint64(tc.input) << count) & ((uint64(1) << tc.width) - 1))
+				mask := (uint64(1) << tc.width) - 1
+				want = uint32(((uint64(tc.input) & mask) << count) & mask)
+				if tc.signed && want&(1<<(tc.width-1)) != 0 {
+					want |= uint32(^uint64(mask))
+				}
 			} else if tc.signed {
 				signedValue := int64(int32(tc.input))
 				if tc.width == 8 {
@@ -460,6 +530,65 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 			check := "lwz 3,36(1)\n" + checkReg(3, want)
 			run(fmt.Sprintf("shift-%s-count-%d", tc.name, count), "main."+tc.name, setup, check, "", 0)
 		}
+	}
+	// Exercise each SSA shift family across all value widths, signednesses, and
+	// count widths. The out-of-range vectors catch PPC's masked-count behavior;
+	// high input bits make narrow zero/sign extension observable after widening.
+	for _, tc := range shiftMatrix {
+		input := uint64(0xfedcba9876543210)
+		if tc.width < 64 {
+			input = 0xfedcba98
+		}
+		mask := uint64(1)<<tc.width - 1
+		counts := []uint64{0, uint64(tc.width - 1), uint64(tc.width), uint64(tc.width + 1), 64}
+		for _, count := range counts {
+			value := input & mask
+			var want uint64
+			if tc.op == "lsh" {
+				value = (value << count) & mask
+			} else if tc.signed {
+				if value&(uint64(1)<<(tc.width-1)) != 0 && tc.width < 64 {
+					value |= ^mask
+				}
+				value = uint64(int64(value) >> count)
+			} else {
+				value >>= count
+			}
+			if tc.op == "lsh" && tc.signed && tc.width < 64 && value&(uint64(1)<<(tc.width-1)) != 0 {
+				value |= ^mask
+			}
+			want = value
+			countArg := uint32(count)
+			if tc.countWidth == 8 || tc.countWidth == 16 {
+				countArg <<= 32 - tc.countWidth
+			}
+			var setup, check string
+			if tc.width < 64 {
+				setup = stackWords(uint32(input), countArg)
+				resultOffset := 32
+				if tc.countWidth == 64 {
+					setup = stackWords(uint32(input), uint32(count>>32)) + storeWord(32, uint32(count))
+					resultOffset = 36
+				}
+				check = fmt.Sprintf("lwz 3,%d(1)\n", resultOffset) + checkReg(3, uint32(want))
+			} else {
+				setup = storeWord(24, uint32(input>>32)) + storeWord(28, uint32(input)) + storeWord(32, countArg)
+				resultOffset := 36
+				if tc.countWidth == 64 {
+					setup = storeWord(24, uint32(input>>32)) + storeWord(28, uint32(input)) + storeWord(32, uint32(count>>32)) + storeWord(36, uint32(count))
+					resultOffset = 40
+				}
+				check = fmt.Sprintf("lwz 3,%d(1)\n", resultOffset) + checkReg(3, uint32(want>>32)) + fmt.Sprintf("lwz 3,%d(1)\n", resultOffset+4) + checkReg(3, uint32(want))
+			}
+			run(fmt.Sprintf("%s-count-%d", tc.name, count), "main."+tc.name, setup, check, "", 0)
+		}
+	}
+	for _, k := range []int{-1, 0, 63, 64, 65} {
+		input := uint64(0xfedcba9876543210)
+		want := bits.RotateLeft64(input, k)
+		setup := storeWord(24, uint32(input>>32)) + storeWord(28, uint32(input)) + storeWord(32, uint32(k))
+		check := "lwz 3,36(1)\n" + checkReg(3, uint32(want>>32)) + "lwz 3,40(1)\n" + checkReg(3, uint32(want))
+		run(fmt.Sprintf("rotate64-%d", k), "math/bits.rotate64", setup, check, "", 0)
 	}
 	censusPPCObjects(t, dir, "ints.o", "rotate.o", "panic.o")
 }
