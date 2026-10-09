@@ -184,6 +184,10 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 	switch goarch.ArchFamily {
 	case goarch.ARM64:
 		minsize = sys.StackAlign
+	case goarch.PPC:
+		// The 24-byte linkage area occupies a 32-byte aligned frame,
+		// even in assembly functions with no local variables.
+		minsize = alignUp(sys.MinFrameSize, sys.StackAlign)
 	default:
 		minsize = sys.MinFrameSize
 	}
