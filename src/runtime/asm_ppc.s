@@ -185,6 +185,7 @@ TEXT runtime·strhash(SB), NOSPLIT, $8-12
 
 // mcall saves the current goroutine and runs fn(g) on g0. fn must not return.
 TEXT runtime·mcall(SB), NOSPLIT|NOFRAME, $0-4
+	LWZ R11, fn+0(FP) // Read on the caller's stack, before switching to g0.
 	OR R5, R30, R30
 	STW R1, (g_sched+gobuf_sp)(R5)
 	MFLR R6
@@ -201,7 +202,6 @@ mcall_switch:
 	LWZ R1, (g_sched+gobuf_sp)(R30)
 	ADDI R1, R1, $-32
 	STW R5, 24(R1)
-	LWZ R11, fn+0(FP)
 	LWZ R12, 0(R11)
 	MTCTR R12
 	BCTRL
