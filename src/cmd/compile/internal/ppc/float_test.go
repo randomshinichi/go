@@ -98,13 +98,45 @@ func compileFloatFixture(t *testing.T, source string, functions []string, spillF
 		if e != nil {
 			t.Fatal(e)
 		}
-		stores, loads := strings.Count(string(s), "StoreReg"), strings.Count(string(s), "LoadReg")
+		stores, loads := strings.Count(string(s), "StoreReg <float"), strings.Count(string(s), "LoadReg <float")
 		if stores == 0 || loads == 0 {
 			t.Fatalf("no demonstrated spills: stores=%d reloads=%d", stores, loads)
 		}
-		t.Logf("DEMONSTRATED %s: StoreReg=%d LoadReg=%d", spillFunc, stores, loads)
+		t.Logf("DEMONSTRATED %s: float StoreReg=%d float LoadReg=%d", spillFunc, stores, loads)
 	}
+	checkFloatISACensus(t, dir)
 	return dir, string(out)
+}
+
+// Objdump decodes every built function, including paths QEMU never executes.
+// Use GNU spellings: Go's MOVD alias also names legal 32-bit li instructions.
+func checkFloatISACensus(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command(testenv.GoToolPath(t), "tool", "objdump", "-gnu", filepath.Join(dir, "fixture.o"))
+	out, err := cmd.CombinedOutput()
+	if e := os.WriteFile(filepath.Join(dir, "fixture.objdump"), out, 0644); e != nil {
+		t.Fatal(e)
+	}
+	if err != nil {
+		t.Fatalf("objdump: %v\n%s", err, out)
+	}
+	allowed := " add addc adde addi addis li lis subf subfc subfe mullw mulhw mulhwu divw divwu neg and or xor xori xoris ori oris slw srw sraw srawi rotlw cntlzw extsb extsh cmpw cmplw cmpwi cmplwi lwz lbz lhz lha stw stwu stb sth b bl bc beq bne blt bge bgt ble bso bns mflr mtlr mtctr bctrl blr nop fmr frsp lfs lfd stfs stfd fadd fadds fsub fsubs fmul fmuls fdiv fdivs fneg fcmpu fctiwz "
+	n := 0
+	for _, line := range strings.Split(string(out), "\n") {
+		if !strings.Contains(line, "\t0x") {
+			continue
+		}
+		_, text, ok := strings.Cut(line, "// ")
+		fields := strings.Fields(text)
+		if !ok || len(fields) == 0 || !strings.Contains(allowed, " "+fields[0]+" ") {
+			t.Fatalf("non-G3 or undecoded instruction: %s", line)
+		}
+		n++
+	}
+	if n == 0 {
+		t.Fatal("objdump census inspected no instructions")
+	}
+	t.Logf("PASS: objdump G3 census, %d instructions, no illegal or undecoded instructions", n)
 }
 
 func setWord(off int, bits uint32) string {
@@ -138,11 +170,13 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 	asm.WriteString(body)
 	asm.WriteString("cmpw 1,2\nbne stack_bad\n")
 	asm.WriteString(checkWord(4092, 0x13579bdf) + checkWord(-4096, 0x13579bdf))
-	asm.WriteString("li 3,0\nli 0,1\nsc\nresult_bad:\nli 3,1\nli 0,1\nsc\nstack_bad:\nli 3,2\nli 0,1\nsc\nfn_smash:\n")
-	for i := 0; i < 32; i++ {
-		fmt.Fprintf(&asm, "fsub %d,%d,%d\n", i, i, i)
+	asm.WriteString("li 3,0\nli 0,1\nsc\nresult_bad:\nli 3,1\nli 0,1\nsc\nstack_bad:\nli 3,2\nli 0,1\nsc\nfn_smash:\nstwu 1,-48(1)\n")
+	// A distinct known finite pattern, not x-x (which can retain NaN bits).
+	asm.WriteString(setDouble(24, 0x4123456789abcdef) + "lfd 0,24(1)\n")
+	for i := 1; i < 32; i++ {
+		fmt.Fprintf(&asm, "fmr %d,0\n", i)
 	}
-	asm.WriteString("blr\n")
+	asm.WriteString("addi 1,1,48\nblr\n")
 	changes := 0
 	pkg := "main"
 	if strings.HasPrefix(dump, "runtime.") {
