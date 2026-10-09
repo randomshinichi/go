@@ -279,6 +279,7 @@ TEXT runtime·asmcgocall_no_g(SB), NOSPLIT, $0-8
 	OR R3, R15, R15
 	MTCTR R14
 	BCTRL
+	ADDI R0, R0, $0 // C may clobber R0; restore Go's zero-register convention.
 	LWZ R1, 24(R1)
 	RET
 
@@ -288,6 +289,7 @@ TEXT runtime·asmcgocall(SB), NOSPLIT, $0-12
 	LWZ R15, arg+4(FP)
 	OR R16, R1, R1
 	OR R17, R30, R30
+	ADDI R0, R0, $0 // Establish zero before comparing R0 with g below.
 	ADDI R20, R0, $0
 	CMPW R0, R30
 	BC 4, 2, asmcgocall_stack
@@ -324,6 +326,7 @@ asmcgocall_call_c:
 	MTCTR R14
 	BCTRL
 	OR R14, R3, R3
+	ADDI R0, R0, $0 // C may clobber R0; restore Go's zero-register convention.
 	CMPWI R20, $0
 	BC 12, 2, asmcgocall_restore_direct
 	LWZ R17, 24(R1)
