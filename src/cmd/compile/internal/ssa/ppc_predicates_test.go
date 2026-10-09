@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func TestPPCMemoryCopyIsNotLoweredToRegisterMove(t *testing.T) {
+	c := testConfigPPC32(t)
+	fun := c.Fun("entry", Bloc("entry",
+		Valu("mem", OpInitMem, types.TypeMem, 0, nil),
+		Valu("copy", OpCopy, types.TypeMem, 0, nil, "mem"),
+		Exit("copy")))
+	v := fun.values["copy"]
+	if rewriteValuePPC(v) || v.Op != OpCopy || v.Type != types.TypeMem {
+		t.Fatalf("memory Copy was rewritten as %s; want memory-typed OpCopy unchanged", v.LongString())
+	}
+}
+
 func TestPPCConstantPredicates(t *testing.T) {
 	c := testConfigPPC32(t)
 	predicates := []struct {
