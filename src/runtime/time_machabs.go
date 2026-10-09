@@ -26,11 +26,20 @@ package runtime
 //
 // ticks must be the unsigned mach_absolute_time value.
 //
+// The divisions go through machDivmod rather than / and %. nanotime1 is
+// nosplit and runs where a stack check is fatal: casgstatus calls nanotime
+// inside exitsyscall, while stackguard0 is stackPreempt and throwsplit is set,
+// so any function with a stack check that it reaches dies with "stack split
+// at bad time". On 32-bit targets a 64-bit / or % compiles to a call to
+// runtime.uint64div or runtime.uint64mod, which have stack checks.
+//
 //go:nosplit
 func machTimeToNanos(ticks uint64, numer, denom uint32) int64 {
 	if numer == denom {
 		return int64(ticks)
 	}
-	n, d := uint64(numer), uint64(denom)
-	return int64(ticks/d*n + ticks%d*n/d)
+	n := uint64(numer)
+	q, r := machDivmod(ticks, denom)
+	f, _ := machDivmod(r*n, denom)
+	return int64(q*n + f)
 }
