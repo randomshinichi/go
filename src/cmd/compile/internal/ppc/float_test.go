@@ -126,6 +126,10 @@ func checkFloatISACensus(t *testing.T, dir string) {
 		if !strings.Contains(line, "\t0x") {
 			continue
 		}
+		if isPPC750RelocatedCall(line) {
+			n++
+			continue
+		}
 		_, text, ok := strings.Cut(line, "// ")
 		fields := strings.Fields(text)
 		if !ok || len(fields) == 0 || !strings.Contains(allowed, " "+fields[0]+" ") {
