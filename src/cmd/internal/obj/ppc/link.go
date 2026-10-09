@@ -100,7 +100,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		return p
 	}
 	p := text
-	if !leaf {
+	if !leaf && !s.NoFrame() {
 		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
 		// Save in the caller's linkage area BEFORE moving SP, as measured.
 		p = appendOp(p, ASTW, reg(REG_R0), mem(8))

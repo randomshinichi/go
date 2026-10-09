@@ -12,8 +12,11 @@
 // interrupted machine context. R13 is reserved and never changed by Go.
 // 24-byte linkage + 12-byte arguments + saved registers, rounded to 256.
 // Manage the frame explicitly so the generic Go epilogue does not clobber
-// C's callee-saved R31 when loading LR. The prologue saves LR at incoming SP+8.
+// C's callee-saved R31 when loading LR.
 TEXT runtime·sigtramp(SB), NOSPLIT|NOFRAME|TOPFRAME, $0-0
+	MFLR R0
+	STW R0, 8(R1)
+	ADDI R0, R0, $0
 	STWU R1, -256(R1)
 	STW R3, 24(R1)
 	STW R4, 28(R1)
