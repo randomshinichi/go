@@ -81,6 +81,7 @@ const (
 
 const (
 	// Leopard mach/machine.h; Apple's PPC64 executable uses ALL | LIB64.
+	MACHO_CPU_PPC                        = 18
 	MACHO_CPU_PPC64                      = 1<<24 | 18
 	MACHO_SUBCPU_PPC64_ALL               = 0x80000000
 	MACHO_CPU_AMD64                      = 1<<24 | 7
@@ -681,6 +682,10 @@ func asmbMacho(ctxt *Link) {
 	default:
 		Exitf("unknown macho architecture: %v", ctxt.Arch.Family)
 
+	case sys.PPC:
+		mh.cpu = MACHO_CPU_PPC
+		mh.subcpu = 0
+
 	case sys.PPC64:
 		mh.cpu = MACHO_CPU_PPC64
 		mh.subcpu = MACHO_SUBCPU_PPC64_ALL
@@ -778,6 +783,9 @@ func asmbMacho(ctxt *Link) {
 		switch ctxt.Arch.Family {
 		default:
 			Exitf("unknown macho architecture: %v", ctxt.Arch.Family)
+
+		case sys.PPC:
+			newPPC32ThreadLoad(uint32(Entryvalue(ctxt)))
 
 		case sys.PPC64:
 			// Measured Leopard ppc_thread_state64_t: 304 bytes, srr0 at

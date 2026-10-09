@@ -249,6 +249,10 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 		if rt >= objabi.ElfRelocOffset {
 			continue
 		}
+		if target.Arch.Family == sys.PPC && (rt == objabi.R_TLS_LE || rt == objabi.R_TLS_IE) {
+			st.err.Errorf(s, "darwin/ppc TLS relocation %s for %s unsupported: TLS mechanism is unmeasured", rt, ldr.SymName(rs))
+			continue
+		}
 
 		// We need to be able to reference dynimport symbols when linking against
 		// shared libraries, and AIX, Darwin, OpenBSD and Solaris always need it.
