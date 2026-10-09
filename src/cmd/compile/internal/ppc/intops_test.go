@@ -30,6 +30,14 @@ func udiv(a,b uint32) uint32 { return a/b }
 //go:nosplit
 func umod(a,b uint32) uint32 { return a%b }
 //go:nosplit
+func div64(a,b int64) int64 { return a/b }
+//go:nosplit
+func mod64(a,b int64) int64 { return a%b }
+//go:nosplit
+func udiv64(a,b uint64) uint64 { return a/b }
+//go:nosplit
+func umod64(a,b uint64) uint64 { return a%b }
+//go:nosplit
 func div16(a,b int16) int16 { return a/b }
 //go:nosplit
 func mod16(a,b int16) int16 { return a%b }
@@ -101,6 +109,13 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		}
 	}
 	src := intFixture
+	vlrt, err := os.ReadFile(filepath.Join(testenv.GOROOT(t), "src/runtime/vlrt.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Compile wrappers with the ordinary fixture; compile the actual runtime
+	// implementation separately so the instruction census remains scoped to
+	// the fixture object while QEMU executes the emitted runtime functions.
 	for _, n := range []int{0, 1, 3, 4, 7, 8, 31, 256} {
 		src += fmt.Sprintf("\n//go:nosplit\nfunc zero%d(d *[%d]byte) { *d = [%d]byte{} }\n//go:nosplit\nfunc move%d(d,s *struct { x [%d]byte }) { *d = *s }\n", n, n, n, n, n)
 	}
@@ -117,6 +132,25 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		t.Fatalf("compile: %v\n%s", err, output)
 	}
 	dump := string(output)
+	vlrtSource := strings.Replace(string(vlrt), "//go:build arm || 386 || mips || mipsle || ppc\n", "", 1)
+	vlrtSource = strings.Replace(vlrtSource, "package runtime", "package main", 1)
+	vlrtMul, err := os.ReadFile(filepath.Join(testenv.GOROOT(t), "src/runtime/vlrt_ppc.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vlrtMulSource := strings.Replace(string(vlrtMul), "//go:build ppc\n", "", 1)
+	vlrtMulSource = strings.Replace(vlrtMulSource, "package runtime", "", 1)
+	vlrtSource += vlrtMulSource + "\nconst GOARCH = \"ppc\"\nfunc panicdivide() {}\n"
+	vlrtPath := filepath.Join(dir, "vlrt.go")
+	writePPCFixture(t, vlrtPath, []byte(vlrtSource), 0644)
+	cmd = exec.Command(testenv.GoToolPath(t), "tool", "compile", "-p", "main", "-d=ssa/check/on", "-S", "-o", filepath.Join(dir, "vlrt.o"), vlrtPath)
+	cmd.Env = append(os.Environ(), "GOOS=darwin", "GOARCH=ppc")
+	output, err = cmd.CombinedOutput()
+	writePPCFixture(t, filepath.Join(dir, "vlrt.dump"), output, 0644)
+	if err != nil {
+		t.Fatalf("runtime fixture compile: %v\n%s", err, output)
+	}
+	dump += string(output)
 	// Intrinsification is source-symbol based. Compile a real math/bits caller
 	// so this exercises the generic RotateLeft32 op, not a hand-emitted opcode.
 	rotateSrc := filepath.Join(dir, "rotate.go")
@@ -155,8 +189,12 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 			a.WriteString(check)
 			a.WriteString("lis 4,0x1357\nori 4,4,0x9bdf\nlwz 3,2044(1)\ncmpw 3,4\nbne harness_bad\nlwz 3,-1024(1)\ncmpw 3,4\nbne harness_bad\nli 3,0\nli 0,1\nsc\nharness_result_bad:\nli 3,1\nli 0,1\nsc\nharness_bad:\nli 3,2\nli 0,1\nsc\n")
 			changed := 0
-			labels := map[string]string{entry: "fn_entry", "runtime.panicBounds": "fn_bounds", "runtime.panicExtend": "fn_extend", "runtime.panicBounds32": "record_bounds", "runtime.panicBounds32X": "record_extend", "runtime.panicdivide": "record_divide"}
-			for _, fn := range []string{entry, "runtime.panicBounds", "runtime.panicExtend"} {
+			labels := map[string]string{entry: "fn_entry", "runtime.panicBounds": "fn_bounds", "runtime.panicExtend": "fn_extend", "runtime.panicBounds32": "record_bounds", "runtime.panicBounds32X": "record_extend", "runtime.panicdivide": "record_divide", "main.uint64div": "fn_uint64div", "main.uint64mod": "fn_uint64mod", "main.int64div": "fn_int64div", "main.int64mod": "fn_int64mod", "main.dodiv": "fn_dodiv", "main.slowdodiv": "fn_slowdodiv", "main._mul64by32": "fn_mul64by32", "main.panicdivide": "fn_panicdivide", "runtime.uint64div": "fn_uint64div", "runtime.uint64mod": "fn_uint64mod", "runtime.int64div": "fn_int64div", "runtime.int64mod": "fn_int64mod", "runtime.dodiv": "fn_dodiv", "runtime.slowdodiv": "fn_slowdodiv", "runtime._mul64by32": "fn_mul64by32", "runtime.stackcheck": "fn_stackcheck", "runtime.morestack": "fn_morestack", "runtime.morestack_noctxt": "fn_morestack"}
+			functions := []string{entry, "runtime.panicBounds", "runtime.panicExtend"}
+			if strings.Contains(entry, "64") {
+				functions = append(functions, "main.uint64div", "main.uint64mod", "main.int64div", "main.int64mod", "main.dodiv", "main.slowdodiv", "main._mul64by32", "main.panicdivide")
+			}
+			for _, fn := range functions {
 				fmt.Fprintf(&a, "%s:\n", labels[fn])
 				words := emittedWords(t, dump, fn)
 				relocs := fixtureFunctionRelocs(t, dump, fn)
@@ -204,6 +242,9 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 			} else {
 				a.WriteString("b harness_bad\n")
 			}
+			// The synthetic caller reserves a large stack. These return-only labels
+			// satisfy stack-growth call relocations but are not expected to run.
+			a.WriteString("fn_stackcheck:\nblr\nfn_morestack:\nblr\n")
 			for _, ext := range []bool{false, true} {
 				label, helper := "record_bounds", "panicBounds"
 				if ext {
@@ -253,6 +294,48 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 		}
 	}
 	run("negative-division", "main.div", stackWords(0xfffffff9, 3), "lwz 3,32(1)\n"+checkReg(3, 0xfffffffe), "quotient", 1)
+	wideCases := []struct {
+		name   string
+		a, b   uint64
+		signed bool
+	}{
+		{"unequal-high-halves", 0x12345678abcdef01, 0x0000000300000001, false},
+		{"equal-high-low-halves", 0x1234567812345678, 0x0000000200000001, false},
+		{"cross-word-power-two", 0x00000000ffffffff, 0x0000000000000010, false},
+		{"high-word-divisor", 0xffffffffffffffff, 0x0000000100000001, false},
+		{"negative-unequal-halves", ^uint64(0x123456788), 7, true},
+		{"negative-power-two", ^uint64(0x4000000000000000), 0x100, true},
+		{"negative-divisor", 0x123456789abcdef0, ^uint64(0x100000002), true},
+	}
+	for _, tc := range wideCases {
+		for _, op := range []string{"div", "mod"} {
+			entry := "main.udiv64"
+			name := "u" + op + "64-" + tc.name
+			var want uint64
+			if tc.signed {
+				entry = "main." + op + "64"
+				name = op + "64-" + tc.name
+				a, b := int64(tc.a), int64(tc.b)
+				if op == "div" {
+					want = uint64(a / b)
+				} else {
+					want = uint64(a % b)
+				}
+			} else {
+				if op == "div" {
+					want = tc.a / tc.b
+				} else {
+					want = tc.a % tc.b
+				}
+				if op == "mod" {
+					entry = "main.umod64"
+				}
+			}
+			setup := storeWord(24, uint32(tc.a>>32)) + storeWord(28, uint32(tc.a)) + storeWord(32, uint32(tc.b>>32)) + storeWord(36, uint32(tc.b))
+			check := "lwz 3,40(1)\n" + checkReg(3, uint32(want>>32)) + "lwz 3,44(1)\n" + checkReg(3, uint32(want))
+			run(name, entry, setup, check, "", 0)
+		}
+	}
 	for _, v := range [][2]uint32{{0xffffffff, 1}, {0xffffffff, 0x80000000}, {0x80000000, 3}, {0x80000000, 0xffffffff}, {0xffffffff, 0xffffffff}, {0x12345678, 0x10001}, {0, 7}} {
 		// Host 64-bit division is independent of the ppc word divider under test.
 		for _, op := range []string{"udiv", "umod"} {

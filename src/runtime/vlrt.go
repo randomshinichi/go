@@ -111,21 +111,6 @@ func int64mod(n, d int64) int64 {
 	return r
 }
 
-// _mul64by32 returns the high 32 bits of a 96-bit product and stores the low
-// 64 bits through lo64. Keeping the word arithmetic in Go makes the operation
-// independent of the target's byte order.
-func _mul64by32(lo64 *uint64, a uint64, b uint32) (hi32 uint32) {
-	loProduct := uint64(uint32(a)) * uint64(b)
-	hiProduct := uint64(uint32(a>>32)) * uint64(b)
-	lo := loProduct + hiProduct<<32
-	*lo64 = lo
-	hi32 = uint32(hiProduct >> 32)
-	if lo < loProduct {
-		hi32++
-	}
-	return hi32
-}
-
 //go:noescape
 func _div64by32(a uint64, b uint32, r *uint32) (q uint32)
 
