@@ -71,6 +71,7 @@
 (Rsh32x32 x y) => (SRAW x (OR <typ.UInt32> y (NEG <typ.UInt32> (GreaterEqual (CMPWUconst [32] y)))))
 (Lsh32x(8|16) x y) => (Lsh32x32 x (ZeroExt(8|16)to32 y))
 (Rsh32Ux(8|16) x y) => (Rsh32Ux32 x (ZeroExt(8|16)to32 y))
+(Rsh32x(8|16) x y) => (Rsh32x32 x (ZeroExt(8|16)to32 y))
 // Narrow left shifts use the word operation, but must still return zero when
 // the count reaches the source width (the word shift only checks 32).
 (Lsh8x(8|16) x y) => (AND (SLW <typ.UInt32> x (ZeroExt(8|16)to32 y)) (NEG <typ.UInt32> (LessThan (CMPWUconst [8] (ZeroExt(8|16)to32 y)))))
