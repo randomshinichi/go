@@ -30,6 +30,22 @@ func udiv(a,b uint32) uint32 { return a/b }
 //go:nosplit
 func umod(a,b uint32) uint32 { return a%b }
 //go:nosplit
+func div16(a,b int16) int16 { return a/b }
+//go:nosplit
+func mod16(a,b int16) int16 { return a%b }
+//go:nosplit
+func udiv16(a,b uint16) uint16 { return a/b }
+//go:nosplit
+func umod16(a,b uint16) uint16 { return a%b }
+//go:nosplit
+func div8(a,b int8) int8 { return a/b }
+//go:nosplit
+func mod8(a,b int8) int8 { return a%b }
+//go:nosplit
+func udiv8(a,b uint8) uint8 { return a/b }
+//go:nosplit
+func umod8(a,b uint8) uint8 { return a%b }
+//go:nosplit
 func rotate(x uint32, k int) uint32 { return x<<uint(k&31) | x>>uint((-k)&31) }
 //go:nosplit
 func index(p *[4]byte, i int) byte { return p[i] }
@@ -232,6 +248,50 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	for _, op := range []string{"div", "mod", "udiv", "umod"} {
 		run("divide-zero-"+op, "main."+op, stackWords(7, 0), "", "", 0)
 	}
+	for _, width := range []int{8, 16} {
+		for _, signed := range []bool{true, false} {
+			bits := width
+			mask := uint32(1<<bits) - 1
+			min := int32(-1 << (bits - 1))
+			max := int32(1<<(bits-1) - 1)
+			fn := "udiv"
+			if signed {
+				fn = "div"
+			}
+			if width == 8 {
+				fn += "8"
+			} else {
+				fn += "16"
+			}
+			if !signed {
+				min, max = 0, int32(mask)
+			}
+			vectors := [][2]int32{{min, -1}, {max, 1}, {min, 1}, {max, max}}
+			for _, op := range []string{fn, strings.Replace(fn, "div", "mod", 1)} {
+				for _, v := range vectors {
+					var result int64
+					if signed {
+						if op == fn {
+							result = int64(v[0]) / int64(v[1])
+						} else {
+							result = int64(v[0]) % int64(v[1])
+						}
+					} else if op == fn {
+						result = int64(uint32(v[0])&mask) / int64(uint32(v[1])&mask)
+					} else {
+						result = int64(uint32(v[0])&mask) % int64(uint32(v[1])&mask)
+					}
+					want := uint32(result)
+					if signed && want&(1<<(bits-1)) != 0 {
+						want |= ^mask
+					}
+					setup := smallIntWords(width, uint32(v[0]), uint32(v[1]))
+					run(fmt.Sprintf("%s-%d-%d", op, v[0], v[1]), "main."+op, setup, smallIntResultCheck(width, signed, want), "", 0)
+				}
+				run("divide-zero-"+op, "main."+op, smallIntWords(width, 7, 0), "", "", 0)
+			}
+		}
+	}
 	for _, k := range []int{-1, 0, 31, 32, 65} {
 		run(fmt.Sprintf("rotate-%d", k), "math/bits.rotate", stackWords(0x89abcdef, uint32(k)), "lwz 3,32(1)\n"+checkReg(3, bits.RotateLeft32(0x89abcdef, k)), "", 0)
 	}
@@ -310,6 +370,27 @@ func storeWord(off int, w uint32) string {
 	return fmt.Sprintf("lis 3,%d\nori 3,3,%d\nstw 3,%d(1)\n", int16(w>>16), w&65535, off)
 }
 func stackWords(a, b uint32) string { return storeWord(24, a) + storeWord(28, b) }
+func smallIntResultCheck(width int, signed bool, want uint32) string {
+	load := "lbz"
+	if width == 16 {
+		load = "lhz"
+	}
+	check := fmt.Sprintf("%s 3,28(1)\n", load)
+	if signed {
+		if width == 8 {
+			check += "extsb 3,3\n"
+		} else {
+			check += "extsh 3,3\n"
+		}
+	}
+	return check + checkReg(3, want)
+}
+func smallIntWords(width int, a, b uint32) string {
+	if width == 8 {
+		return fmt.Sprintf("li 3,%d\nstb 3,24(1)\nli 3,%d\nstb 3,25(1)\n", uint8(a), uint8(b))
+	}
+	return fmt.Sprintf("lis 3,%d\nori 3,3,%d\nsth 3,24(1)\nlis 3,%d\nori 3,3,%d\nsth 3,26(1)\n", int16(a>>16), uint16(a), int16(b>>16), uint16(b))
+}
 func memoryCase(n int, moving, identical, aligned bool) (string, string) {
 	base, source := 513, 1025
 	if aligned {

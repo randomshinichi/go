@@ -189,7 +189,7 @@ func boolInt(v bool) int {
 // GNU spelling matters: the shared ppc64 decoder prints MOVD for G3-legal addi.
 func censusPPCObjects(t *testing.T, dir string, objects ...string) {
 	t.Helper()
-	allowed := strings.Fields("mflr mtlr li lis stw stwu stb lwz lbz add addi subf neg mullw mulhwu mulhw divw divwu and or ori xor slw srw sraw srawi rotlw rlwnm cmpwi cmplwi cmpw cmplw beq bne blt bge bgt ble b bl blr nop")
+	allowed := strings.Fields("mflr mtlr li lis stw stwu stb sth lwz lbz lha lhz extsh extsb add addi subf neg mullw mulhwu mulhw divw divwu and or ori xor slw srw sraw srawi rotlw rlwnm cmpwi cmplwi cmpw cmplw beq bne blt bge bgt ble b blr nop")
 	set := map[string]bool{}
 	for _, s := range allowed {
 		set[s] = true
@@ -205,6 +205,13 @@ func censusPPCObjects(t *testing.T, dir string, objects ...string) {
 		n := 0
 		for _, line := range strings.Split(string(out), "\n") {
 			if !strings.HasPrefix(line, "  ") {
+				continue
+			}
+			if strings.Contains(line, "R_CALLPOWER:runtime.") {
+				if !strings.Contains(line, "48000001") {
+					t.Fatalf("unexpected panicdivide call instruction: %s", line)
+				}
+				n++
 				continue
 			}
 			parts := strings.Split(line, " // ")
