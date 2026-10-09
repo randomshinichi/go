@@ -28,6 +28,16 @@ type testIntrinsicKey struct {
 }
 
 var wantIntrinsics = map[testIntrinsicKey]struct{}{
+	// PPC32: the existing all-architecture intrinsics plus the scalar word
+	// rotate enabled by its backend. Keep the exact set checked, not skipped.
+	{"ppc", "crypto/internal/constanttime", "boolToUint8"}:             struct{}{},
+	{"ppc", "internal/runtime/sys", "GetCallerPC"}:                     struct{}{},
+	{"ppc", "internal/runtime/sys", "GetCallerSP"}:                     struct{}{},
+	{"ppc", "internal/runtime/sys", "GetClosurePtr"}:                   struct{}{},
+	{"ppc", "math/bits", "Mul64"}:                                      struct{}{},
+	{"ppc", "math/bits", "RotateLeft32"}:                               struct{}{},
+	{"ppc", "runtime", "KeepAlive"}:                                    struct{}{},
+	{"ppc", "runtime", "slicebytetostringtmp"}:                         struct{}{},
 	{"386", "internal/runtime/math", "MulUintptr"}:                     struct{}{},
 	{"386", "internal/runtime/sys", "Bswap32"}:                         struct{}{},
 	{"386", "internal/runtime/sys", "Bswap64"}:                         struct{}{},

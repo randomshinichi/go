@@ -168,7 +168,10 @@ func init() {
 		{name: "MULHWU", argLength: 2, reg: gp21, asm: "MULHWU", commutative: true}, // (arg0 * arg1) >> 32, unsigned
 		{name: "MULLU", argLength: 2, reg: gp22, asm: "MULLW", commutative: true},   // arg0 * arg1, high 32 in out0, low 32 in out1
 
-		{name: "NEG", argLength: 1, reg: gp11, asm: "NEG"}, // -arg0
+		{name: "DIVW", argLength: 2, reg: gp21, asm: "DIVW", clobberFlags: true},
+		{name: "DIVWU", argLength: 2, reg: gp21, asm: "DIVWU"},
+		{name: "ROTLW", argLength: 2, reg: gp21, asm: "ROTLW"}, // low five count bits, including negative counts
+		{name: "NEG", argLength: 1, reg: gp11, asm: "NEG"},     // -arg0
 
 		// Logical.
 		{name: "AND", argLength: 2, reg: gp21, asm: "AND", commutative: true}, // arg0 & arg1
@@ -211,6 +214,18 @@ func init() {
 		{name: "GreaterThan", argLength: 1, reg: gp01, typ: "Bool"},
 		{name: "GreaterEqual", argLength: 1, reg: gp01, typ: "Bool"},
 
+		// gcWriteBarrierN is a compiler-private call: four-byte entries,
+		// result in R29, R18/R19 scratch, all other allocatable GPRs and g
+		// preserved on both reservation and flush paths. FPRs/flags clobbered.
+		{name: "LoweredWB", argLength: 1, aux: "Int64", reg: regInfo{outputs: []regMask{buildReg("R29")}, clobbers: fp | buildReg("R18 R19 R31")}, clobberFlags: true},
+		// Bounds metadata uses R3..R9 as save-array slots 0..6. Extend packs
+		// two two-bit indices, so its high/low words must be in R3..R6.
+		{name: "LoweredPanicBounds", argLength: 3, aux: "Int64", reg: regInfo{inputs: []regMask{buildReg("R3 R4 R5 R6 R7 R8 R9"), buildReg("R3 R4 R5 R6 R7 R8 R9")}}, typ: "Mem", call: true, clobberFlags: true},
+		{name: "LoweredPanicExtend", argLength: 4, aux: "Int64", reg: regInfo{inputs: []regMask{buildReg("R3 R4 R5 R6"), buildReg("R3 R4 R5 R6"), buildReg("R3 R4 R5 R6 R7 R8 R9")}}, typ: "Mem", call: true, clobberFlags: true},
+		// Scalar copy/clear. Alignment comes from TypSize; R31 is reserved
+		// for loaded data, R5 is the loop counter. Only loops change R3/R4.
+		{name: "LoweredZero", argLength: 2, aux: "TypSize", reg: regInfo{inputs: []regMask{buildReg("R3")}, clobbers: buildReg("R3 R5")}, typ: "Mem", clobberFlags: true},
+		{name: "LoweredMove", argLength: 3, aux: "TypSize", reg: regInfo{inputs: []regMask{buildReg("R3"), buildReg("R4")}, clobbers: buildReg("R3 R4 R5 R31")}, typ: "Mem", clobberFlags: true},
 		{name: "LoweredNilCheck", argLength: 2, reg: regInfo{inputs: []regMask{gpspsb | gpg}}, nilCheck: true, faultOnNilArg0: true},
 		{name: "LoweredGetClosurePtr", reg: regInfo{outputs: []regMask{buildReg("R11")}}, zeroWidth: true},
 		{name: "LoweredGetCallerSP", argLength: 1, reg: gp01, rematerializeable: true},

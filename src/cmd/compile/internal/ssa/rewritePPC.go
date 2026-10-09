@@ -55,6 +55,10 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpCopy(v)
 	case OpCvtBoolToUint8:
 		return rewriteValuePPC_OpCvtBoolToUint8(v)
+	case OpDiv32:
+		return rewriteValuePPC_OpDiv32(v)
+	case OpDiv32u:
+		return rewriteValuePPC_OpDiv32u(v)
 	case OpEq16:
 		return rewriteValuePPC_OpEq16(v)
 	case OpEq32:
@@ -137,6 +141,12 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpLsh8x64(v)
 	case OpLsh8x8:
 		return rewriteValuePPC_OpLsh8x8(v)
+	case OpMod32:
+		return rewriteValuePPC_OpMod32(v)
+	case OpMod32u:
+		return rewriteValuePPC_OpMod32u(v)
+	case OpMove:
+		return rewriteValuePPC_OpMove(v)
 	case OpMul16:
 		return rewriteValuePPC_OpMul16(v)
 	case OpMul32:
@@ -196,6 +206,14 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpPPCLessThan(v)
 	case OpPPCNotEqual:
 		return rewriteValuePPC_OpPPCNotEqual(v)
+	case OpPanicBounds:
+		v.Op = OpPPCLoweredPanicBounds
+		return true
+	case OpPanicExtend:
+		v.Op = OpPPCLoweredPanicExtend
+		return true
+	case OpRotateLeft32:
+		return rewriteValuePPC_OpRotateLeft32(v)
 	case OpRsh16Ux32:
 		return rewriteValuePPC_OpRsh16Ux32(v)
 	case OpRsh16Ux64:
@@ -250,12 +268,17 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpTrunc32to16(v)
 	case OpTrunc32to8:
 		return rewriteValuePPC_OpTrunc32to8(v)
+	case OpWB:
+		v.Op = OpPPCLoweredWB
+		return true
 	case OpXor16:
 		return rewriteValuePPC_OpXor16(v)
 	case OpXor32:
 		return rewriteValuePPC_OpXor32(v)
 	case OpXor8:
 		return rewriteValuePPC_OpXor8(v)
+	case OpZero:
+		return rewriteValuePPC_OpZero(v)
 	case OpZeroExt16to32:
 		return rewriteValuePPC_OpZeroExt16to32(v)
 	case OpZeroExt8to16:
@@ -561,6 +584,32 @@ func rewriteValuePPC_OpCvtBoolToUint8(v *Value) bool {
 		x := v_0
 		v.reset(OpCopy)
 		v.AddArg(x)
+		return true
+	}
+}
+func rewriteValuePPC_OpDiv32(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (Div32 x y)
+	// result: (DIVW x y)
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpPPCDIVW)
+		v.AddArg2(x, y)
+		return true
+	}
+}
+func rewriteValuePPC_OpDiv32u(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (Div32u x y)
+	// result: (DIVWU x y)
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpPPCDIVWU)
+		v.AddArg2(x, y)
 		return true
 	}
 }
@@ -1343,6 +1392,79 @@ func rewriteValuePPC_OpLsh8x8(v *Value) bool {
 		return true
 	}
 }
+func rewriteValuePPC_OpMod32(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Mod32 x y)
+	// result: (SUB x (MULLW <typ.Int32> y (DIVW <typ.Int32> x y)))
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpPPCSUB)
+		v0 := b.NewValue0(v.Pos, OpPPCMULLW, typ.Int32)
+		v1 := b.NewValue0(v.Pos, OpPPCDIVW, typ.Int32)
+		v1.AddArg2(x, y)
+		v0.AddArg2(y, v1)
+		v.AddArg2(x, v0)
+		return true
+	}
+}
+func rewriteValuePPC_OpMod32u(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Mod32u x y)
+	// result: (SUB x (MULLW <typ.UInt32> y (DIVWU <typ.UInt32> x y)))
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpPPCSUB)
+		v0 := b.NewValue0(v.Pos, OpPPCMULLW, typ.UInt32)
+		v1 := b.NewValue0(v.Pos, OpPPCDIVWU, typ.UInt32)
+		v1.AddArg2(x, y)
+		v0.AddArg2(y, v1)
+		v.AddArg2(x, v0)
+		return true
+	}
+}
+func rewriteValuePPC_OpMove(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (Move [0] _ _ mem)
+	// result: (Copy mem)
+	for {
+		if auxIntToInt64(v.AuxInt) != 0 {
+			break
+		}
+		mem := v_2
+		v.reset(OpCopy)
+		v.AddArg(mem)
+		return true
+	}
+	// match: (Move [s] {t} dst src mem)
+	// cond: s > 0
+	// result: (LoweredMove [s] {t} dst src mem)
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		t := auxToType(v.Aux)
+		dst := v_0
+		src := v_1
+		mem := v_2
+		if !(s > 0) {
+			break
+		}
+		v.reset(OpPPCLoweredMove)
+		v.AuxInt = int64ToAuxInt(s)
+		v.Aux = typeToAux(t)
+		v.AddArg3(dst, src, mem)
+		return true
+	}
+	return false
+}
 func rewriteValuePPC_OpMul16(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
@@ -2080,6 +2202,19 @@ func rewriteValuePPC_OpPPCNotEqual(v *Value) bool {
 	}
 	return false
 }
+func rewriteValuePPC_OpRotateLeft32(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (RotateLeft32 x y)
+	// result: (ROTLW x y)
+	for {
+		x := v_0
+		y := v_1
+		v.reset(OpPPCROTLW)
+		v.AddArg2(x, y)
+		return true
+	}
+}
 func rewriteValuePPC_OpRsh16Ux32(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
@@ -2609,6 +2744,39 @@ func rewriteValuePPC_OpXor8(v *Value) bool {
 		v.AddArg2(x, y)
 		return true
 	}
+}
+func rewriteValuePPC_OpZero(v *Value) bool {
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (Zero [0] _ mem)
+	// result: (Copy mem)
+	for {
+		if auxIntToInt64(v.AuxInt) != 0 {
+			break
+		}
+		mem := v_1
+		v.reset(OpCopy)
+		v.AddArg(mem)
+		return true
+	}
+	// match: (Zero [s] {t} ptr mem)
+	// cond: s > 0
+	// result: (LoweredZero [s] {t} ptr mem)
+	for {
+		s := auxIntToInt64(v.AuxInt)
+		t := auxToType(v.Aux)
+		ptr := v_0
+		mem := v_1
+		if !(s > 0) {
+			break
+		}
+		v.reset(OpPPCLoweredZero)
+		v.AuxInt = int64ToAuxInt(s)
+		v.Aux = typeToAux(t)
+		v.AddArg2(ptr, mem)
+		return true
+	}
+	return false
 }
 func rewriteValuePPC_OpZeroExt16to32(v *Value) bool {
 	v_0 := v.Args[0]
