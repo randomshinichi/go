@@ -480,6 +480,10 @@ func TestLOONG64Errors(t *testing.T) {
 	testErrors(t, "loong64", "loong64error")
 }
 
+func TestPPC32EndToEnd(t *testing.T) {
+	testEndToEnd(t, "ppc", "ppc")
+}
+
 func TestPPC64EndToEnd(t *testing.T) {
 	defer func(old int) { buildcfg.GOPPC64 = old }(buildcfg.GOPPC64)
 	for _, goppc64 := range []int{8, 9, 10} {

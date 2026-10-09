@@ -15,6 +15,7 @@ import (
 	"cmd/asm/internal/flags"
 	"cmd/asm/internal/lex"
 	"cmd/internal/obj"
+	"cmd/internal/obj/ppc"
 	"cmd/internal/obj/ppc64"
 	"cmd/internal/obj/riscv"
 	"cmd/internal/obj/x86"
@@ -403,6 +404,9 @@ func (p *Parser) asmJump(op obj.As, cond string, a []obj.Addr) {
 	targetAddr := &prog.To
 	switch len(a) {
 	case 0:
+		if p.arch.Family == sys.PPC && (obj.As(op) == ppc.ASYNC || obj.As(op) == ppc.AISYNC) {
+			break
+		}
 		if p.arch.Family == sys.Wasm {
 			target = &obj.Addr{Type: obj.TYPE_NONE}
 			break
@@ -423,6 +427,12 @@ func (p *Parser) asmJump(op obj.As, cond string, a []obj.Addr) {
 			prog.From = a[0]
 		}
 	case 3:
+		if p.arch.Family == sys.PPC {
+			target = &a[2]
+			prog.From = obj.Addr{Type: obj.TYPE_CONST, Offset: p.getConstant(prog, op, &a[0])}
+			prog.Reg = int16(p.getConstant(prog, op, &a[1]))
+			break
+		}
 		if p.arch.Family == sys.PPC64 {
 			// Special 3-operand jumps.
 			// a[1] is a register number expressed as a constant or register value
@@ -661,10 +671,39 @@ func (p *Parser) asmInstruction(op obj.As, cond string, a []obj.Addr) {
 				break
 			}
 		}
+		if p.arch.Family == sys.PPC {
+			if obj.As(op) == ppc.ALWZ || obj.As(op) == ppc.ALBZ || obj.As(op) == ppc.ALHZ || obj.As(op) == ppc.ALHA {
+				prog.From, prog.To = a[1], a[0]
+				break
+			}
+			if obj.As(op) == ppc.ASTW || obj.As(op) == ppc.ASTB || obj.As(op) == ppc.ASTH {
+				prog.From, prog.To = a[0], a[1]
+				break
+			}
+		}
 		prog.From = a[0]
 		prog.To = a[1]
 	case 3:
 		switch p.arch.Family {
+		case sys.PPC:
+			switch obj.As(op) {
+			case ppc.ALWARX:
+				prog.To = a[0]
+				prog.From = a[1]
+				prog.Reg = p.getRegister(prog, op, &a[2])
+			case ppc.ASTWCX_:
+				prog.From = a[0]
+				prog.To = a[1]
+				prog.Reg = p.getRegister(prog, op, &a[2])
+			case ppc.AADDI, ppc.AADDIC, ppc.AADDIS:
+				prog.To = a[0]
+				prog.Reg = p.getRegister(prog, op, &a[1])
+				prog.From = a[2]
+			default:
+				prog.To = a[0]
+				prog.From = a[1]
+				prog.Reg = p.getRegister(prog, op, &a[2])
+			}
 		case sys.MIPS, sys.MIPS64:
 			prog.From = a[0]
 			prog.Reg = p.getRegister(prog, op, &a[1])
