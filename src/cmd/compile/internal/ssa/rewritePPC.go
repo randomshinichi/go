@@ -678,12 +678,12 @@ func rewriteValuePPC_OpConstNil(v *Value) bool {
 func rewriteValuePPC_OpCopy(v *Value) bool {
 	v_0 := v.Args[0]
 	// match: (Copy <t> x)
-	// cond: !t.IsFloat()
+	// cond: !t.IsFloat() && !t.IsMemory()
 	// result: (MOVWreg x)
 	for {
 		t := v.Type
 		x := v_0
-		if !(!t.IsFloat()) {
+		if !(!t.IsFloat() && !t.IsMemory()) {
 			break
 		}
 		v.reset(OpPPCMOVWreg)
