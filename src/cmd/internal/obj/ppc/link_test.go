@@ -87,6 +87,25 @@ func TestAssembleRegisterTargetJMP(t *testing.T) {
 	}
 }
 
+func TestEncodePreemptSpecialRegisters(t *testing.T) {
+	ctxt := obj.Linknew(&Linkppc)
+	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	for _, tc := range []struct {
+		name string
+		prog *obj.Prog
+		want uint32
+	}{
+		{"mfcr", &obj.Prog{As: AMFCR, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R31}}, 0x7fe00026},
+		{"mfctr", &obj.Prog{As: AMFCTR, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R31}}, 0x7fe902a6},
+		{"mtcrf", &obj.Prog{As: AMTCRF, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 0xff}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R31}}, 0x7feff120},
+	} {
+		words, ok := encodeProg(ctxt, tc.prog, 0)
+		if !ok || len(words) != 1 || words[0] != tc.want {
+			t.Errorf("%s = %08x, want %08x", tc.name, words, tc.want)
+		}
+	}
+}
+
 func TestEncodeIndirectBranchForms(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
