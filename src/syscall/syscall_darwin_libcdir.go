@@ -2,11 +2,12 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin && !ppc64
+//go:build darwin && !ppc64 && !ppc
 
 // Getdirentries and fdopendir moved here, unchanged, from syscall_darwin.go so
-// that darwin/ppc64 can provide its own Getdirentries
-// (syscall_darwin_ppc64.go): Leopard's libSystem has no fdopendir.
+// that architectures using this libc fallback can provide Getdirentries.
+// Leopard's PowerPC targets use raw SYS_getdirentries64 instead because
+// libSystem has no fdopendir.
 // The libc_fdopendir_trampoline declaration and its cgo_import_dynamic stay in
 // syscall_darwin.go, where mkasm.go reads them.
 
