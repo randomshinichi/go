@@ -265,7 +265,10 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
 		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
 	case ssa.OpPPCLoweredGetClosurePtr:
-		// Darwin ppc32 closure context is passed in R11.
+		// Darwin ppc32 closure context is passed in R11 (caller-saved). The value
+		// must be scheduled in the entry block; assert the invariant like ppc64 so a
+		// future omission is a loud compiler error, not a silent miscompile.
+		ssagen.CheckLoweredGetClosurePtr(v)
 		p := s.Prog(ppc.AOR)
 		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: ppc.REG_R11}
 		p.Reg = ppc.REG_R11
