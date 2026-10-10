@@ -161,6 +161,12 @@ var forms = []form{
 	{op: AMTCRF, mnem: "mtcrf", base: 0x7C000120, spec: "crm,rs"},
 	{op: AMTLR, mnem: "mtlr", base: 0x7C0803A6, spec: "rs"},
 	{op: AMTCTR, mnem: "mtctr", base: 0x7C0903A6, spec: "rs"},
+	// XER is mfspr/mtspr with SPR 1: opcode 31, XO 339 (read) / 467 (write),
+	// and the 10-bit SPR split with its low five bits in bits 16-20 and its
+	// high five in bits 11-15, which is why mflr (SPR 8) is 0x7C0802A6 and
+	// mfctr (SPR 9) is 0x7C0902A6 above. SPR 1 => 0x7C0102A6 / 0x7C0103A6.
+	{op: AMFXER, mnem: "mfxer", base: 0x7C0102A6, spec: "rd"},
+	{op: AMTXER, mnem: "mtxer", base: 0x7C0103A6, spec: "rs"},
 	{op: ALFS, mnem: "lfs", base: 0xC0000000, spec: "frd,d,ra"},
 	{op: ALFSU, mnem: "lfsu", base: 0xC4000000, spec: "frd,d,ra"},
 	{op: ALFSX, mnem: "lfsx", base: 0x7C00042E, spec: "frd,ra,rb"},

@@ -155,6 +155,69 @@ func TestForbiddenFormsRefused(t *testing.T) {
 	}
 }
 
+// TestXERForms pins the two named SPR forms for XER, word by word.
+//
+// They are not decoration: XER[CA] is where this target keeps the carry of the
+// multi-word add/sub chains the compiler threads through no register (PPCOps.go:
+// gp2flags1carry has an empty output mask), so runtime.asyncPreempt must save
+// and restore it (genPPC32 in src/runtime/mkpreempt.go). The expected words were
+// produced by two independent assemblers, neither of them this package:
+//
+//   - clang 22.1.8, -target powerpc-unknown-linux-gnu, on `mfxer 31` /
+//     `mtxer 31` / `mfxer 3` / `mtxer 3` (readelf -x .text),
+//   - the ppc64 encoder in this tree, on `MOVD XER, R31` = 0x7FE102A6 and
+//     `MOVD R31, XER` = 0x7FE103A6 (go tool asm -S for linux/ppc64), which is
+//     the same mfspr/mtspr-with-SPR-1 pair.
+//
+// The register field is bits 6-10 and the SPR sits in the base: 0x7C0102A6 is
+// mfspr with SPR 1, exactly as 0x7C0802A6 is mflr (SPR 8) and 0x7C0902A6 is
+// mfctr (SPR 9) in the table above.
+func TestXERForms(t *testing.T) {
+	cases := []struct {
+		mnem string
+		arg  int32
+		word uint32
+	}{
+		{"mfxer", 0, 0x7C0102A6},
+		{"mfxer", 3, 0x7C6102A6},
+		{"mfxer", 31, 0x7FE102A6},
+		{"mtxer", 0, 0x7C0103A6},
+		{"mtxer", 3, 0x7C6103A6},
+		{"mtxer", 31, 0x7FE103A6},
+	}
+	for _, c := range cases {
+		op, err := Lookup(c.mnem)
+		if err != nil {
+			t.Errorf("Lookup(%q): %v", c.mnem, err)
+			continue
+		}
+		got, err := Encode(op, c.arg)
+		if err != nil {
+			t.Errorf("Encode(%s %d): %v", c.mnem, c.arg, err)
+			continue
+		}
+		if got != c.word {
+			t.Errorf("%s %d = 0x%08X, want 0x%08X", c.mnem, c.arg, got, c.word)
+		}
+	}
+	// Negative control: the named forms are additive. Generic SPR access, and
+	// the floating-point control forms whose 750 legality is the open question
+	// Q-8, must still be refused — this change must not become an escape hatch.
+	for _, m := range []string{"mfspr", "mtspr", "mffs", "mtfsf", "mtfsfi", "mtfsb0"} {
+		if _, err := Lookup(m); err == nil {
+			t.Errorf("Lookup(%q) succeeded; generic SPR access and the Q-8 FP control forms stay refused", m)
+		}
+		if _, ok := Refused(m); !ok {
+			t.Errorf("Refused(%q) = false; the refusal must keep its recorded reason", m)
+		}
+	}
+	// And the register model already names XER, so the refusal above is about
+	// encodings, not about the register being unknown.
+	if got := Rconv(REG_XER); got != "XER" {
+		t.Errorf("Rconv(REG_XER) = %q, want %q", got, "XER")
+	}
+}
+
 // TestReservedBranchFormsRefused checks the encoding-level rule the corpus's
 // "branch-bad" row exercises: bclr with BO=23 is a reserved encoding, so the
 // encoder must reject the operand combination rather than emit the word.

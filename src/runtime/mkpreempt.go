@@ -92,7 +92,17 @@ var arches = map[string]func(g *gen){
 var beLe = map[string]bool{"mips64x": true, "mipsx": true, "ppc64x": true}
 
 const (
-	ppc32PreemptLocal  = 384
+	// ppc32PreemptLocal is the local frame genPPC32's TEXT declares, and it has
+	// to stay a multiple of 16. preprocess() (obj/ppc/link.go) allocates
+	// round_up_16(locals + FixedFrameSize) bytes for an assembly frame, while
+	// genPPC32's epilogue reads the interrupted LR at l.stack+8 and the caller's
+	// R2/R12 at l.stack+32/+36 -- the first and last words of the 32-byte caller
+	// area sigctxt.pushCall reserves -- so the allocated frame must come out as
+	// exactly l.stack+8, and the total pop as l.stack+40. With
+	// ppc32PreemptLocal+ppc32PreemptHeader = l.stack, rounding up from a multiple
+	// of 16 gives precisely that; from any other value it does not, and the
+	// epilogue would then read the wrong words off the interrupted stack.
+	ppc32PreemptLocal  = 400
 	ppc32PreemptHeader = 24
 )
 
@@ -937,6 +947,23 @@ func genPPC32(g *gen) {
 	for i := 0; i <= 31; i++ {
 		l.add2("STFD", "LFD", []regInfo{{size: 8, name: fmt.Sprintf("F%d", i)}}, [2]string{}, false)
 	}
+	// XER: ppc32's compiler threads the carry of multi-word arithmetic through
+	// XER[CA] with no register at all (PPCOps.go: gp2flags1carry's output mask is
+	// empty -- "the carry half lives in XER[CA] and has no register. adde reads
+	// CA back"). An async preempt that lands between the addc that sets CA and
+	// the adde that consumes it resumes with the carry lost, one limb 1 too
+	// small. ppc64 saves XER at the same place in its own sequence; without this
+	// ppc32 is the only architecture whose interrupted carry chains survive a
+	// preemption only by luck. The slot is 8 bytes (XER is 4) so that the FPR
+	// block that follows still starts 8-byte aligned.
+	l.addSpecial(
+		"MFXER R31\nSTW R31, %d(R1)",
+		"LWZ R31, %d(R1)\nMTXER R31",
+		8)
+	// Tail padding to the multiple of 16 that ppc32PreemptLocal needs, so that
+	// preprocess()'s round_up_16(locals+FixedFrameSize) lands on l.stack+8; see
+	// the note on that constant.
+	l.stack += 8
 	if l.stack != ppc32PreemptLocal+ppc32PreemptHeader {
 		log.Fatalf("ppc32 async preemption layout ends at %d, want %d", l.stack, ppc32PreemptLocal+ppc32PreemptHeader)
 	}
