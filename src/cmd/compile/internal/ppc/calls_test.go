@@ -201,7 +201,7 @@ func TestIndirectAndTailCallsQEMU(t *testing.T) {
 							t.Fatalf("unexpected branch placeholder %08x", w)
 						}
 					} else {
-						if tc.mutant && fn == "runtime.invoke" && w == 0x7d8903a6 { // mtctr R12
+						if tc.mutant && fn == "runtime.invoke" && (w == 0x7d8903a6 || w == 0x7d8803a6) { // mtctr R12, or mtlr R12 since goppc-8pgs
 							// Context becomes the code address, not a funcval pointer. The target
 							// stays valid, so this deterministically produces wrong full bits.
 							asm.WriteString("mr 11,12\n")
