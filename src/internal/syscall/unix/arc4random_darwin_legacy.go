@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build darwin && (ppc || ppc64)
+
 package unix
 
 import (
@@ -16,11 +18,8 @@ func libc_arc4random_trampoline()
 //
 // Mac OS X 10.5 (Leopard) has arc4random(3) but not arc4random_buf, so p is
 // filled from successive arc4random draws, four bytes per draw, least
-// significant byte first. This is the same substitution the runtime makes in
-// runtime·arc4random_buf_trampoline (runtime/sys_darwin_ppc64.s). arc4random is
-// Leopard's own kernel-seeded CSPRNG, so the bytes are cryptographically
-// equivalent in kind to what arc4random_buf returns; they are not one draw from
-// a single call.
+// significant byte first. This substitution is ABI-independent; arc4random
+// is Leopard's kernel-seeded CSPRNG.
 func ARC4Random(p []byte) {
 	for len(p) > 0 {
 		r, _, _ := syscall_syscall(abi.FuncPCABI0(libc_arc4random_trampoline), 0, 0, 0)

@@ -2,14 +2,15 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin && ppc64
+//go:build darwin && (ppc || ppc64)
 
 package x509
 
-// D18: Leopard lacks five modern Security.framework APIs (measured in
+// Leopard lacks five modern Security.framework APIs (measured in
 // out/stage2-20261003/parent-native-run/D18-FRAMEWORK-MEASUREMENTS.md).
-// This target uses an updatable PEM CA bundle and Go's verifier, NOT Apple's
-// keychain, user/admin distrust settings, or Security-framework verification.
+// Both PowerPC Darwin ABIs therefore use an updatable PEM CA bundle and Go's
+// verifier, NOT Apple's keychain, user/admin distrust settings, or
+// Security-framework verification.
 // Trust is determined solely by the selected file/directory; users must manage
 // distrust by removing a root from that source. No security(1) subprocess runs.
 // The measured paths below are from
@@ -31,7 +32,7 @@ import (
 	"path/filepath"
 )
 
-var darwinPPC64CertFiles = []string{
+var darwinLeopardCertFiles = []string{
 	"/usr/local/etc/openssl/ca-bundle-current.crt",      // Mozilla 2026-09-25, placed by owner.
 	"/usr/local/etc/openssl/cert.pem",                   // Homebrew Mozilla 2021-09-30 bundle.
 	"/usr/local/opt/curl-ca-bundle/share/ca-bundle.crt", // Same bundle, explicit Homebrew path.
@@ -39,20 +40,20 @@ var darwinPPC64CertFiles = []string{
 }
 
 func (c *Certificate) systemVerify(opts *VerifyOptions) ([][]*Certificate, error) {
-	return nil, errors.New("x509: Security-framework verification is unavailable on darwin/ppc64")
+	return nil, errors.New("x509: Security-framework verification is unavailable on Leopard PowerPC")
 }
 
 func loadSystemRoots() (*CertPool, error) {
-	roots, _, err := loadDarwinPPC64SystemRoots()
+	roots, _, err := loadDarwinLeopardSystemRoots()
 	return roots, err
 }
 
-// loadDarwinPPC64SystemRoots returns the selected source with the pool so tests
+// loadDarwinLeopardSystemRoots returns the selected source with the pool so tests
 // can distinguish the current bundle from the older, last-resort bundles. It is
 // the same loader used by loadSystemRoots, not a separate selection probe.
-func loadDarwinPPC64SystemRoots() (*CertPool, string, error) {
+func loadDarwinLeopardSystemRoots() (*CertPool, string, error) {
 	if file := os.Getenv("SSL_CERT_FILE"); file != "" {
-		roots, err := loadDarwinPPC64CertFile(file)
+		roots, err := loadDarwinLeopardCertFile(file)
 		return roots, file, err
 	}
 	if dirs := os.Getenv("SSL_CERT_DIR"); dirs != "" {
@@ -91,7 +92,7 @@ func loadDarwinPPC64SystemRoots() (*CertPool, string, error) {
 		return roots, dirs, nil
 	}
 	var firstErr error
-	for _, file := range darwinPPC64CertFiles {
+	for _, file := range darwinLeopardCertFiles {
 		data, err := os.ReadFile(file)
 		if err != nil {
 			if firstErr == nil {
@@ -101,21 +102,21 @@ func loadDarwinPPC64SystemRoots() (*CertPool, string, error) {
 		}
 		// A readable but empty/invalid bundle is an error, not permission to
 		// trust a different source. This is the first-readable rule.
-		roots, err := darwinPPC64CertPool(file, data)
+		roots, err := darwinLeopardCertPool(file, data)
 		return roots, file, err
 	}
 	return nil, "", fmt.Errorf("x509: no readable CA bundle: %w", firstErr)
 }
 
-func loadDarwinPPC64CertFile(file string) (*CertPool, error) {
+func loadDarwinLeopardCertFile(file string) (*CertPool, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("x509: cannot read CA bundle %q: %w", file, err)
 	}
-	return darwinPPC64CertPool(file, data)
+	return darwinLeopardCertPool(file, data)
 }
 
-func darwinPPC64CertPool(file string, data []byte) (*CertPool, error) {
+func darwinLeopardCertPool(file string, data []byte) (*CertPool, error) {
 	roots := NewCertPool()
 	if !roots.AppendCertsFromPEM(data) {
 		return nil, fmt.Errorf("x509: CA bundle %q contains no certificates", file)

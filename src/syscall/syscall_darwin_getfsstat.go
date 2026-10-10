@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin && !ppc64
+//go:build darwin && !ppc64 && !ppc
 
 // Getfsstat moved here, unchanged, from syscall_darwin.go so that darwin/ppc64
 // can provide its own Getfsstat (syscall_darwin_ppc64.go): on Leopard the plain

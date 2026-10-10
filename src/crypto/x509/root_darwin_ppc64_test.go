@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-func TestBundleRootsDarwinPPC64(t *testing.T) {
+func TestBundleRootsDarwinLeopard(t *testing.T) {
 	dir := t.TempDir()
 	fileA, fileB := filepath.Join(dir, "a.pem"), filepath.Join(dir, "b.pem")
 	for file, data := range map[string]string{fileA: gtsRoot, fileB: digicertRoot} {
@@ -37,9 +37,9 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 		return cert
 	}
 	a, b := parse(gtsRoot), parse(digicertRoot)
-	oldFiles := darwinPPC64CertFiles
-	t.Cleanup(func() { darwinPPC64CertFiles = oldFiles })
-	darwinPPC64CertFiles = []string{filepath.Join(dir, "missing"), fileB, fileA}
+	oldFiles := darwinLeopardCertFiles
+	t.Cleanup(func() { darwinLeopardCertFiles = oldFiles })
+	darwinLeopardCertFiles = []string{filepath.Join(dir, "missing"), fileB, fileA}
 	assertPool := func(t *testing.T, roots *CertPool, err error, want, reject *Certificate) {
 		t.Helper()
 		if err != nil || roots == nil {
@@ -60,7 +60,7 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 	t.Run("file-only-no-directory-or-default-union", func(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", fileA)
 		t.Setenv("SSL_CERT_DIR", dir) // contains the other, explicitly excluded root
-		roots, source, err := loadDarwinPPC64SystemRoots()
+		roots, source, err := loadDarwinLeopardSystemRoots()
 		if source != fileA {
 			t.Fatalf("selected source %q, want SSL_CERT_FILE %q", source, fileA)
 		}
@@ -104,7 +104,7 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", "")
 		dirs := filepath.Join(dir, "absent-dir") + string(os.PathListSeparator) + chosen
 		t.Setenv("SSL_CERT_DIR", dirs)
-		roots, source, err := loadDarwinPPC64SystemRoots()
+		roots, source, err := loadDarwinLeopardSystemRoots()
 		if source != dirs {
 			t.Fatalf("selected source %q, want SSL_CERT_DIR %q", source, dirs)
 		}
@@ -182,7 +182,7 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 	t.Run("defaults-first-readable-only", func(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", "")
 		t.Setenv("SSL_CERT_DIR", "")
-		roots, source, err := loadDarwinPPC64SystemRoots()
+		roots, source, err := loadDarwinLeopardSystemRoots()
 		if source != fileB {
 			t.Fatalf("selected bundle %q, want %q", source, fileB)
 		}
@@ -195,7 +195,7 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 		if err := os.WriteFile(bad, nil, 0600); err != nil {
 			t.Fatal(err)
 		}
-		darwinPPC64CertFiles = []string{bad, fileB}
+		darwinLeopardCertFiles = []string{bad, fileB}
 		if roots, err := loadSystemRoots(); roots != nil || err == nil {
 			t.Fatalf("invalid readable default: %v, %v", roots, err)
 		}
@@ -203,14 +203,14 @@ func TestBundleRootsDarwinPPC64(t *testing.T) {
 	t.Run("no-readable-default-errors", func(t *testing.T) {
 		t.Setenv("SSL_CERT_FILE", "")
 		t.Setenv("SSL_CERT_DIR", "")
-		darwinPPC64CertFiles = []string{filepath.Join(dir, "missing-default")}
+		darwinLeopardCertFiles = []string{filepath.Join(dir, "missing-default")}
 		if roots, err := loadSystemRoots(); roots != nil || err == nil {
 			t.Fatalf("missing default: %v, %v", roots, err)
 		}
 	})
 }
 
-func TestBundleRootFailureDispatchDarwinPPC64(t *testing.T) {
+func TestBundleRootFailureDispatchDarwinLeopard(t *testing.T) {
 	// Initialize the once before overriding globals, following root_test.go.
 	systemRootsPool()
 	oldRoots, oldErr := systemRoots, systemRootsErr
@@ -232,10 +232,10 @@ func TestBundleRootFailureDispatchDarwinPPC64(t *testing.T) {
 	}
 }
 
-func TestSystemBundleDarwinPPC64(t *testing.T) {
+func TestSystemBundleDarwinLeopard(t *testing.T) {
 	t.Setenv("SSL_CERT_FILE", "")
 	t.Setenv("SSL_CERT_DIR", "")
-	roots, source, err := loadDarwinPPC64SystemRoots()
+	roots, source, err := loadDarwinLeopardSystemRoots()
 	if err != nil || roots == nil || roots.len() == 0 || roots.systemPool {
 		t.Fatalf("system bundle: %v", err)
 	}
