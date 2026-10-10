@@ -44,7 +44,14 @@ func dumpregs(c *sigctxt) {
 // preparePanic redirects execution to sigpanic and preserves the saved link
 // register in a machine-word slot below the interrupted stack pointer.
 func (c *sigctxt) preparePanic(sig uint32, gp *g) {
-	sp := c.sp() - sys.MinFrameSize
+	// The faked call frame for sigpanic must be exactly the size the unwinder and
+	// the GC scanner remove again: (*unwinder).next and scanframeworker both add
+	// alignUp(MinFrameSize, StackAlign). ppc32's MinFrameSize is 24, so that is
+	// 32; reserving the bare 24 left every signal-injected panic 8 bytes short of
+	// the interrupted SP (and left SP 8-mod-16, breaking the frame alignment
+	// invariant for everything below sigpanic). ppc64's MinFrameSize is already
+	// 32, which is why only ppc32 was affected.
+	sp := c.sp() - alignUp(sys.MinFrameSize, sys.StackAlign)
 	c.set_sp(sp)
 	*(*uint32)(unsafe.Pointer(sp)) = uint32(c.link())
 	if shouldPushSigpanic(gp, gp.sigpc, c.link()) {
