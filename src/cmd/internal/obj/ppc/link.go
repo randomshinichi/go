@@ -262,6 +262,93 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Balance the linear PC/SP table after the return (ppc64 does likewise).
 		p.Spadj = int32(frame)
 	}
+
+	// Finally, mark the CTR-based indirect call as an async preemption restart
+	// point. This runs on the finished Prog list (prologue and epilogue
+	// included) because assemble() assigns the PCs afterwards.
+	markCTRRestartPoints(text, newprog)
+}
+
+// markCTRRestartPoints marks every "MTCTR Rt ; BCTRL" pair in a function as a
+// restartable asynchronous preemption point.
+//
+// ppc32 lowers an indirect call as MTCTR R12 ; BCTRL, and runtime.asyncPreempt
+// resumes a preempted goroutine with "MTCTR <resume PC> ; JMP (CTR)" (see
+// genPPC32 in runtime/mkpreempt.go and preempt_ppc.s). The resume path has to
+// branch through CTR because LR must still hold the interrupted function's link
+// register when the goroutine continues -- a preemption on a BLR would otherwise
+// return to the wrong place -- and CTR is the only other indirect branch
+// register ppc32 has. The cost is that the goroutine resumes with CTR equal to
+// the resume PC. A goroutine stopped *on* a BCTRL would therefore resume with
+// CTR pointing at that BCTRL and branch to itself forever.
+//
+// PCDATA_UnsafePoint = UnsafePointRestart1 says "not safe to inject a preemption
+// here, but safe to take one and resume at the start of this sequence". The
+// runtime backs the PC off to the start of the value's range, which is the MTCTR:
+// re-executing it reloads CTR from R12, a register the asyncPreempt epilogue has
+// already restored, so the call then completes normally. The window covers the
+// pair and not the BCTRL alone, because restarting *at* the BCTRL would leave
+// CTR pointing at the BCTRL exactly as before.
+//
+// A pair whose MTCTR is already in a region the compiler marked not preemptible
+// is left alone: nothing can be resumed there, so there is nothing to fix. The
+// PCDATA pseudo-instructions the compiler emits at the call (the stack map index
+// for the call, at minimum) carry no bytes and do not break the adjacency, so
+// the scan skips over them.
+func markCTRRestartPoints(text *obj.Prog, newprog obj.ProgAlloc) {
+	// cur is the PCDATA_UnsafePoint value in effect, starting at the implicit
+	// default of "safe" that linkpcln assumes before the first entry.
+	cur := int64(abi.UnsafePointSafe)
+	prev := text
+	for p := text.Link; p != nil; p = p.Link {
+		if isUnsafePointPCDATA(p) {
+			cur = p.To.Offset
+			prev = p
+			continue
+		}
+		if p.As != AMTCTR {
+			prev = p
+			continue
+		}
+		// Look past the no-width PCDATA pseudo-instructions at the next
+		// real instruction, and note the unsafe-point value in effect there.
+		next := cur
+		q := p.Link
+		for ; q != nil && q.As == obj.APCDATA; q = q.Link {
+			if isUnsafePointPCDATA(q) {
+				next = q.To.Offset
+			}
+		}
+		if q == nil || q.As != ABCTRL || cur != abi.UnsafePointSafe || next != abi.UnsafePointSafe {
+			prev = p
+			continue
+		}
+
+		// Start of the window: everything from the MTCTR to the next PCDATA
+		// (which is the BCTRL's end) is restartable from the MTCTR.
+		start := obj.Appendp(prev, newprog)
+		start.As = obj.APCDATA
+		start.From = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.PCDATA_UnsafePoint}
+		start.To = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.UnsafePointRestart1}
+		start.Link = p
+		// End of the window, restoring the value that was in effect before it.
+		// Nothing follows the BCTRL in a call-shaped instruction stream, but
+		// leave the last Prog alone if that is where the sequence ended.
+		if q.Link != nil {
+			end := obj.Appendp(q, newprog)
+			end.As = obj.APCDATA
+			end.From = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.PCDATA_UnsafePoint}
+			end.To = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.UnsafePointSafe}
+		}
+		prev = q
+		p = q // the loop's p = p.Link resumes past the end marker
+	}
+}
+
+// isUnsafePointPCDATA reports whether p is the PCDATA pseudo-instruction that
+// carries the PCDATA_UnsafePoint table.
+func isUnsafePointPCDATA(p *obj.Prog) bool {
+	return p.As == obj.APCDATA && p.From.Type == obj.TYPE_CONST && p.From.Offset == abi.PCDATA_UnsafePoint
 }
 
 // writesSP reports whether p assigns a value to the stack pointer at all.
