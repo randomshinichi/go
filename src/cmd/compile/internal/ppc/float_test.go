@@ -126,7 +126,7 @@ func checkFloatISACensus(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("objdump: %v\n%s", err, out)
 	}
-	allowed := " add addc adde addi addis li lis subf subfc subfe mullw mulhw mulhwu divw divwu neg and or xor xori xoris ori oris slw srw sraw srawi rotlw cntlzw extsb extsh cmpw cmplw cmpwi cmplwi lwz lbz lhz lha stw stwu stb sth b bl bc beq bne blt bge bgt ble bso bns mflr mtlr mtctr bctrl blr nop fmr frsp lfs lfd stfs stfd fadd fadds fsub fsubs fmul fmuls fdiv fdivs fneg fcmpu fctiwz "
+	allowed := " add addc adde addi addis li lis subf subfc subfe mullw mulhw mulhwu divw divwu neg and or xor xori xoris ori oris slw srw sraw srawi rotlw cntlzw extsb extsh cmpw cmplw cmpwi cmplwi lwz lbz lhz lha stw stwu stb sth b bl bc beq bne blt bge bgt ble bso bns mflr mtlr blrl mtctr bctrl blr nop fmr frsp lfs lfd stfs stfd fadd fadds fsub fsubs fmul fmuls fdiv fdivs fneg fcmpu fctiwz "
 	n := 0
 	for _, line := range strings.Split(string(out), "\n") {
 		if !strings.Contains(line, "\t0x") {
