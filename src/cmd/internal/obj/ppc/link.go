@@ -140,6 +140,19 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p.Reg = REG_R0
 	}
 	if frame != 0 && !s.NoSplit() {
+		// The guard check is a LOOP, not a straight line. runtime.newstack can
+		// return WITHOUT growing the stack: its preemption path may put the
+		// goroutine back on a stack the shrinker measured while this frame was
+		// still unallocated (runtime/stack.go: newstack, shrinkstack). If the
+		// prologue then proceeded straight to the allocation, that allocation
+		// would not have been accounted for by the shrink sizing, and the frame
+		// would be under-provisioned -- silent stack corruption. So resume at
+		// morestack's return goes back to re-run the guard, exactly as ppc64 does
+		// (obj/ppc64/obj9.go emits BR start). The frame size is rematerialized
+		// inside the loop (nothing in it survives the call), and the loop body
+		// carries no SP delta, so re-entering it never disturbs the PCSP table.
+		recheck := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
+		p = recheck
 		if frame <= 32752 {
 			p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REG_R3))
 			p.Reg = REG_R0
@@ -156,6 +169,11 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			morestack = "runtime.morestack"
 		}
 		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup(morestack)})
+		// Unconditional back edge to the guard, mirroring ppc64's BR start. It MUST
+		// precede `done`, else the "enough stack" branch skips past it into the
+		// allocation and the back edge becomes dead code.
+		p = appendOp(p, AB, obj.Addr{}, obj.Addr{Type: obj.TYPE_BRANCH})
+		p.To.SetTarget(recheck)
 		done := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
 		branch.To.SetTarget(done)
 		p = done

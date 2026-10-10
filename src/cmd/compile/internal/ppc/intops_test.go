@@ -290,7 +290,11 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 			}
 			// The synthetic caller reserves a large stack. These return-only labels
 			// satisfy stack-growth call relocations but are not expected to run.
-			a.WriteString("fn_stackcheck:\nblr\nfn_morestack:\nblr\n")
+			// stackcheck must still return 0 ("enough stack") in R3 as the real
+			// helper does: the emitted prologue branches on that result, and now
+			// re-checks after morestack, so a stub that leaves R3 nonzero would
+			// spin. The other QEMU harnesses in this package stub it the same way.
+			a.WriteString("fn_stackcheck:\nli 3,0\nblr\nfn_morestack:\nblr\n")
 			for _, ext := range []bool{false, true} {
 				label, helper := "record_bounds", "panicBounds"
 				if ext {
