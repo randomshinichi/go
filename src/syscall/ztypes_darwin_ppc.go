@@ -1,3 +1,7 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 // Measured Darwin ppc32 type layouts are transcribed from C probes on pmg5
 // (Darwin 9.8.0, gcc -arch ppc). Explicit UNVERIFIED compatibility types are marked below.
 // Do not edit measured layouts without rerunning the target-machine probes.
