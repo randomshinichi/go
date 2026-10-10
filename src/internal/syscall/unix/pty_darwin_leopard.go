@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin && ppc64
+//go:build darwin && (ppc || ppc64)
 
 // D18: Leopard lacks ptsname_r; ptsname is measured present in
 // out/stage2-20261003/parent-native-run/D18-FRAMEWORK-MEASUREMENTS.md.

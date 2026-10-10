@@ -5,3 +5,4 @@
 #include "textflag.h"
 
 TEXT ·libc_arc4random_trampoline(SB),NOSPLIT,$0-0; JMP libc_arc4random(SB)
+TEXT ·libc_ptsname_trampoline(SB),NOSPLIT,$0-0; JMP libc_ptsname(SB)
