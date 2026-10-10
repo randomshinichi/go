@@ -111,6 +111,15 @@ func (f *machoFile) goarch() string {
 		return "arm"
 	case macho.CpuArm64:
 		return "arm64"
+	case macho.CpuPpc:
+		// 32-bit PowerPC (Darwin/ppc). CpuPpc and CpuPpc64 share the base cpu
+		// type and differ only in the cpuArch64 bit, so they need separate
+		// cases. Without this one, goarch returned "", and disasm's lookup of
+		// disasms/byteOrders by that name failed: `go tool objdump` on a ppc32
+		// Mach-O said `unsupported architecture ""` instead of disassembling.
+		// cmd/internal/disasm already maps "ppc" to the (big-endian) PowerPC
+		// decoder, so the name here has to stay "ppc".
+		return "ppc"
 	case macho.CpuPpc64:
 		return "ppc64"
 	}
