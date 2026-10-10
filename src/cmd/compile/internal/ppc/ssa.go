@@ -305,12 +305,24 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		if v.Op == ssa.OpPPCCALLclosure && v.Args[1].Reg() != ppc.REG_R11 {
 			v.Fatalf("ppc32: closure context must be in R11: %v", v.LongString())
 		}
-		p := s.Prog(ppc.AMTCTR)
+		// Branch through LR, not CTR. runtime.asyncPreempt resumes a preempted
+		// goroutine with "MTCTR <resume PC> ; JMP (CTR)" -- it has to, because LR
+		// must still hold the interrupted function's link register when the
+		// goroutine continues -- so a goroutine stopped *on* a CTR-based indirect
+		// call resumes with CTR pointing at that call and branches to itself
+		// forever. An LR-based call has no such interaction: LR is restored to the
+		// interrupted value, which on the BLRL is already the call target, and the
+		// BLRL reloads the return address into LR as it branches. ppc64 lowers
+		// indirect calls the same way (MOVD R12, LR then the bclrl form with a
+		// branch hint), so both ports keep one shape and one class of bug is gone
+		// rather than guarded.
+		p := s.Prog(ppc.AMTLR)
 		p.From = obj.Addr{Type: obj.TYPE_REG, Reg: v.Args[0].Reg()}
-		// Keep Call's stack-map/argument bookkeeping, but branch through CTR
-		// with link. obj/ppc must treat this as a non-leaf call too.
+		// Keep Call's stack-map/argument bookkeeping, but branch through LR with
+		// link. obj/ppc must treat ABLRL as a non-leaf call too (the branch is
+		// register-indirect, so its leaf scan cannot see a symbol operand).
 		p = s.Call(v)
-		p.As = ppc.ABCTRL
+		p.As = ppc.ABLRL
 		p.To = obj.Addr{}
 
 	default:

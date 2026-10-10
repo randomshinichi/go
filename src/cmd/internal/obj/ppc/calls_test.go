@@ -31,9 +31,11 @@ func TestIndirectCallAndTailFrames(t *testing.T) {
 			ret := &obj.Prog{As: obj.ARET, To: obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: target, Offset: 4}}
 			text.Link = ret
 			if tc.indirect {
-				mtctr := &obj.Prog{As: AMTCTR, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R12}}
-				call := &obj.Prog{As: ABCTRL}
-				text.Link, mtctr.Link, call.Link = mtctr, call, ret
+				// The shape the compiler emits for an indirect call: the target
+				// goes to LR (not CTR) and the call branches through it.
+				mtlr := &obj.Prog{As: AMTLR, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R12}}
+				call := &obj.Prog{As: ABLRL}
+				text.Link, mtlr.Link, call.Link = mtlr, call, ret
 			}
 			s := ctxt.Lookup("fixture")
 			s.Set(obj.AttrNoSplit, true)
@@ -59,7 +61,7 @@ func TestIndirectCallAndTailFrames(t *testing.T) {
 				t.Fatalf("tail branch links or returns: %08x", word(n-1))
 			}
 			if tc.indirect {
-				want := []uint32{0x7d8903a6, 0x4e800421, 0x38210000 | uint32(tc.frame), 0x83e10008, 0x7fe803a6, 0x48000000}
+				want := []uint32{0x7d8803a6, 0x4e800021, 0x38210000 | uint32(tc.frame), 0x83e10008, 0x7fe803a6, 0x48000000}
 				for i, w := range want {
 					if word(n-len(want)+i) != w {
 						t.Errorf("word %d = %08x want %08x", i, word(n-len(want)+i), w)
