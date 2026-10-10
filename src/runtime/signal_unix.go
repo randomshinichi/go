@@ -952,7 +952,15 @@ func sigpanic() {
 
 	switch gp.sig {
 	case _SIGBUS:
-		if gp.sigcode0 == _BUS_ADRERR && gp.sigcode1 < 0x1000 {
+		// Darwin/ppc reports a fault in the unmapped first page as SIGBUS with
+		// si_code _BUS_ADRALN, not _BUS_ADRERR, so the sub-code does not say
+		// whether this was a nil dereference. Mirror the _SIGSEGV arm below:
+		// the address is the discriminator. A nil dereference always lands in
+		// page zero, and a genuine bus error (a wild but non-nil pointer, an
+		// unaligned access, a bad mapping) reports an address past 0x1000 and
+		// still reaches throw("fault") below. sigpanic is only reached for
+		// non-user signals, so a fault here is always hardware-generated.
+		if gp.sigcode1 < 0x1000 {
 			panicmem()
 		}
 		// Support runtime/debug.SetPanicOnFault.
