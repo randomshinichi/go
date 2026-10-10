@@ -238,7 +238,7 @@ func TestStackPointerAccounted(t *testing.T) {
 		body []*obj.Prog
 		// want SP adj for each body Prog, and whether the function must end up
 		// with FuncFlagSPWrite.
-		wantAdj    []int32
+		wantAdj     []int32
 		wantSPWrite bool
 	}{
 		{
@@ -248,6 +248,31 @@ func TestStackPointerAccounted(t *testing.T) {
 			body:        []*obj.Prog{{As: AADDI, Reg: REGSP, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 448}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}}},
 			wantAdj:     []int32{-448},
 			wantSPWrite: false,
+		},
+		{
+			// Reviewer finding 1: an ADDI whose base register is NOT SP moves SP from
+			// an arbitrary value, so the constant is not the SP delta the frame table
+			// can describe; it must stay undescribed and the function marked.
+			name:        "addi-from-other-register-is-not-describable",
+			body:        []*obj.Prog{{As: AADDI, Reg: REG_R5, From: obj.Addr{Type: obj.TYPE_CONST, Offset: -32}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}}},
+			wantAdj:     []int32{0},
+			wantSPWrite: true,
+		},
+		{
+			// Reviewer finding 1: ADDI from R0 loads an absolute value into SP — again
+			// not a describable relative adjustment.
+			name:        "addi-from-r0-is-not-describable",
+			body:        []*obj.Prog{{As: AADDI, Reg: REG_R0, From: obj.Addr{Type: obj.TYPE_CONST, Offset: -32}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}}},
+			wantAdj:     []int32{0},
+			wantSPWrite: true,
+		},
+		{
+			// Reviewer finding 1: a named store-with-update (SP slot / argument as base)
+			// still performs an SP write, so writesSP must see it; it is marked, not described.
+			name:        "named-store-with-update-is-marked",
+			body:        []*obj.Prog{{As: ASTWU, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}, To: obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_AUTO, Reg: REGSP, Offset: -32}}},
+			wantAdj:     []int32{0},
+			wantSPWrite: true,
 		},
 		{
 			// The shape runtime/asm_ppc.s uses to switch stacks: a constant
