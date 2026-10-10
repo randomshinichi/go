@@ -7,6 +7,7 @@ package ppc
 import (
 	"cmd/internal/obj"
 	"encoding/binary"
+	"internal/abi"
 	"testing"
 )
 
@@ -218,6 +219,99 @@ func TestLargeFramePrologue(t *testing.T) {
 				if tail[len(tail)-len(wantTail)+i] != wantTail[i] {
 					t.Fatalf("frame %d epilogue tail %v, want suffix %v", tc.frame, tail, wantTail)
 				}
+			}
+		})
+	}
+}
+
+// TestStackPointerAccounted verifies the two halves of the SP bookkeeping that
+// assemble's detector depends on: an assembly stack movement written as a
+// constant is described by Spadj (so the function need not be marked
+// FuncFlagSPWrite), and a stack movement no static table can describe is not
+// described (so the function is marked). Getting either half wrong is how a
+// function whose declared frame already accounts for its movement ends up
+// marked SPWRITE, which the unwinder then treats as fatal for any frame that is
+// not the innermost one.
+func TestStackPointerAccounted(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body []*obj.Prog
+		// want SP adj for each body Prog, and whether the function must end up
+		// with FuncFlagSPWrite.
+		wantAdj    []int32
+		wantSPWrite bool
+	}{
+		{
+			// The shape runtime/preempt_ppc.s ends with: a constant restore of
+			// the frame the assembler generated a prologue for.
+			name:        "constant-restore-is-described",
+			body:        []*obj.Prog{{As: AADDI, Reg: REGSP, From: obj.Addr{Type: obj.TYPE_CONST, Offset: 448}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}}},
+			wantAdj:     []int32{-448},
+			wantSPWrite: false,
+		},
+		{
+			// The shape runtime/asm_ppc.s uses to switch stacks: a constant
+			// push whose restore later reloads SP from memory. The push is
+			// describable, but nothing describes the function as a whole, so the
+			// function must stay marked and no Prog may claim a delta.
+			name: "register-restore-leaves-function-marked",
+			body: []*obj.Prog{
+				{As: AADDI, Reg: REGSP, From: obj.Addr{Type: obj.TYPE_CONST, Offset: -32}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}},
+				{As: ALWZ, From: obj.Addr{Type: obj.TYPE_MEM, Reg: REGSP, Offset: 24}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}},
+			},
+			wantAdj:     []int32{0, 0},
+			wantSPWrite: true,
+		},
+		{
+			// The shape runtime/asm_reflect_ppc.s uses: a runtime-variable
+			// update of SP. No static value exists, so the function is marked
+			// and nothing is described.
+			name: "indexed-update-is-not-describable",
+			body: []*obj.Prog{
+				{As: ASTWUX, From: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}, To: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}, Reg: REG_R4},
+			},
+			wantAdj:     []int32{0},
+			wantSPWrite: true,
+		},
+		{
+			// A hand-written frame allocation: store with update. Like the
+			// generated prologue, this is a constant adjustment.
+			name:        "store-with-update-is-described",
+			body:        []*obj.Prog{{As: ASTWU, From: obj.Addr{Type: obj.TYPE_REG, Reg: REGSP}, To: obj.Addr{Type: obj.TYPE_MEM, Reg: REGSP, Offset: -256}}},
+			wantAdj:     []int32{256},
+			wantSPWrite: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctxt := obj.Linknew(&Linkppc)
+			ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+			// The detector refuses to mark compiler output: a proc that
+			// writes SP is a diagnostics-worthy event unless the input is
+			// assembly, which is what it is here.
+			ctxt.IsAsm = true
+			s := ctxt.Lookup("fixture")
+			s.Set(obj.AttrNoSplit, true)
+			s.Set(obj.AttrNoFrame, true)
+			text := &obj.Prog{As: obj.ATEXT}
+			last := text
+			for _, p := range tc.body {
+				last.Link = p
+				last = p
+			}
+			last.Link = &obj.Prog{As: obj.ARET}
+			s.NewFuncInfo().Text = text
+			preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
+			// The body Progs stay in order in front of the return, so index
+			// them from the TEXT.
+			i := 0
+			for p := text.Link; p != nil && i < len(tc.body); p, i = p.Link, i+1 {
+				if p.Spadj != tc.wantAdj[i] {
+					t.Errorf("%v: Spadj = %d, want %d", p, p.Spadj, tc.wantAdj[i])
+				}
+			}
+			assemble(ctxt, s, nil)
+			if got := s.Func().FuncFlag&abi.FuncFlagSPWrite != 0; got != tc.wantSPWrite {
+				t.Errorf("FuncFlagSPWrite = %v, want %v", got, tc.wantSPWrite)
 			}
 		})
 	}
