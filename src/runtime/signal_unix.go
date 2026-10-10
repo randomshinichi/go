@@ -8,7 +8,9 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/goarch"
 	"internal/goexperiment"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
@@ -952,15 +954,20 @@ func sigpanic() {
 
 	switch gp.sig {
 	case _SIGBUS:
-		// Darwin/ppc reports a fault in the unmapped first page as SIGBUS with
-		// si_code _BUS_ADRALN, not _BUS_ADRERR, so the sub-code does not say
-		// whether this was a nil dereference. Mirror the _SIGSEGV arm below:
-		// the address is the discriminator. A nil dereference always lands in
-		// page zero, and a genuine bus error (a wild but non-nil pointer, an
-		// unaligned access, a bad mapping) reports an address past 0x1000 and
-		// still reaches throw("fault") below. sigpanic is only reached for
-		// non-user signals, so a fault here is always hardware-generated.
-		if gp.sigcode1 < 0x1000 {
+		// A fault in the unmapped first page is the nil/wild-pointer region.
+		// Which si_code marks a nil dereference differs by platform: most unix
+		// report _BUS_ADRERR (2), but darwin/ppc32 delivers it as BUS_ADRALN (1)
+		// (measured on the G5, jolu report 1). Accept BUS_ADRALN ONLY on
+		// darwin/ppc32. On x86 a genuine hardware alignment-check fault reports
+		// si_addr as unavailable (0) for a real NONZERO faulting address, so the
+		// low-address test alone would misclassify it as a nil panic and turn a
+		// fatal fault into a recoverable one (reviewer ad9232cb/3dfef16a counter-
+		// example). GOOS/GOARCH are compile-time constants, so the second operand
+		// folds to false on every other target: their SIGBUS behavior is EXACTLY
+		// _BUS_ADRERR alone (i.e. unchanged from upstream). This does not widen
+		// the _SIGSEGV arm below, which keeps its own code whitelist.
+		if gp.sigcode1 < 0x1000 && (gp.sigcode0 == _BUS_ADRERR ||
+			(gp.sigcode0 == 1 /* BUS_ADRALN on darwin */ && goos.GOOS == "darwin" && goarch.GOARCH == "ppc")) {
 			panicmem()
 		}
 		// Support runtime/debug.SetPanicOnFault.
