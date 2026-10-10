@@ -260,7 +260,8 @@ func writesSP(p *obj.Prog) bool {
 		}
 		return true
 	}
-	if p.As == ASTWUX && p.To.Type == obj.TYPE_MEM && p.To.Reg == REGSP {
+	if (p.As == ASTWU || p.As == ASTWUX) && p.To.Type == obj.TYPE_MEM &&
+		(p.To.Reg == REGSP || p.To.Name == obj.NAME_AUTO || p.To.Name == obj.NAME_PARAM) {
 		return true
 	}
 	return false
@@ -283,7 +284,7 @@ func writesSP(p *obj.Prog) bool {
 func staticSPAdj(p *obj.Prog) (int32, bool) {
 	switch p.As {
 	case AADDI:
-		if p.To.Type != obj.TYPE_REG || p.To.Reg != REGSP || p.From.Type != obj.TYPE_CONST {
+		if p.To.Type != obj.TYPE_REG || p.To.Reg != REGSP || p.Reg != REGSP || p.From.Type != obj.TYPE_CONST {
 			return 0, false
 		}
 		if p.From.Offset < -32768 || p.From.Offset > 32767 {
@@ -291,7 +292,7 @@ func staticSPAdj(p *obj.Prog) (int32, bool) {
 		}
 		return -int32(p.From.Offset), true
 	case ASTWU:
-		if p.To.Type != obj.TYPE_MEM || p.To.Reg != REGSP {
+		if p.To.Type != obj.TYPE_MEM || p.To.Reg != REGSP || p.To.Name != obj.NAME_NONE {
 			return 0, false
 		}
 		return -int32(p.To.Offset), true
