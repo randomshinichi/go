@@ -10,6 +10,7 @@ import (
 	"cmd/internal/sys"
 	"encoding/binary"
 	"fmt"
+	"internal/abi"
 )
 
 // Linkppc is the assembler interface for GOARCH=ppc. It is a sibling of
@@ -84,6 +85,36 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	}
 	text.To.Offset = frame
 	s.Set(obj.AttrLeaf, leaf)
+
+	// Describe this function's static stack-pointer movement, so that the SPWRITE
+	// detector in assemble() can tell an accounted-for SP write from an
+	// unannounced stack switch, and so the PCSP table that the unwinder (and the
+	// linker's nosplit check, which reads the same table) sees describes this
+	// target. This runs on the source Progs only: everything preprocess appends
+	// below sets its own Spadj because it knows the frame it is building.
+	//
+	// The decision is per function, not per Prog, because a function that writes
+	// SP in a form no static table can describe is marked FuncFlagSPWrite and the
+	// unwinder then refuses to unwind through it: describing its other SP writes
+	// would buy the unwinder nothing, while the linker's nosplit accounting reads
+	// the same PCSP table and would start counting stack this function pushes by
+	// hand. Leave such a function entirely undescribed; the detector marks it, as
+	// it does on ppc64, and the nosplit budget is unchanged from before this
+	// bookkeeping existed.
+	describeSP := true
+	for p := text.Link; p != nil; p = p.Link {
+		if _, ok := staticSPAdj(p); !ok && writesSP(p) {
+			describeSP = false
+			break
+		}
+	}
+	if describeSP {
+		for p := text.Link; p != nil; p = p.Link {
+			if adj, ok := staticSPAdj(p); ok {
+				p.Spadj = adj
+			}
+		}
+	}
 
 	reg := func(r int16) obj.Addr { return obj.Addr{Type: obj.TYPE_REG, Reg: r} }
 	mem := func(off int64) obj.Addr { return obj.Addr{Type: obj.TYPE_MEM, Reg: REGSP, Offset: off} }
@@ -215,6 +246,64 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	}
 }
 
+// writesSP reports whether p assigns a value to the stack pointer at all.
+// ppc32's operand convention puts the destination in To, so a register write to
+// SP is visible there; the indexed store-with-update forms name the updated
+// register as their base (To.Reg with a memory destination).
+func writesSP(p *obj.Prog) bool {
+	if p.To.Type == obj.TYPE_REG && p.To.Reg == REGSP {
+		// A compare reads its operands and writes only CR, even though the
+		// destination field carries the second register.
+		switch p.As {
+		case ACMPW, ACMPLW, ACMPWI, ACMPLWI, AFCMPU, AFCMPO:
+			return false
+		}
+		return true
+	}
+	if (p.As == ASTWU || p.As == ASTWUX) && p.To.Type == obj.TYPE_MEM &&
+		(p.To.Reg == REGSP || p.To.Name == obj.NAME_AUTO || p.To.Name == obj.NAME_PARAM) {
+		return true
+	}
+	return false
+}
+
+// staticSPAdj returns the stack-pointer adjustment p performs when that
+// adjustment is a compile-time constant, and whether it has one. Spadj is
+// signed the way every other target signs it: positive means SP was pushed, so
+// it is the negation of the value the instruction adds to SP.
+//
+//	ADDI $si, SP, SP      SP = SP + si     Spadj = -si
+//	STWU RS, off(SP)      SP = SP + off    Spadj = -off
+//
+// This is the ppc32 spelling of the two cases ppc64 handles in
+// obj/ppc64/obj9.go (AADD with a constant and AMOVDU): ppc32 spells the
+// constant add ADDI, and the frame allocation STWU. An immediate outside
+// D-form range is encoded by assemble's encoder as an ADDIS/ADDI pair, so the
+// value in the Prog is not the whole adjustment; that case is deliberately not
+// described.
+func staticSPAdj(p *obj.Prog) (int32, bool) {
+	switch p.As {
+	case AADDI:
+		if p.To.Type != obj.TYPE_REG || p.To.Reg != REGSP || p.Reg != REGSP || p.From.Type != obj.TYPE_CONST {
+			return 0, false
+		}
+		if p.From.Offset < -32768 || p.From.Offset > 32767 {
+			return 0, false
+		}
+		return -int32(p.From.Offset), true
+	case ASTWU:
+		if p.To.Type != obj.TYPE_MEM || p.To.Reg != REGSP || p.To.Name != obj.NAME_NONE {
+			return 0, false
+		}
+		return -int32(p.To.Offset), true
+	}
+	return 0, false
+}
+
+// progedit is the per-Prog preprocess hook. The stack-pointer bookkeeping for
+// this target is not per-Prog: whether an SP write is worth describing depends
+// on the whole function, so it is done in preprocess, which is also where
+// ppc64 does it (obj/ppc64/obj9.go).
 func progedit(*obj.Link, *obj.Prog, obj.ProgAlloc) {}
 
 // buildop is the per-Link initialisation hook. The ppc32 instruction table is
@@ -294,6 +383,23 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	// PCs above include relaxation instructions and are now final for encoding.
 	words := make([]uint32, 0, 16)
 	for q := p.Link; q != nil; q = q.Link {
+		// An assembly function that writes SP without a statically accounted
+		// stack adjustment cannot be unwound from that instruction. Keep this
+		// in sync with obj/ppc64: declared frames and Spadj-accounted updates
+		// do not need SPWRITE.
+		if writesSP(q) && q.Spadj == 0 {
+			if f := s.Func(); f.FuncFlag&abi.FuncFlagSPWrite == 0 {
+				f.FuncFlag |= abi.FuncFlagSPWrite
+				if ctxt.Debugvlog || !ctxt.IsAsm {
+					ctxt.Logf("auto-SPWRITE: %s %v\n", s.Name, q)
+					if !ctxt.IsAsm {
+						ctxt.Diag("invalid auto-SPWRITE in non-assembly")
+						ctxt.DiagFlush()
+						panic("bad SPWRITE")
+					}
+				}
+			}
+		}
 		w, ok := encodeProg(ctxt, q, autosize)
 		if !ok {
 			return // diag already issued
