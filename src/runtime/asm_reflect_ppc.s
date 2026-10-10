@@ -58,24 +58,37 @@ TEXT runtime·reflectcall(SB), NOSPLIT|NOFRAME, $0-28
 	DISPATCH(runtime·call1073741824, 16384, 0)
 	B runtime·badreflectcall(SB)
 
-#define CALLFN(NAME, HIGH, LOW) \
-TEXT NAME(SB), WRAPPER|NOSPLIT|NOFRAME, $0-0; \
+// callNN allocates its frame by DECLARATION rather than by hand. K is the
+// class's whole frame -- its stack-argument area plus the measured 24-byte
+// linkage area, rounded up to 16 -- and it is spelled as (HIGH<<16)+LOW so the
+// body can rebuild it without a second literal.
+//
+// Why a declared frame: the unwinder describes a frame by the PCSP table this
+// assembler builds from the Progs, and a hand-rolled `STWUX R1, R1, R4` moves
+// SP by a value no static table can describe. The assembler therefore marks
+// the function FuncFlagSPWrite, and traceback.go treats a non-innermost
+// SPWRITE frame as fatal -- so any GC scanstack that walks through a live
+// reflected call dies with "unexpected SPWRITE function runtime.call16".
+// Declaring the frame makes the assembler generate the prologue (LR save,
+// stack-growth check, SP allocation), the epilogue and the PCSP entries for
+// every one of them, which is what ppc64, amd64 and 386 do with the same
+// macro shape.
+//
+// LOCALS is what the assembler rounds into the frame: it lays out
+// round16(locals + 24), so LOCALS = K-24 gives a frame of exactly K. That
+// matters because R31 is the incoming ABI0 argument pointer, R1+K, and the
+// argument offsets below are measured from it; a frame that is not exactly K
+// would put R31 at the wrong address silently.
+//
+// `-28` is the argument size. callNN is reached by a branch from reflectcall,
+// which declares $0-28, so callNN's incoming arguments are those same 28 bytes
+// above its frame. Declaring them matters to the stack-growth path: a
+// splittable function's prologue calls morestack, and morestack/newstack
+// describe the frame it is growing from this function's own funcdata.
+#define CALLFN(NAME, HIGH, LOW, LOCALS) \
+TEXT NAME(SB), WRAPPER, $LOCALS-28; \
 	NO_LOCAL_POINTERS; \
-	MFLR R0; \
-	STW R0, 8(R1); \
-	ADDIS R3, R0, $HIGH; \
-	ADDI R3, R3, $LOW; \
-	BL runtime·stackcheck(SB); \
-	CMPWI R3, $0; \
-	BC 12, 2, stackok; \
-	LWZ R5, 8(R1); \
-	BL runtime·morestack(SB); \
-stackok: \
-	ADDI R0, R0, $0; \
-	ADDIS R4, R0, $HIGH; \
-	ADDI R4, R4, $LOW; \
-	SUBF R4, R4, R0; \
-	STWUX R1, R1, R4; \
+	/* Rebuild the incoming ABI0 argument pointer: R31 = R1 + K. */ \
 	ADDIS R31, R0, $HIGH; \
 	ADDI R31, R31, $LOW; \
 	ADD R31, R1, R31; \
@@ -112,42 +125,36 @@ callfn: \
 	LWZ R6, CALL_ARG_STACKSIZE(R31); \
 	SUBF R6, R4, R6; \
 	BL runtime·callRet(SB); \
-	/* Restore the incoming stack and link register. */ \
-	ADDIS R31, R0, $HIGH; \
-	ADDI R31, R31, $LOW; \
-	ADD R1, R1, R31; \
-	LWZ R31, 8(R1); \
-	MTLR R31; \
 	RET
 
 
-CALLFN(runtime·call16, 0, 48)
-CALLFN(runtime·call32, 0, 64)
-CALLFN(runtime·call64, 0, 96)
-CALLFN(runtime·call128, 0, 160)
-CALLFN(runtime·call256, 0, 288)
-CALLFN(runtime·call512, 0, 544)
-CALLFN(runtime·call1024, 0, 1056)
-CALLFN(runtime·call2048, 0, 2080)
-CALLFN(runtime·call4096, 0, 4128)
-CALLFN(runtime·call8192, 0, 8224)
-CALLFN(runtime·call16384, 0, 16416)
-CALLFN(runtime·call32768, 1, -32736)
-CALLFN(runtime·call65536, 1, 32)
-CALLFN(runtime·call131072, 2, 32)
-CALLFN(runtime·call262144, 4, 32)
-CALLFN(runtime·call524288, 8, 32)
-CALLFN(runtime·call1048576, 16, 32)
-CALLFN(runtime·call2097152, 32, 32)
-CALLFN(runtime·call4194304, 64, 32)
-CALLFN(runtime·call8388608, 128, 32)
-CALLFN(runtime·call16777216, 256, 32)
-CALLFN(runtime·call33554432, 512, 32)
-CALLFN(runtime·call67108864, 1024, 32)
-CALLFN(runtime·call134217728, 2048, 32)
-CALLFN(runtime·call268435456, 4096, 32)
-CALLFN(runtime·call536870912, 8192, 32)
-CALLFN(runtime·call1073741824, 16384, 32)
+CALLFN(runtime·call16, 0, 48, 24)
+CALLFN(runtime·call32, 0, 64, 40)
+CALLFN(runtime·call64, 0, 96, 72)
+CALLFN(runtime·call128, 0, 160, 136)
+CALLFN(runtime·call256, 0, 288, 264)
+CALLFN(runtime·call512, 0, 544, 520)
+CALLFN(runtime·call1024, 0, 1056, 1032)
+CALLFN(runtime·call2048, 0, 2080, 2056)
+CALLFN(runtime·call4096, 0, 4128, 4104)
+CALLFN(runtime·call8192, 0, 8224, 8200)
+CALLFN(runtime·call16384, 0, 16416, 16392)
+CALLFN(runtime·call32768, 1, -32736, 32776)
+CALLFN(runtime·call65536, 1, 32, 65544)
+CALLFN(runtime·call131072, 2, 32, 131080)
+CALLFN(runtime·call262144, 4, 32, 262152)
+CALLFN(runtime·call524288, 8, 32, 524296)
+CALLFN(runtime·call1048576, 16, 32, 1048584)
+CALLFN(runtime·call2097152, 32, 32, 2097160)
+CALLFN(runtime·call4194304, 64, 32, 4194312)
+CALLFN(runtime·call8388608, 128, 32, 8388616)
+CALLFN(runtime·call16777216, 256, 32, 16777224)
+CALLFN(runtime·call33554432, 512, 32, 33554440)
+CALLFN(runtime·call67108864, 1024, 32, 67108872)
+CALLFN(runtime·call134217728, 2048, 32, 134217736)
+CALLFN(runtime·call268435456, 4096, 32, 268435464)
+CALLFN(runtime·call536870912, 8192, 32, 536870920)
+CALLFN(runtime·call1073741824, 16384, 32, 1073741832)
 
 // callRet packages arguments into the ABI0 area for reflectcallmove.
 // PPC32 has no ABI register arguments or returns, so RegArgs is nil.
