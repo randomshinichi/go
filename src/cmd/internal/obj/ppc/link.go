@@ -759,6 +759,16 @@ func encodeProg(ctxt *obj.Link, p *obj.Prog, autosize int64) (w []uint32, ok boo
 		return emit(int32(p.From.Offset), int32(p.To.Reg-REG_R0))
 	case AMTLR, AMTCTR:
 		return emit(ra())
+
+	// mfxer/mtxer are single-register SPR forms like mfcr/mtctr above, with the
+	// SPR number in the encoding's base rather than an operand. The generic
+	// assembler puts a lone register operand in From unless the op is in
+	// unaryDst, so both positions are accepted, exactly as for mfcr.
+	case AMFXER, AMTXER:
+		if p.From.Type == obj.TYPE_REG {
+			return emit(ra())
+		}
+		return emit(rd())
 	case ABLR, ABLRL, ABCTR, ABCTRL:
 		return emit()
 	case ABCLR, ABCLRL, ABCCTR, ABCCTRL:

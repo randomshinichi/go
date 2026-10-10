@@ -5,7 +5,7 @@
 #include "go_asm.h"
 #include "textflag.h"
 
-TEXT ·asyncPreempt(SB),NOSPLIT,$384-0
+TEXT ·asyncPreempt(SB),NOSPLIT,$400-0
 	STW R31, 24(R1)
 	MFLR R31
 	STW R31, 0(R1)
@@ -71,7 +71,11 @@ TEXT ·asyncPreempt(SB),NOSPLIT,$384-0
 	STFD F29, 384(R1)
 	STFD F30, 392(R1)
 	STFD F31, 400(R1)
+	MFXER R31
+	STW R31, 408(R1)
 	BL ·asyncPreempt2(SB)
+	LWZ R31, 408(R1)
+	MTXER R31
 	LFD 400(R1), F31
 	LFD 392(R1), F30
 	LFD 384(R1), F29
@@ -134,12 +138,12 @@ TEXT ·asyncPreempt(SB),NOSPLIT,$384-0
 	LWZ R5, 48(R1)
 	LWZ R4, 44(R1)
 	LWZ R3, 40(R1)
-	LWZ R31, 416(R1)
+	LWZ R31, 432(R1)
 	MTLR R31
-	LWZ R2, 440(R1)
-	LWZ R12, 444(R1)
+	LWZ R2, 456(R1)
+	LWZ R12, 460(R1)
 	LWZ R31, 0(R1)
 	MTCTR R31
 	LWZ R31, 24(R1)
-	ADDI R1, R1, $448
+	ADDI R1, R1, $464
 	JMP (CTR)
