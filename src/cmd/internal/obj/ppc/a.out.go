@@ -230,6 +230,16 @@ const (
 	AMTCRF  // mtcrf
 	AMTLR   // mtlr
 	AMTCTR  // mtctr
+	// AMFXER/AMTXER are the named SPR forms for XER, not a general
+	// mfspr/mtspr escape hatch: generic SPR access stays refused (see
+	// `refused` in asm.go). They exist because XER[CA] carries the carry of
+	// the multi-word add/sub chains the ppc32 compiler threads through no
+	// register at all (PPCOps.go's gp2flags1carry has an empty output mask),
+	// so runtime.asyncPreempt has to save and restore it the way ppc64's
+	// genPPC64 does. mfxer/mtxer are mfspr/mtspr with SPR 1 and are standard
+	// PowerPC ISA v1 mnemonics; the 750 implements them.
+	AMFXER  // mfxer
+	AMTXER  // mtxer
 	ALFS    // lfs
 	ALFSU   // lfsu
 	ALFSX   // lfsx
