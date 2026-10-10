@@ -123,6 +123,32 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		q.As, q.From, q.To = as, from, to
 		return q
 	}
+	// appendUnsafePoint emits a PCDATA_UnsafePoint pseudo-instruction after p, setting
+	// the unsafe-point value in effect from the next real instruction onward. PCDATA
+	// progs carry no bytes (linkpcln skips any prog whose successor shares its PC, and
+	// the assembler does likewise), so markers never change code layout.
+	appendUnsafePoint := func(p *obj.Prog, value int64) *obj.Prog {
+		q := obj.Appendp(p, newprog)
+		q.As = obj.APCDATA
+		q.From = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.PCDATA_UnsafePoint}
+		q.To = obj.Addr{Type: obj.TYPE_CONST, Offset: value}
+		return q
+	}
+	// unsafePointBefore returns the PCDATA_UnsafePoint value in effect at the
+	// instruction just before p, mirroring how linkpcln seeds its table. The
+	// prologue is spliced at the head of the function, so today this is always the
+	// default UnsafePointSafe; scanning rather than hard-coding keeps the window
+	// balanced if an entry marker (a nosplit or runtime-package one, say) is ever
+	// emitted ahead of it.
+	unsafePointBefore := func(head, p *obj.Prog) int64 {
+		val := int64(abi.UnsafePointSafe)
+		for q := head; q != nil && q != p; q = q.Link {
+			if isUnsafePointPCDATA(q) {
+				val = q.To.Offset
+			}
+		}
+		return val
+	}
 	appendFrameConst := func(p *obj.Prog, value int64, scratch int16) *obj.Prog {
 		p = appendOp(p, AADDIS, obj.Addr{Type: obj.TYPE_CONST, Offset: (value + 0x8000) >> 16}, reg(scratch))
 		p.Reg = REG_R0
@@ -132,9 +158,41 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	}
 	p := text
 	if !leaf && !s.NoFrame() {
+		// The return address lives in R0 for exactly two instructions: the MFLR that
+		// takes it out of the link register and the STW that commits it to the
+		// caller's linkage area. R0 is NOT preserved across an asynchronous
+		// preemption -- runtime.asyncPreempt's generated ppc32 prologue zeroes it
+		// (genPPC32 in runtime/mkpreempt.go saves R3..R29 only) -- so a preemption
+		// landing on that STW stores 0 as the return address. The function then
+		// returns to PC 0, or the unwinder fatals with "traceback did not unwind
+		// completely". Bead goppc-lye2.
+		//
+		// Advertise the pair as a restartable sequence instead of changing the
+		// register. PCDATA_UnsafePoint = UnsafePointRestart1 over MFLR..STW makes
+		// isAsyncSafePoint back the resumption PC off to the START of the run
+		// (runtime/preempt.go:485-491), so the MFLR re-executes and reloads R0 from
+		// the link register -- which asyncPreempt leaves intact, because its
+		// epilogue returns through CTR precisely to keep that register usable --
+		// before the store is attempted. This is the same argument the arm64
+		// backend uses for its assembler-inserted scratch-register sequences
+		// (obj/arm64/asm7.go isRestartable, via obj.MarkUnsafePoints).
+		//
+		// The runtime throws "bad restart PC" when pc-startpc > 20, so the marked
+		// range must stay at most 20 bytes. Close the window immediately AFTER the
+		// STW rather than letting it run to the next compiler marker: the pair is 8
+		// bytes today, and an explicitly bounded window keeps that true even if this
+		// prologue grows a third instruction later. The following LI R0,0 needs no
+		// cover -- once the store has committed, R0's value is irrelevant.
+		//
+		// Assembly functions also receive this prologue but are never preempted
+		// (isAsyncSafePoint returns false for FuncFlagAsm before it ever reads the
+		// restart case), so the markers there are inert, not harmful.
+		entry := p
+		p = appendUnsafePoint(p, abi.UnsafePointRestart1)
 		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
 		// Save in the caller's linkage area BEFORE moving SP, as measured.
 		p = appendOp(p, ASTW, reg(REG_R0), mem(8))
+		p = appendUnsafePoint(p, unsafePointBefore(entry, entry))
 		// Go treats R0 as zero for stores (not merely the RA=0 address rule).
 		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
 		p.Reg = REG_R0
@@ -262,6 +320,13 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Balance the linear PC/SP table after the return (ppc64 does likewise).
 		p.Spadj = int32(frame)
 	}
+}
+
+// isUnsafePointPCDATA reports whether p is the PCDATA pseudo-instruction that
+// carries the PCDATA_UnsafePoint table.
+func isUnsafePointPCDATA(p *obj.Prog) bool {
+	return p.As == obj.APCDATA && p.From.Type == obj.TYPE_CONST &&
+		p.From.Offset == abi.PCDATA_UnsafePoint
 }
 
 // writesSP reports whether p assigns a value to the stack pointer at all.
