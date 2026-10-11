@@ -54,6 +54,7 @@ SAFE, UNSAFE = -1, -2
 RESTART1, RESTART2 = -3, -4
 UNSAFE_POINT_PCDATA_INDEX = 0  # abi.PCDATA_UnsafePoint
 MAX_WINDOW_BYTES = 20          # runtime/preempt.go: pc-startpc > 20 => throw
+insn_bytes = 4                 # ppc32 has fixed-width instructions
 
 # The prologue pair as the ppc32 backend prints it. mem(8) renders the base
 # register as SP, but accept R1 in case the rendering changes.
@@ -94,7 +95,7 @@ def main() -> int:
         if len(examples) < 25:
             examples.append((kind, label, fn) + tuple(str(x) for x in a))
 
-    def close_open(w, cur_pc, cur_val, cur_val_start, after_end):
+    def close_open(w, cur_pc, cur_val, cur_val_start, end_of_func):
         """Track the restart run past the STW and evaluate it when it truly ends.
 
         Width and closure are measured INDEPENDENTLY: a window that both leaks and
@@ -106,19 +107,20 @@ def main() -> int:
         nonlocal covered, max_width
         if w is None:
             return None
-        if cur_val in (RESTART1, RESTART2) and cur_val_start == w["mflr_pc"]:
-            # Still inside the same run: keep measuring.
+        in_run = cur_val in (RESTART1, RESTART2) and cur_val_start == w["mflr_pc"]
+        if in_run and not end_of_func:
             w["run_len"] += 1
-            if not after_end:
-                return w
-            # Run reaches the end of the function: measure, then report.
-            width = (w["stw_pc"] + w["run_len"] * 4) - w["mflr_pc"]
+            return w
+        if end_of_func:
+            # The run reaches the end of the function: it never closed. Width is
+            # at least run_len*4, and the window is unusable either way.
+            width = w["run_len"] * insn_bytes
             if width > max_width:
                 max_width = width
             note("open_at_func_end", w["fn"], "mflr=%s" % hex(w["mflr_pc"]),
-                 "width=%d" % width)
+                 "insn_in_run=%d" % w["run_len"], "width>=%d" % width)
             if width > MAX_WINDOW_BYTES:
-                note("too_wide", w["fn"], "mflr=%s" % hex(w["mflr_pc"]), "width=%d" % width)
+                note("too_wide", w["fn"], "mflr=%s" % hex(w["mflr_pc"]), "width>=%d" % width)
             return None
         width = cur_pc - w["mflr_pc"]
         if width > max_width:
@@ -145,7 +147,7 @@ def main() -> int:
                 ln = ln.rstrip("\n")
                 m = FUNC.match(ln)
                 if m:
-                    w = close_open(w, 0, SAFE, None, after_end=True)
+                    w = close_open(w, 0, SAFE, None, end_of_func=True)
                     fn = m.group(1)
                     val, val_start = SAFE, None
                     prev, pending_mflr, w = None, None, None
@@ -157,6 +159,20 @@ def main() -> int:
                 mn = m.group(4)
                 ops = m.group(5).strip()
 
+                if mn == "TEXT":
+                    # The indented TEXT prog is the true per-function boundary.
+                    # Some symbols -- go.shape instantiations, DUPOK wrappers -- are
+                    # printed in the -S listing with NO unindented "NAME STEXT"
+                    # header line, so resetting only on that header lets the
+                    # previous function's unsafe-point value carry into this one's
+                    # prologue. PCs in this listing are function-relative, so a
+                    # carried run that began in the PREVIOUS function would still
+                    # satisfy val_start == mflr_pc == 0 and be miscounted as
+                    # covered. Resetting here closes that hole.
+                    w = close_open(w, 0, SAFE, None, end_of_func=True)
+                    val, val_start = SAFE, None
+                    prev, pending_mflr = None, None
+
                 if mn == "PCDATA":
                     parts = [p.strip() for p in ops.split(",")]
                     if len(parts) == 2 and parts[0] == "$%d" % UNSAFE_POINT_PCDATA_INDEX:
@@ -166,7 +182,7 @@ def main() -> int:
                     continue
 
                 # ---------- a real instruction ----------
-                w = close_open(w, pc, val, val_start, after_end=False)
+                w = close_open(w, pc, val, val_start, end_of_func=False)
 
                 if mn == "STW" and prev is not None and prev[1] == "MFLR":
                     if STW_LINK_SLOT.match(ops) and prev[2] == "R0":
@@ -202,7 +218,7 @@ def main() -> int:
 
                 prev = (pc, mn, ops, val, val_start)
 
-            w = close_open(w, 0, SAFE, None, after_end=True)
+            w = close_open(w, 0, SAFE, None, end_of_func=True)
 
     print("label                 %s" % (label or "-"))
     print("files                 %d" % len(args))

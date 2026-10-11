@@ -139,18 +139,27 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		q.To = obj.Addr{Type: obj.TYPE_CONST, Offset: value}
 		return q
 	}
-	// unsafePointBefore returns the PCDATA_UnsafePoint value in effect at the
-	// instruction just before p, mirroring how linkpcln seeds its table. The
-	// prologue is spliced at the head of the function, so today this is always the
-	// default UnsafePointSafe; scanning rather than hard-coding keeps the window
-	// balanced if an entry marker (a nosplit or runtime-package one, say) is ever
-	// emitted ahead of it.
-	unsafePointBefore := func(head, p *obj.Prog) int64 {
+	// unsafePointAtEntry returns the PCDATA_UnsafePoint value the compiler itself
+	// established for this function's entry, by scanning the no-width pseudo-progs
+	// that sit between TEXT and the first real instruction.
+	//
+	// This matters because the prologue is spliced at the HEAD of that run of
+	// pseudo-progs, ahead of anything the compiler emitted. Closing the window on a
+	// guessed value would silently rewrite the compiler's own intent for the
+	// instruction after the store: restore what the entry actually said, and fall
+	// back to linkpcln's table default (UnsafePointSafe, the value funcpctab seeds
+	// and PCIter.Init starts from) when the compiler said nothing.
+	unsafePointAtEntry := func(text *obj.Prog) int64 {
 		val := int64(abi.UnsafePointSafe)
-		for q := head; q != nil && q != p; q = q.Link {
+		for q := text.Link; q != nil; q = q.Link {
 			if isUnsafePointPCDATA(q) {
 				val = q.To.Offset
+				continue
 			}
+			if q.As == obj.APCDATA || q.As == obj.AFUNCDATA || q.As == obj.ANOP {
+				continue // no bytes; cannot settle or change the value
+			}
+			break // first real instruction: the entry value is settled
 		}
 		return val
 	}
@@ -192,12 +201,14 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Assembly functions also receive this prologue but are never preempted
 		// (isAsyncSafePoint returns false for FuncFlagAsm before it ever reads the
 		// restart case), so the markers there are inert, not harmful.
-		entry := p
+		// Capture the compiler's entry intent BEFORE splicing, while the head of the
+		// list is still untouched.
+		restore := unsafePointAtEntry(text)
 		p = appendUnsafePoint(p, abi.UnsafePointRestart1)
 		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
 		// Save in the caller's linkage area BEFORE moving SP, as measured.
 		p = appendOp(p, ASTW, reg(REG_R0), mem(8))
-		p = appendUnsafePoint(p, unsafePointBefore(entry, entry))
+		p = appendUnsafePoint(p, restore)
 		// Go treats R0 as zero for stores (not merely the RA=0 address rule).
 		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
 		p.Reg = REG_R0
