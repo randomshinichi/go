@@ -116,18 +116,30 @@ func TestStackGuardPrologue(t *testing.T) {
 	text.Link = &obj.Prog{As: obj.ARET}
 	s.NewFuncInfo().Text = text
 	preprocess(ctxt, s, func() *obj.Prog { return new(obj.Prog) })
-	var stackcheck, morestack, skipBranch bool
+	var guardLoad, morestack, skipBranch, stackcheckCall bool
 	for p := text.Link; p != nil; p = p.Link {
 		if p.As == ABL && p.To.Sym != nil {
-			stackcheck = stackcheck || p.To.Sym.Name == "runtime.stackcheck"
+			stackcheckCall = stackcheckCall || p.To.Sym.Name == "runtime.stackcheck"
 			morestack = morestack || p.To.Sym.Name == "runtime.morestack_noctxt"
 		}
-		if p.As == ABC && p.From.Offset == 12 && p.Reg == 2 && p.To.Target() != nil {
+		if stackGuardLoad(p, int64(ctxt.Arch.PtrSize)) {
+			guardLoad = true
+		}
+		if enoughStackBranch(p) {
 			skipBranch = true
 		}
 	}
-	if !stackcheck || !morestack || !skipBranch {
-		t.Fatalf("stack-split prologue missing check/call/skip: stackcheck=%v morestack=%v branch=%v", stackcheck, morestack, skipBranch)
+	// The guard is inline. A branch-and-link here would leave the PC it returns to
+	// reading pc == link-register with the frame not yet allocated, and that
+	// combination is the unconditional throw("traceback stuck") in
+	// src/runtime/traceback.go:491 -- see TestPrologueStuckPCsNeverPreemptible and
+	// bead goppc-h890, which reproduced it on the G5 at
+	// bufio.(*Writer).Write+0x14.
+	if stackcheckCall {
+		t.Fatalf("stack-split prologue still calls runtime.stackcheck; the guard must be inline")
+	}
+	if !guardLoad || !morestack || !skipBranch {
+		t.Fatalf("stack-split prologue missing inline guard/grow-path/skip: guardLoad=%v morestack=%v branch=%v", guardLoad, morestack, skipBranch)
 	}
 }
 
@@ -177,13 +189,16 @@ func TestLargeFramePrologue(t *testing.T) {
 			if text.To.Offset != tc.frame || tc.frame%16 != 0 {
 				t.Fatalf("allocated frame %d, want aligned frame %d", text.To.Offset, tc.frame)
 			}
-			var stackcheck, morestack, directAllocation, indexedAllocation, sourceReturnRemains bool
+			var guardLoad, morestack, directAllocation, indexedAllocation, sourceReturnRemains, stackcheckCall bool
 			var allocationSPAdj, restoreSPAdj int32
 			var tail []obj.As
 			for p := text.Link; p != nil; p = p.Link {
 				if p.As == ABL && p.To.Sym != nil {
-					stackcheck = stackcheck || p.To.Sym.Name == "runtime.stackcheck"
+					stackcheckCall = stackcheckCall || p.To.Sym.Name == "runtime.stackcheck"
 					morestack = morestack || p.To.Sym.Name == "runtime.morestack_noctxt"
+				}
+				if stackGuardLoad(p, int64(ctxt.Arch.PtrSize)) {
+					guardLoad = true
 				}
 				directAllocation = directAllocation || p.As == ASTWU
 				indexedAllocation = indexedAllocation || p.As == ASTWUX
@@ -196,8 +211,11 @@ func TestLargeFramePrologue(t *testing.T) {
 				sourceReturnRemains = sourceReturnRemains || p.As == obj.ARET
 				tail = append(tail, p.As)
 			}
-			if !stackcheck || !morestack {
-				t.Fatalf("large growable frame lacks stack-growth path: stackcheck=%v morestack=%v", stackcheck, morestack)
+			if stackcheckCall {
+				t.Fatalf("large growable frame still branches-and-link into runtime.stackcheck: the guard must be inline (goppc-h890)")
+			}
+			if !guardLoad || !morestack {
+				t.Fatalf("large growable frame lacks the inline guard or its grow path: guardLoad=%v morestack=%v", guardLoad, morestack)
 			}
 			if tc.frame <= 32752 && (!directAllocation || indexedAllocation) {
 				t.Fatalf("frame %d should use D-form stwu only", tc.frame)

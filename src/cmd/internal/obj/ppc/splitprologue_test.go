@@ -13,10 +13,11 @@ import (
 )
 
 // TestSplitPrologueRecheck pins the control flow of the prologue the ppc32
-// emitter generates for a splittable frame. runtime.stackcheck decides whether
-// runtime.morestack has to be called, and the return from runtime.morestack
-// must branch back to that check rather than fall through into the frame
-// allocation.
+// emitter generates for a splittable frame. The guard is an inline comparison
+// against g->stackguard0 (it used to be `BL runtime.stackcheck`, which made the
+// returning PC fatal for the unwinder -- bead goppc-h890), and the return from
+// runtime.morestack must branch back to that guard rather than fall through into
+// the frame allocation.
 //
 // The reason is runtime.newstack: it can return without having grown the stack
 // at all (its preemption path hands the goroutine back later, and
@@ -42,7 +43,7 @@ func TestSplitPrologueRecheck(t *testing.T) {
 			// The emitted control flow.
 			_, _, text := splitFixture(t, tc.locals)
 			frame := text.To.Offset
-			if ok, why := checkSplitPrologueRecheck(text, frame); !ok {
+			if ok, why := checkSplitPrologueRecheck(text, frame, int64(Linkppc.Arch.PtrSize)); !ok {
 				t.Fatalf("generated split prologue does not re-check the guard after morestack: %s\n%s", why, dumpProgs(text))
 			}
 
@@ -51,7 +52,7 @@ func TestSplitPrologueRecheck(t *testing.T) {
 			if !removeBackEdge(text) {
 				t.Fatal("no back edge to delete: the positive check above cannot have been real")
 			}
-			ok, why := checkSplitPrologueRecheck(text, frame)
+			ok, why := checkSplitPrologueRecheck(text, frame, int64(Linkppc.Arch.PtrSize))
 			if ok {
 				t.Fatal("checker accepts the pre-fix prologue, whose morestack return falls into the allocation")
 			}
@@ -184,20 +185,28 @@ func removeBackEdge(text *obj.Prog) bool {
 }
 
 // checkSplitPrologueRecheck verifies the generated split prologue's control
-// flow end to end: the frame size is materialized for runtime.stackcheck, a
-// failed check calls runtime.morestack, and the morestack return branches back
-// to the rematerialization of the frame size, which falls through to the same
-// runtime.stackcheck call. It returns a reason when the shape is wrong.
-func checkSplitPrologueRecheck(text *obj.Prog, frame int64) (bool, string) {
+// flow end to end: the frame size is materialized for the inline guard, the
+// guard loads g->stackguard0 through the g register, a failed check calls
+// runtime.morestack, and the morestack return branches back to the
+// rematerialization of the frame size, which falls through to the same guard
+// load. It returns a reason when the shape is wrong.
+func checkSplitPrologueRecheck(text *obj.Prog, frame, ptrSize int64) (bool, string) {
 	progs := progsOf(text)
 	pos := progIndex(progs)
 
-	stackcheck, morestack, alloc := -1, -1, -1
+	guard, morestack, alloc := -1, -1, -1
 	for i, p := range progs {
+		if stackGuardLoad(p, ptrSize) {
+			if guard < 0 {
+				guard = i
+			}
+		}
 		if p.As == ABL && p.To.Sym != nil {
 			switch p.To.Sym.Name {
 			case "runtime.stackcheck":
-				stackcheck = i
+				// The old shape. It is the defect, not the fix: the branch-and-link
+				// leaves the next PC with pc == lr and no frame established.
+				return false, "the guard is a call to runtime.stackcheck again, which makes the PC it returns to fatal for the unwinder"
 			case "runtime.morestack", "runtime.morestack_noctxt":
 				morestack = i
 			}
@@ -207,11 +216,11 @@ func checkSplitPrologueRecheck(text *obj.Prog, frame int64) (bool, string) {
 		}
 	}
 	switch {
-	case stackcheck < 0:
-		return false, "no call to runtime.stackcheck"
+	case guard < 0:
+		return false, "no inline stack-guard load of g->stackguard0"
 	case morestack < 0:
 		return false, "no call to runtime.morestack"
-	case morestack < stackcheck:
+	case morestack < guard:
 		return false, "the runtime.morestack call precedes the guard check"
 	case alloc < 0:
 		return false, "no frame allocation"
@@ -234,10 +243,12 @@ func checkSplitPrologueRecheck(text *obj.Prog, frame int64) (bool, string) {
 	}
 
 	// It must land on the frame size rematerialization, and that must be the
-	// stackcheck call the morestack call was reached from -- not merely
-	// somewhere earlier in the function.
+	// guard the morestack call was reached from -- not merely somewhere earlier in
+	// the function. Zero-width progs (the loop anchor ANOP and the unsafe-point
+	// marker that opens the region at it) do not start a PC of their own, so the
+	// branch lands on the first real instruction after them.
 	at := pos[progs[back].To.Target()]
-	for at < len(progs) && progs[at].As == obj.ANOP {
+	for at < len(progs) && isZeroWidthProg(progs[at]) {
 		at++
 	}
 	if at >= len(progs) {
@@ -250,8 +261,17 @@ func checkSplitPrologueRecheck(text *obj.Prog, frame int64) (bool, string) {
 	if val != frame {
 		return false, fmt.Sprintf("the back edge rematerializes %d, want the frame size %d", val, frame)
 	}
-	if next != stackcheck {
-		return false, "the rematerialized frame size does not fall through to runtime.stackcheck"
+	if next > guard {
+		return false, "the rematerialized frame size does not fall through to the stack-guard load"
+	}
+	// Falling through is the whole contract, because the guard consumes the frame
+	// size in R3. Nothing in between may branch-and-link: the PC such a call
+	// returns to would read pc == lr with the frame not yet established, which is
+	// the fatal combination bead goppc-h890 is about.
+	for _, p := range progs[next:guard] {
+		if setsLinkRegister(p) {
+			return false, "a branch-and-link sits between the frame size and the guard load"
+		}
 	}
 
 	// The check runs on the caller's SP: no instruction on the loop may move
@@ -267,8 +287,8 @@ func checkSplitPrologueRecheck(text *obj.Prog, frame int64) (bool, string) {
 	return true, ""
 }
 
-// frameSizeMaterialized decodes the frame-size materialization that loads
-// runtime.stackcheck's argument: either a single `addi $K,r0,r3`, or the
+// frameSizeMaterialized decodes the frame-size materialization that feeds the
+// inline guard's subtraction: either a single `addi $K,r0,r3`, or the
 // `addis`/`addi` pair a frame too large for D-form needs. next is the index of
 // the first Prog after it.
 func frameSizeMaterialized(progs []*obj.Prog, at int) (val int64, next int, ok bool) {
@@ -289,8 +309,7 @@ func frameSizeMaterialized(progs []*obj.Prog, at int) (val int64, next int, ok b
 	return 0, 0, false
 }
 
-func dumpProgs(text *obj.Prog) string {
-	var b strings.Builder
+func dumpProgs(text *obj.Prog) string {	var b strings.Builder
 	for p := text; p != nil; p = p.Link {
 		fmt.Fprintf(&b, "\t%v\tSpadj=%d\n", p.As, p.Spadj)
 	}
