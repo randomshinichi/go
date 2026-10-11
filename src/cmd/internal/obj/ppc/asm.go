@@ -446,11 +446,28 @@ func (fl field) position() (shift uint, mask uint32) {
 // example BO=23, the corpus's "branch-bad" row) as an illegal form, and emitting
 // one would be exactly the kind of word this port must not produce.
 func (f *form) checkOperandCombination(args []int32) error {
+	// args are in spec order; the indirect branch forms are "bo,bi,bh".
+	// Cited to docs/ppe-extract.md P1 (PEM 2000 §4.2.4.2/4-20, Table 4-21/4-50,
+	// Appendix A pp.8-23..28) and docs/reference-index.md B2'.
 	switch f.mnem {
 	case "bclr", "bclrl", "bcctr", "bcctrl":
 		bo := args[0]
 		if bo&20 == 20 && bo&11 != 0 {
 			return fmt.Errorf("ppc: %s: reserved BO encoding %d", f.mnem, bo)
+		}
+		// bcctr/bcctrl branch to the CTR, so they must NOT decrement it: BO[2]=0
+		// (the decrement bit) is an invalid form for these two mnemonics only.
+		// bclr/bclrl take the target from LR and may legally test/decrement CTR.
+		if (f.mnem == "bcctr" || f.mnem == "bcctrl") && bo&4 == 0 {
+			return fmt.Errorf("ppc: %s: BO=%d decrements the CTR that supplies the target (invalid form)", f.mnem, bo)
+		}
+		// The five bits between BI and the XO field are reserved-zero in the
+		// 32-bit PEM editions; the ppc64 branch-hint (bh) is a later-ISA field at
+		// bits 19-20 with no support established on the 750/7410/7450/970 floor
+		// (reference-index B2', ppe-extract P1/P7.3). The port must not emit a
+		// nonzero hint, so reject it here rather than rely on silicon ignoring it.
+		if len(args) >= 3 && args[2] != 0 {
+			return fmt.Errorf("ppc: %s: branch hint %d not valid on this CPU floor (reserved bits must be zero)", f.mnem, args[2])
 		}
 	}
 	return nil

@@ -247,7 +247,11 @@ func TestNeverEmitsZeroWord(t *testing.T) {
 		args := make([]int32, len(f.fields))
 		word, err := Encode(f.op, args...)
 		if err != nil {
-			t.Errorf("%s with zero operands: %v", f.mnem, err)
+			// A refusal is acceptable for this property: the claim is that no
+			// form *emits* the all-zero word, and a rejected operand combo emits
+			// nothing. bcctr/bcctrl with bo=0 is exactly such a combo (BO[2]=0
+			// decrements the target CTR; invalid per PEM Table 4-21), so the
+			// encoder now refuses it. The n++ below only counts emitted words.
 			continue
 		}
 		if word == 0 {

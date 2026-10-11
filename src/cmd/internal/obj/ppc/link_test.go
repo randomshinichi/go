@@ -243,26 +243,56 @@ func TestEncodePreemptSpecialRegisters(t *testing.T) {
 }
 
 func TestEncodeIndirectBranchForms(t *testing.T) {
-	ctxt := obj.Linknew(&Linkppc)
-	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
+	for _, tc := range []struct {
+		as   obj.As
+		bo   int32
+		bi   int32
+		want uint32
+	}{
+		{ABCLR, 16, 0, 0x4e000020},
+		{ABCLRL, 16, 0, 0x4e000021},
+		// bclr/bclrl take their target from LR, so a CTR-decrement BO is legal;
+		// bcctr/bcctrl branch to the CTR and must NOT decrement it (valid bo=12
+		// here; the old test pinned the invalid decrement bo=16 — R2's finding).
+		{ABCCTR, 12, 0, 0x4d800420},
+		{ABCCTRL, 12, 0, 0x4d800421},
+	} {
+		word, err := Encode(tc.as, tc.bo, tc.bi, 0)
+		if err != nil || word != tc.want {
+			t.Errorf("Encode(%v,%d,%d,0) = %#08x,%v want %#08x", tc.as, tc.bo, tc.bi, word, err, tc.want)
+		}
+	}
+	// The fixed (no-operand) forms still encode their baked-in canonical word.
 	for _, tc := range []struct {
 		as   obj.As
 		want uint32
-	}{
-		{ABLR, 0x4e800020},
-		{ABLRL, 0x4e800021},
-		{ABCTR, 0x4e800420},
-		{ABCTRL, 0x4e800421},
-		{ABCLR, 0x4e000020},
-		{ABCLRL, 0x4e000021},
-		{ABCCTR, 0x4e000420},
-		{ABCCTRL, 0x4e000421},
-	} {
-		p := &obj.Prog{As: tc.as, From: obj.Addr{Offset: 16}, Reg: REG_R0, To: obj.Addr{Offset: 0}}
-		words, ok := encodeProg(ctxt, p, 0)
-		if !ok || len(words) != 1 || words[0] != tc.want {
-			t.Errorf("%v = %08x, want %08x", p, words, tc.want)
+	}{{ABLR, 0x4e800020}, {ABLRL, 0x4e800021}, {ABCTR, 0x4e800420}, {ABCTRL, 0x4e800421}} {
+		word, err := Encode(tc.as)
+		if err != nil || word != tc.want {
+			t.Errorf("Encode(%v) = %#08x,%v want %#08x", tc.as, word, err, tc.want)
 		}
+	}
+	// R2-D1: bcctr/bcctrl with a CTR-decrement BO (bo&4==0) is the invalid form
+	// and must be refused, unlike the same BO on bclr.
+	for _, bo := range []int32{16, 0, 1, 2, 3} {
+		if _, err := Encode(ABCCTR, bo, 0, 0); err == nil {
+			t.Errorf("bcctr bo=%d accepted; BO[2]=0 decrements the target CTR (invalid)", bo)
+		}
+		if _, err := Encode(ABCCTRL, bo, 0, 0); err == nil {
+			t.Errorf("bcctrl bo=%d accepted; BO[2]=0 decrements the target CTR (invalid)", bo)
+		}
+	}
+	// R2-D1: a nonzero branch hint is not valid on this floor (bits 16-20
+	// reserved) and must be refused on the indirect forms.
+	if _, err := Encode(ABCLRL, 20, 0, 1); err == nil {
+		t.Errorf("bclrl with nonzero hint (bh=1) accepted; must refuse on the floor")
+	}
+	if _, err := Encode(ABCCTR, 12, 0, 1); err == nil {
+		t.Errorf("bcctr with nonzero hint (bh=1) accepted; must refuse on the floor")
+	}
+	// Positive: the reserved-BO check that already existed still refuses bclr 23.
+	if _, err := Encode(ABCLR, 23, 0, 0); err == nil {
+		t.Errorf("bclr 23 accepted; BO=23 reserved")
 	}
 }
 
