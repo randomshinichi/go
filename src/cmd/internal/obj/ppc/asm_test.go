@@ -130,7 +130,10 @@ func TestForbiddenFormsRefused(t *testing.T) {
 		// Not G3-legal.
 		"popcntb", "lq", "stq",
 		// Legality unestablished on 750 (Q-8/Q-9).
-		"lwsync", "stfiwx", "fsqrt", "fres",
+		// G3/G4 settled (B1'): fsqrt/fsqrts unsupported; stfiwx/fres legal there
+		// but refused as policy; 970 stfiwx is an open gap. fsqrts added (was
+		// missing from the explicit rejections — R4-6).
+		"lwsync", "stfiwx", "fsqrt", "fsqrts", "fres",
 		// Privileged: the baseline is user-mode code.
 		"mfmsr", "mtmsr",
 	}
