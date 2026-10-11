@@ -170,9 +170,13 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p.Reg = scratch
 		return p
 	}
-	// Capture the compiler's entry intent BEFORE splicing, while the head of the
-	// list is still untouched. Both unsafe windows below close back to this value.
+	// Capture the compiler's entry intent BEFORE splicing anything, while the head
+	// of the list is still untouched. Both the MFLR/STW restart window and the
+	// stack-guard region below restore to this value, so the first instruction of
+	// the function body reads exactly the unsafe-point the compiler asked for. Any
+	// splicing done before this call would have made the scan see our own markers.
 	restore := unsafePointAtEntry(text)
+
 	p := text
 	if !leaf && !s.NoFrame() {
 		// The return address lives in R0 for exactly two instructions: the MFLR that
@@ -213,44 +217,40 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
 		p.Reg = REG_R0
 	}
-	// splitCheck is true when the stack-guard loop below is emitted. It also decides
-	// whether the unsafe window around that loop and the frame allocation is opened
-	// and closed again after the allocation.
-	splitCheck := frame != 0 && !s.NoSplit()
-	if splitCheck {
-		// From here until the STWU/STWUX has run, this function has no frame (its
-		// PCSP delta is 0) AND its link register is not the caller's: the BL to
-		// runtime.stackcheck (and to runtime.morestack on the slow path) overwrote
-		// LR with an address inside this very function, and the caller's return
-		// address is only in the save slot the prologue just wrote. The unwinder
-		// reads LR from the register for a frameless innermost PC, so a goroutine
-		// stopped anywhere in that run -- including the loop's own re-execution
-		// after morestack returns -- would unwind through a bogus caller. At the PC
-		// right after the BL, PC == LR and SP == FP, which is the unconditional
-		// "traceback stuck" throw (runtime/traceback.go). ppc64 avoids the shape
-		// entirely by comparing the guard inline, and obj/ppc64/obj9.go marks its
-		// bound check unsafe (issue #35470, a different reason: a resumed
-		// preemption would call morestack needlessly). Marking this run unsafe
-		// keeps these PCs out of isAsyncSafePoint, so no preemption lands in them
-		// and no GC stack scan has to unwind from them.
+	if frame != 0 && !s.NoSplit() {
+		// The guard is INLINE: this region contains no branch-and-link on the path
+		// that reaches the frame allocation. It used to end with
+		// `BL runtime.stackcheck`, and that call made the very next PC fatal for
+		// the unwinder. `bl` writes LR = pc+4; the frame is not allocated yet (the
+		// STWU that establishes it is several instructions later, so the PCSP delta
+		// is still 0 and the unwinder's frame.fp equals frame.sp), so a stack walk
+		// starting at that PC satisfies
 		//
-		// This does NOT cover a SIGPROF landing in the run: profiling never asks
-		// whether a PC is a safe point. The repair for that half is on the runtime
-		// side, in runtime.stackcheck, which NOW returns with LR reloaded from the
-		// save slot (8(SP)) -- landed as goppc-1ye4, commit 95cd04cfc3 (cherry-picked; 7113fee629 is the lane-branch SHA), so this is a
-		// statement of fact rather than an intention -- so that LR is the caller's at
-		// every PC of this run; the
-		// traceback is not special-cased because nothing in the tables tells it a
-		// frameless PC is in this window rather than in a frameless leaf. The
-		// morestack path already does this: runtime.morestack saves R5, the slot
-		// value, as the goroutine's gobuf_lr. Decision recorded in bead goppc-1ye4.
+		//	if frame.pc == frame.lr && frame.sp == frame.fp { throw("traceback stuck") }
 		//
-		// The window closes after the STWU/STWUX below, whose own PC is still
-		// frameless with a stale LR; after it the frame exists and the unwinder
-		// reads LR from the save slot. Zero code bytes are added.
-		p = appendUnsafePoint(p, abi.UnsafePointUnsafe)
-	}
-	if splitCheck {
+		// which is src/runtime/traceback.go:491-497 in this tree and is
+		// unconditional -- not gated by unwindPrintErrors/unwindSilentErrors. Two
+		// independent producers reach it, which is why marking the region Unsafe is
+		// not a sufficient fix: async preemption does honour PCDATA
+		// (src/runtime/preempt.go:443-449 returns false for UnsafePointUnsafe), but
+		// the SIGPROF sampler does not consult isAsyncSafePoint at all --
+		// runtime.sigprof hands the interrupted pc/sp/lr straight to
+		// unwinder.initAt (src/runtime/proc.go:5822), so a CPU-profile sample taken
+		// at that one PC throws no matter how the region is marked. Observed on
+		// pmg5 at pc=0x11d30bc = bufio.(*Writer).Write+0x14 (bead goppc-h890, from
+		// `go tool objdump` of the same binary: CALL runtime.stackcheck at
+		// 0x11d30b8, CMPW R3,$0 at 0x11d30bc, MOVWU R1,-96(R1) only at 0x11d30d0).
+		// ppc64 never had this problem because its prologue guard is inline too
+		// (obj/ppc64/obj9.go: MOVD g_stackguard(g),R22 ... BLT), and it marks the
+		// morestack region unsafe for the separate double-growth reason of issue
+		// #35470. Both of those upstream choices are copied here.
+		//
+		// g is reached through R30 (REGG, obj/ppc/regs.go:101), which is the same
+		// register the removed helper dereferenced: src/runtime/asm_ppc.s:47
+		// `LWZ R4, g_stackguard0(R30)`, whose linked address is 8(R30) as measured
+		// above. So this adds no ABI requirement -- every function that reaches this
+		// block already had to arrive with R30 = g, including the assembly ones.
+		//
 		// The guard check is a LOOP, not a straight line. runtime.newstack can
 		// return WITHOUT growing the stack: its preemption path may put the
 		// goroutine back on a stack the shrinker measured while this frame was
@@ -264,29 +264,78 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// carries no SP delta, so re-entering it never disturbs the PCSP table.
 		recheck := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
 		p = recheck
+		// The whole region -- guard, morestack call and back edge -- is marked
+		// Unsafe, for two reasons. (1) Double growth: a preemption request taken
+		// here is cleared, but the guard still runs and still calls morestack, which
+		// grows the stack once more for no reason (upstream issue #35470; ppc64 marks
+		// the same region for exactly this). (2) The morestack call is a
+		// branch-and-link, so the PC it returns to would again read pc == lr with no
+		// frame; unlike the old stackcheck call it cannot be inlined away, because
+		// morestack switches stacks and never returns the way a leaf does. Unsafe
+		// has no width limit (the runtime's 20-byte throw("bad restart PC") bound at
+		// src/runtime/preempt.go:488 applies only to Restart1/Restart2 ranges), so
+		// covering this region costs nothing in bytes and nothing in restart-PC
+		// arithmetic; it costs preemptibility over 11 instructions, which is a
+		// bounded, one-pass section of a prologue, not a loop.
+		p = appendUnsafePoint(p, abi.UnsafePointUnsafe)
 		if frame <= 32752 {
 			p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REG_R3))
 			p.Reg = REG_R0
 		} else {
 			p = appendFrameConst(p, frame, REG_R3)
 		}
-		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup("runtime.stackcheck")})
-		p = appendOp(p, ACMPWI, reg(REG_R3), obj.Addr{Type: obj.TYPE_CONST})
-		branch := appendOp(p, ABC, obj.Addr{Type: obj.TYPE_CONST, Offset: 12}, obj.Addr{Type: obj.TYPE_BRANCH})
-		branch.Reg = 2
-		p = appendOp(branch, ALWZ, mem(8), reg(REG_R5))
+		// The two tests below are runtime.stackcheck's body, instruction for
+		// instruction, with the helper's 0/1 result in R3 replaced by branching
+		// directly on the condition each compare already set. R0, R3, R4 and R5 are
+		// the same scratch set the helper and this prologue already used: ppc32
+		// passes Go arguments on the stack (cmd/compile/internal/ppc/galign.go), so
+		// nothing is live in a GPR at entry, and the clobber set is unchanged.
+		//
+		//	CMPLW R1, R3 ; BLT grow    -- SP-frame would wrap the 32-bit space.
+		p = appendOp(p, ACMPLW, reg(REGSP), reg(REG_R3))
+		wrap := appendOp(p, ABC, obj.Addr{Type: obj.TYPE_CONST, Offset: 12}, obj.Addr{Type: obj.TYPE_BRANCH})
+		wrap.Reg = 0 // cr0 bit 0 of an unsigned compare: RA < RB
+		//	LWZ R4, g_stackguard0(R30) ; SP-frame < guard means grow.
+		//
+		// stackguard0 is the third pointer-sized field of runtime.g: `stack stack`
+		// (stack.lo, stack.hi) is first (src/runtime/runtime2.go:462-483, both
+		// marked "offset known to runtime/cgo"), so it sits at 2*PtrSize = 8 here.
+		// ppc64's prologue hardcodes the same expression (obj/ppc64/obj9.go, the
+		// MOVD g_stackguard(g) at its guard load); if runtime.g's head ever changes
+		// shape, both sites must move together, and the in-tree check
+		// src/runtime/stackguardoffset_ppc_test.go asserts the constant against the
+		// real field offset on the target rather than letting it drift silently.
+		p = appendOp(wrap, ALWZ, obj.Addr{Type: obj.TYPE_MEM, Reg: REGG, Offset: 2 * int64(ctxt.Arch.PtrSize)}, reg(REG_R4))
+		//	SUBF R3, R3, R1            -- R3 = SP - frame (cannot wrap: tested above).
+		p = appendOp(p, ASUBF, reg(REG_R3), reg(REG_R3))
+		p.Reg = REGSP
+		//	CMPLW R3, R4 ; BGE done   -- enough stack, skip the grow path.
+		p = appendOp(p, ACMPLW, reg(REG_R3), reg(REG_R4))
+		enough := appendOp(p, ABC, obj.Addr{Type: obj.TYPE_CONST, Offset: 4}, obj.Addr{Type: obj.TYPE_BRANCH})
+		enough.Reg = 0 // branch when the LT bit is clear, i.e. SP-frame >= guard
+		// Grow path: it is reached only by falling through the compare above or by
+		// one of the two branches, and the first instruction re-reads the caller's
+		// linkage slot because runtime.morestack wants the interrupted function's
+		// saved LR in R5 (src/runtime/asm_ppc.s:76-81).
+		grow := appendOp(enough, ALWZ, mem(8), reg(REG_R5))
 		morestack := "runtime.morestack_noctxt"
 		if s.NeedCtxt() {
 			morestack = "runtime.morestack"
 		}
-		p = appendOp(p, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup(morestack)})
+		p = appendOp(grow, ABL, obj.Addr{}, obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ctxt.Lookup(morestack)})
 		// Unconditional back edge to the guard, mirroring ppc64's BR start. It MUST
 		// precede `done`, else the "enough stack" branch skips past it into the
 		// allocation and the back edge becomes dead code.
 		p = appendOp(p, AB, obj.Addr{}, obj.Addr{Type: obj.TYPE_BRANCH})
 		p.To.SetTarget(recheck)
+		// Reopen preemption only at `done`, i.e. after the back edge, so every PC in
+		// the region above stays unsampleable; the frame allocation below is the
+		// first preemptible PC of the function, and by then R0 has been stored and
+		// SP has moved, so pc != lr holds at it.
+		p = appendUnsafePoint(p, restore)
 		done := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
-		branch.To.SetTarget(done)
+		enough.To.SetTarget(done)
+		wrap.To.SetTarget(grow)
 		p = done
 	}
 	if frame != 0 {
@@ -298,9 +347,6 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p.Reg = REG_R31
 		}
 		p.Spadj = int32(frame)
-		if splitCheck {
-			p = appendUnsafePoint(p, restore)
-		}
 	}
 	for p := text.Link; p != nil; p = p.Link {
 		if p.As == obj.AGETCALLERPC {
