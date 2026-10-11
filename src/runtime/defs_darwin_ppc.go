@@ -205,8 +205,31 @@ var _ [20 - unsafe.Sizeof(keventt{})]byte
 var _ [44 - unsafe.Sizeof(pthreadmutex{})]byte
 var _ [28 - unsafe.Sizeof(pthreadcond{})]byte
 var _ [64 - unsafe.Sizeof(siginfo{})]byte
+// Two-sided guards for the ppc32 signal layout (docs/reference-index.md A1',
+// measured against XNU xnu-1228): mcontext 1032 bytes, ss at +32, fs at +192,
+// vs at +456, regs32 160 bytes with a fixed internal field order (cr@136,
+// lr@144, ctr@148, vrsave@156). The OLD guards were one-sided
+// ([expected-actual]byte), which silently ACCEPT a smaller or reordered layout;
+// R3 found exactly that. Each quantity below is checked in BOTH directions, so
+// a shrink, a grow, and a same-size field reorder all fail to compile.
 var _ [1032 - unsafe.Sizeof(mcontext32{})]byte
+var _ [unsafe.Sizeof(mcontext32{}) - 1032]byte
 var _ [32 - unsafe.Offsetof(mcontext32{}.ss)]byte
+var _ [unsafe.Offsetof(mcontext32{}.ss) - 32]byte
 var _ [192 - unsafe.Offsetof(mcontext32{}.fs)]byte
+var _ [unsafe.Offsetof(mcontext32{}.fs) - 192]byte
 var _ [456 - unsafe.Offsetof(mcontext32{}.vs)]byte
+var _ [unsafe.Offsetof(mcontext32{}.vs) - 456]byte
+var _ [160 - unsafe.Sizeof(regs32{})]byte
+var _ [unsafe.Sizeof(regs32{}) - 160]byte
+var _ [8 - unsafe.Offsetof(regs32{}.gpr)]byte
+var _ [unsafe.Offsetof(regs32{}.gpr) - 8]byte
+var _ [136 - unsafe.Offsetof(regs32{}.cr)]byte
+var _ [unsafe.Offsetof(regs32{}.cr) - 136]byte
+var _ [144 - unsafe.Offsetof(regs32{}.lr)]byte
+var _ [unsafe.Offsetof(regs32{}.lr) - 144]byte
+var _ [148 - unsafe.Offsetof(regs32{}.ctr)]byte
+var _ [unsafe.Offsetof(regs32{}.ctr) - 148]byte
+var _ [156 - unsafe.Offsetof(regs32{}.vrsave)]byte
+var _ [unsafe.Offsetof(regs32{}.vrsave) - 156]byte
 var _ [32 - unsafe.Sizeof(ucontext{})]byte
