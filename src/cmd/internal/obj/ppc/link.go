@@ -543,7 +543,24 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			skip.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
 			skip.Reg = REG_R0
 			skip.To = obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}
-			q.From.Offset ^= 8 // invert BO; taken means skip the long branch
+			// Inverting the sense with XOR 8 is only valid for the CR-test
+			// forms 001zy (BO=4) and 011zy (BO=12): bit 3 there is the
+			// CR-true/CR-false selector, so toggling it turns "branch if CR
+			// bit false" into "branch if CR bit true" (and back) with no
+			// CTR involvement. Other BO patterns must NOT be inverted this
+			// way (docs/ppe-extract.md P1 / PEM 2000 Table 4-20):
+			//   * BO=20 (1z1zz, always) would become 28, which has a reserved
+			//     bit set and still branches always — the inserted long branch
+			//     is then skipped and the original target is never reached;
+			//   * a CTR-decrement form (BO bit 2 clear) must not be re-sensed
+			//     by a sense-only flip, because the CTR would decrement on both
+			//     paths. The compiler and runtime asm emit only BO=4/12 here
+			//     (R2 census: 0 CTR-decrement BC in Go code); a hand-written
+			//     out-of-range BC $20/$16 is rejected rather than mis-relaxed.
+			if bo := q.From.Offset; bo&0x14 != 0x04 {
+				ctxt.Diag("ppc32: cannot relax out-of-range conditional branch BO=%d (only BO=4/12 sense-invert)", bo)
+			}
+			q.From.Offset ^= 8 // invert the CR sense bit; taken now skips the long branch
 			q.To.SetTarget(skip)
 			relaxed = true
 		}

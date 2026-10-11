@@ -317,6 +317,56 @@ func TestEncodeCompareProgs(t *testing.T) {
 	}
 }
 
+// TestRelaxConditionalBranchRejectsUninvertibleBO proves goppc-xprg.16: the
+// long-branch relaxation must only sense-invert BO=4/011zy-adjacent forms and
+// must reject a hand-written out-of-range BC whose BO it cannot correctly
+// invert (BO=20 "always" -> 28 skips the inserted long branch, never reaching
+// the target; a CTR-decrement form must not be re-sensed). The compiler/runtime
+// emit only BO=4/12, so this path is reachable only from assembly.
+func TestRelaxConditionalBranchRejectsUninvertibleBO(t *testing.T) {
+	// build a long-branch scenario: cmp; BC $bo -> target; 9000 nops; target.
+	runAssemble := func(bo int32) (diagnosed, panicked bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		ctxt := obj.Linknew(&Linkppc)
+		ctxt.DiagFunc = func(string, ...interface{}) { diagnosed = true }
+		text := &obj.Prog{As: obj.ATEXT}
+		cmp := &obj.Prog{As: ACMPWI, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}, To: obj.Addr{Type: obj.TYPE_CONST}}
+		branch := &obj.Prog{As: ABC, From: obj.Addr{Type: obj.TYPE_CONST, Offset: int64(bo)}, Reg: 2, To: obj.Addr{Type: obj.TYPE_BRANCH}}
+		text.Link, cmp.Link = cmp, branch
+		prev := branch
+		for i := 0; i < 9000; i++ {
+			p := &obj.Prog{As: AORI, From: obj.Addr{Type: obj.TYPE_CONST}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R0}}
+			prev.Link = p
+			prev = p
+		}
+		target := &obj.Prog{As: AADDI, From: obj.Addr{Type: obj.TYPE_CONST}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}}
+		prev.Link = target
+		branch.To.SetTarget(target)
+		s := ctxt.Lookup("relax-bo")
+		s.NewFuncInfo().Text = text
+		assemble(ctxt, s, nil)
+		return
+	}
+
+	// Must be rejected: BO=20 (1z1zz always) and BO=16 (1z00y CTR!=0).
+	for _, bo := range []int32{20, 16} {
+		diagnosed, panicked := runAssemble(bo)
+		if !diagnosed && !panicked {
+			t.Errorf("BC $%d out-of-range was silently mis-relaxed; expected a diagnostic", bo)
+		}
+	}
+	// Must succeed (no diagnosis): the CR-test forms 4 and 12.
+	for _, bo := range []int32{4, 12} {
+		if diagnosed, _ := runAssemble(bo); diagnosed {
+			t.Errorf("BC $%d is an invertible CR-test form but was diagnosed", bo)
+		}
+	}
+}
+
 func TestRejectUnsupportedSymbolAddress(t *testing.T) {
 	ctxt := obj.Linknew(&Linkppc)
 	diagnosed := false
