@@ -538,10 +538,16 @@ var refused = map[string]string{
 	// Open questions in the approved design: legality is not established, so the
 	// baseline does not emit them.
 	"lwsync":  "legality on 750/7400 unestablished (Q-9); use sync/isync",
-	"stfiwx":  "legality on 750/7450/970 unestablished (Q-8)",
-	"fsqrt":   "legality on 750/7450/970 unestablished (Q-8)",
-	"fsqrts":  "legality on 750/7450/970 unestablished (Q-8)",
-	"fres":    "legality on 750/7450/970 unestablished (Q-8)",
+	// Per-model Q-8 verdicts are now settled for G3/G4 (docs/reference-index.md
+	// B1' from the MPC750/7410/7450 UMs): stfiwx+fres LEGAL there, fsqrt/fsqrts
+	// NOT supported. Only 970FX/MP stfiwx remains an open gap. We refuse the
+	// whole group regardless (never depend on an optional FP form; the 970 stfiwx
+	// question is unresolved) — but the reasons state the settled facts, not
+	// "all unestablished".
+	"stfiwx":  "optional FP store: legal on 750/7410/7450, UNRESOLVED on 970 (Q-8 gap); refused as a policy",
+	"fsqrt":   "not supported on 750/7410/7450 (settled, B1'); legal on 970; refused on the G3 floor",
+	"fsqrts":  "not supported on 750/7410/7450 (settled, B1'); refused on the G3 floor",
+	"fres":    "legal on 750/7410/7450 (settled, B1'); refused as a policy (never depend on it)",
 	"frsqrte": "legality on 750/7450/970 unestablished (Q-8)",
 	"eciwx":   "optional-model form, unresolved on non-970 profiles (isa_check)",
 	"ecowx":   "optional-model form, unresolved on non-970 profiles (isa_check)",
