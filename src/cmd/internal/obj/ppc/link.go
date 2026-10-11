@@ -52,10 +52,15 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		ctxt.Diag("ppc32: TEXT frame size %d exceeds the supported 32-bit stack range", locals)
 		return
 	}
+	// ABLRL is the compiler's indirect call: a branch through LR with link, so
+	// it carries no symbol operand and cannot be recognized as a call by name.
+	// Missing it here would build a making-calls function as a leaf -- no frame,
+	// no saved LR -- which is exactly the class of defect this port has already
+	// paid for once.
 	leaf := true
 	for p := text.Link; p != nil; p = p.Link {
 		switch p.As {
-		case obj.ACALL, ABL, ABCTRL, obj.ADUFFCOPY, obj.ADUFFZERO:
+		case obj.ACALL, ABL, ABCTRL, ABLRL, obj.ADUFFCOPY, obj.ADUFFZERO:
 			leaf = false
 		}
 	}
