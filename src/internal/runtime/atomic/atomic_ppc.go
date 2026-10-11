@@ -221,6 +221,13 @@ func check64(ptr *uint64) {
 	if uintptr(unsafe.Pointer(ptr))&7 != 0 {
 		panicUnaligned()
 	}
+	// Force the dereference before the caller takes lock64. A nil (or otherwise
+	// faulting) operand must panic while lock64 is still free; otherwise the panic
+	// unwinds out of a held lock that nothing will release, and every later 64-bit
+	// atomic call spins forever in lock64Acquire. Mirrors atomic_mipsx.go's
+	// lockAndCheck ("force dereference before taking lock"). The loaded value is
+	// discarded; the real read/write happens under the lock in the caller.
+	_ = *ptr
 }
 
 //go:nosplit
