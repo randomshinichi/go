@@ -158,13 +158,24 @@ func TestGoStackCallsQEMU(t *testing.T) {
 				asm.WriteString("andi. 31,1,15\nbne harness_bad\n")
 				calls := fixtureLocalCalls(t, string(out), "main."+fn)
 				if fn == "largeFrame" {
-					var stackcheck, morestack bool
+					// The grow path is still a call, but the *guard* is not: it is an
+					// inline load of g->stackguard0 through the g register plus two
+					// unsigned compares (bead goppc-h890). lwz r4,8(r30) is the exact
+					// word 0x809e0008 (opcode 32<<26 | RT=4<<21 | RA=30<<16 | D=8), so
+					// the comparison is unmasked -- RT is part of what is being pinned.
+					var guardLoad, morestack, stackcheck bool
+					for _, w := range words {
+						guardLoad = guardLoad || w == 0x809e0008
+					}
 					for _, target := range calls {
 						stackcheck = stackcheck || target == "runtime.stackcheck"
 						morestack = morestack || target == "runtime.morestack"
 					}
-					if !stackcheck || !morestack {
-						t.Fatalf("large-frame compile omitted ABI0 stack-growth calls: stackcheck=%v morestack=%v", stackcheck, morestack)
+					if stackcheck {
+						t.Fatalf("large-frame prologue calls runtime.stackcheck again: a branch-and-link before the frame is established makes the PC it returns to fatal for the unwinder")
+					}
+					if !guardLoad || !morestack {
+						t.Fatalf("large-frame compile lost the stack-growth path: inlineGuard=%v morestack=%v", guardLoad, morestack)
 					}
 				}
 				for i, w := range words {

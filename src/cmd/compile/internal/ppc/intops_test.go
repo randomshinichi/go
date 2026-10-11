@@ -229,7 +229,15 @@ func TestIntegerAndMemoryQEMU(t *testing.T) {
 	run := func(name, entry, setup, check string, mutant string, want int) {
 		t.Run(name, func(t *testing.T) {
 			var a strings.Builder
-			a.WriteString("clrrwi 1,1,4\naddi 1,1,-4096\nmr 2,1\nli 0,0\nlis 3,0x1357\nori 3,3,0x9bdf\nstw 3,2044(1)\nstw 3,-1024(1)\n")
+			// R30 is the port's g register (cmd/internal/obj/ppc/regs.go: REGG = REG_R30),
+			// and the linker-inserted prologue guard now reads g->stackguard0 inline. A
+			// harness that executes compiler-emitted function bodies therefore has to
+			// model it: under the old shape g was only touched inside the stubbed
+			// `bl fn_stackcheck`, so leaving R30 unmapped was harmless. The fake g goes in
+			// the reserved caller block, the same choice wb_test.go already makes
+			// (`addi 30,1,1600`), and its guard word is 0 -- the smallest possible bound,
+			// so the inline guard never asks to grow and the stubs stay unreached.
+			a.WriteString("clrrwi 1,1,4\naddi 1,1,-4096\nmr 2,1\naddi 30,1,1600\nli 0,0\nstw 0,8(30)\nlis 3,0x1357\nori 3,3,0x9bdf\nstw 3,2044(1)\nstw 3,-1024(1)\n")
 			a.WriteString(setup)
 			a.WriteString("bl fn_entry\nharness_after:\ncmpw 1,2\nbne harness_bad\n")
 			a.WriteString(check)
