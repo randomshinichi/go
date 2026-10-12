@@ -18,6 +18,9 @@ TEXT runtime·libc_error_trampoline(SB), NOSPLIT, $8-0
 // libcCallInfo. Darwin ppc passes eight words in R3-R10; the ninth and later
 // words are at SP+56, above the eight-word home area. All stack argument words
 // are copied in host (big-endian) word order.
+//
+// R20 is asmcgocall's stack-switch flag and is still live when this function
+// returns to it, so it must not be written here. R14-R20 are asmcgocall's.
 TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $8-0
 	OR	R16, R3, R3			// libcCallInfo
 	OR	R15, R1, R1			// frame SP for restoration
@@ -39,10 +42,10 @@ TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $8-0
 	STW	R15, 0(R1)
 
 	// Copy args[8:n] to SP+56. Both source and destination are 4-byte words.
-	ADDI	R20, R18, $-8
+	ADDI	R27, R18, $-8
 	ADDI	R21, R0, $0
 copyargs:
-	CMPW	R21, R20
+	CMPW	R21, R27
 	BC	12, 1, loadregs			// index >= count
 	BC	12, 2, loadregs
 	ADD	R22, R21, R21			// index * 4
