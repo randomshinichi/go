@@ -178,8 +178,8 @@ func TestGoStackCallsQEMU(t *testing.T) {
 							fmt.Fprintf(&asm, "bl fn_%s\n", strings.TrimPrefix(target, "main."))
 						}
 					} else {
-						if tc.mutant && w == 0x83e10008 {
-							w = 0x83e10004 // restore LR from reserved CR slot, not LR
+						if tc.mutant && w>>26 == 32 && (w>>21)&31 == 31 && i+1 < len(words) && words[i+1] == 0x7fe803a6 {
+							w -= 4 // restore LR from reserved CR slot, not LR
 							mutated++
 						}
 						fmt.Fprintf(&asm, ".long 0x%08x\n", w)

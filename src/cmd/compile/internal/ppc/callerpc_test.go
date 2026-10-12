@@ -78,7 +78,9 @@ func framePC() uintptr { other(); return GetCallerPC() }
 					}
 					a.WriteString("bl other\n")
 				} else {
-					if tc.mutant && w&0xfc1fffff == 0x80010028 {
+					// Mutate GetCallerPC's result load, not the epilogue's
+					// now-identical saved-LR offset into reserved R31.
+					if tc.mutant && w&0xfc1fffff == 0x80010028 && (w>>21)&31 != 31 {
 						w -= 4
 						changed++
 					} // allocated32 + caller LR8 -> reserved CR4

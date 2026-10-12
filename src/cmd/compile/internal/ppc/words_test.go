@@ -105,9 +105,9 @@ var wordRecipes = []struct {
 	li 0,0
 	stwu 1,-32(1)
 	bl main.callee
-	addi 1,1,32
-	lwz 31,8(1)
+	lwz 31,40(1)
 	mtlr 31
+	addi 1,1,32
 	blr
 `},
 	// 64-bit add: addc on the low words leaves the carry in XER[CA], adde on the
