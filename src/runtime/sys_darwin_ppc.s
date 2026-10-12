@@ -15,8 +15,9 @@ TEXT runtime·libc_error_trampoline(SB), NOSPLIT, $8-0
 	RET
 
 // syscallN_trampoline invokes a C function with uintptr arguments in a
-// libcCallInfo. Darwin ppc passes eight words in R3-R10 and the rest at
-// SP+24. All stack argument words are copied in host (big-endian) word order.
+// libcCallInfo. Darwin ppc passes eight words in R3-R10; the ninth and later
+// words are at SP+56, above the eight-word home area. All stack argument words
+// are copied in host (big-endian) word order.
 TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $8-0
 	OR	R16, R3, R3			// libcCallInfo
 	OR	R15, R1, R1			// frame SP for restoration
@@ -26,17 +27,18 @@ TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $8-0
 	BC	12, 2, loadregs			// exactly eight arguments
 	BC	12, 0, loadregs			// fewer than eight
 
-	// Reserve linkage plus stack args, rounded to 16 bytes, below our frame.
+	// Reserve a new frame of 24 + 4*n bytes (linkage, the eight-word home
+	// area, words nine and up) rounded up to 16 bytes, below our frame.
 	ADDI	R19, R18, $-8			// stack argument count
 	ADD	R19, R19, R19			// words to bytes
 	ADD	R19, R19, R19
-	ADDI	R19, R19, $39			// 24-byte linkage + args + alignment
+	ADDI	R19, R19, $71			// 24 linkage + 32 home + args + 15 alignment
 	ADDI	R26, R0, $-16
 	AND	R19, R19, R26			// round down to 16-byte boundary
 	SUBF	R1, R19, R1
 	STW	R15, 0(R1)
 
-	// Copy args[8:n] to SP+24. Both source and destination are 4-byte words.
+	// Copy args[8:n] to SP+56. Both source and destination are 4-byte words.
 	ADDI	R20, R18, $-8
 	ADDI	R21, R0, $0
 copyargs:
@@ -48,7 +50,7 @@ copyargs:
 	ADDI	R23, R17, $32			// &args[8]
 	ADD	R23, R23, R22
 	LWZ	R24, 0(R23)
-	ADDI	R25, R22, $24
+	ADDI	R25, R22, $56
 	ADD	R25, R1, R25
 	STW	R24, 0(R25)
 	ADDI	R21, R21, $1
