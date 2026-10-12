@@ -69,7 +69,7 @@ func TestGoStackFrames(t *testing.T) {
 					}
 				}
 				n := len(s.P) / 4
-				wantRet := []uint32{0x38210000 | uint32(tc.frame), 0x83e10008, 0x7fe803a6, 0x4e800020}
+				wantRet := []uint32{0x83e10000 | uint32(tc.frame+8), 0x7fe803a6, 0x38210000 | uint32(tc.frame), 0x4e800020}
 				for i, w := range wantRet {
 					if word(n-4+i) != w {
 						t.Errorf("epilogue word %d = %08x, want %08x", i, word(n-4+i), w)
@@ -211,9 +211,9 @@ func TestLargeFramePrologue(t *testing.T) {
 			if allocationSPAdj != int32(tc.frame) || restoreSPAdj != -int32(tc.frame) {
 				t.Fatalf("frame %d has stack-map deltas allocation=%d restore=%d", tc.frame, allocationSPAdj, restoreSPAdj)
 			}
-			wantTail := []obj.As{AADDI, ALWZ, AMTLR, ABLR}
+			wantTail := []obj.As{ALWZ, AMTLR, AADDI, ABLR}
 			if tc.frame > 32752 {
-				wantTail = []obj.As{AADDI, AADD, ALWZ, AMTLR, ABLR}
+				wantTail = []obj.As{AADDIS, AADDI, AADD, ALWZ, AMTLR, AADDIS, AADDI, AADD, ABLR}
 			}
 			for i := range wantTail {
 				if tail[len(tail)-len(wantTail)+i] != wantTail[i] {
