@@ -135,7 +135,7 @@ darwin_arm64)
 	mkasm="go run mkasm.go"
 	;;
 darwin_ppc)
-	mksyscall="./mksyscall.pl -darwin"
+	mksyscall="./mksyscall.pl -b32 -darwin"
 	mksysnum="./mksysnum_darwin.pl /usr/include/sys/syscall.h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	mkasm="go run mkasm.go"
