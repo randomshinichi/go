@@ -156,7 +156,12 @@ type BigStruct struct {
 
 func infoBigStruct() []byte {
 	switch runtime.GOARCH {
-	case "386", "arm", "mips", "mipsle":
+	// 32-bit targets: PtrSize 4 and RegSize 4, so the uint64 field is 4-byte
+	// aligned and the struct is 15 pointer-sized words. ppc belongs here: its
+	// obj.LinkArch has PtrSize 4 and RegSize 4 (cmd/internal/sys/arch.go
+	// ArchPPC), which is what makes uint64 align to 4 in
+	// cmd/compile/internal/types/size.go (TINT64: t.align = RegSize).
+	case "386", "arm", "mips", "mipsle", "ppc":
 		return []byte{
 			typePointer,                                                // q *int
 			typeScalar, typeScalar, typeScalar, typeScalar, typeScalar, // w byte; e [17]byte
