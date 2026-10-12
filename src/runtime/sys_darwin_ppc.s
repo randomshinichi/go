@@ -7,8 +7,27 @@
 #include "go_asm.h"
 #include "textflag.h"
 
+// Darwin ppc C-call frame contract (reference/xnu/EXTERNAL_HEADERS/architecture/
+// ppc/asm_help.h: ARG(n) = ((n-1)*4)+24 and BUILD_FRAME; reg_help.h for the GPR
+// assignment). A C call needs from its caller's frame:
+//
+//	SP+0..23   linkage: backchain, saved CR, saved LR, reserved
+//	SP+24..55  home area, eight words. The C callee stores its register
+//	           arguments r3-r10 here (a variadic function, or any function
+//	           whose parameters are address-taken or unoptimised, does), so
+//	           these bytes belong to the callee for the whole call
+//	SP+56..    argument words nine and up
+//
+// A Go frame is 24 linkage bytes plus its locals rounded up to 16, and the
+// prologue saves LR in the CALLER's linkage area (entry SP+8), which with a
+// 32-byte frame is SP+40 here: exactly home word five. That is why every
+// trampoline that calls C declares at least $32 of locals, which gives a
+// 64-byte frame with the full 32-byte home area above the linkage, and keeps
+// its own scratch (the C call's output temporaries) at SP+56, above the home
+// area, never inside it.
+//
 // libc_error_trampoline stores the address of the thread's libc errno slot.
-TEXT runtime·libc_error_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·libc_error_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R14, 0(R3)
 	BL	libc_error(SB)
 	STW	R3, 0(R14)
@@ -21,7 +40,7 @@ TEXT runtime·libc_error_trampoline(SB), NOSPLIT, $8-0
 //
 // R20 is asmcgocall's stack-switch flag and is still live when this function
 // returns to it, so it must not be written here. R14-R20 are asmcgocall's.
-TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $32-0
 	OR	R16, R3, R3			// libcCallInfo
 	OR	R15, R1, R1			// frame SP for restoration
 	LWZ	R17, libcCallInfo_args(R16)
@@ -30,8 +49,10 @@ TEXT runtime·syscallN_trampoline(SB), NOSPLIT, $8-0
 	BC	12, 2, loadregs			// exactly eight arguments
 	BC	12, 0, loadregs			// fewer than eight
 
-	// Reserve a new frame of 24 + 4*n bytes (linkage, the eight-word home
-	// area, words nine and up) rounded up to 16 bytes, below our frame.
+	// Our own frame already carries linkage plus the 32-byte home area, which
+	// is all eight or fewer words need. Beyond that, reserve a new frame of
+	// 24 + 4*n bytes (linkage, home area, words nine and up) rounded up to
+	// 16 bytes, below our frame.
 	ADDI	R19, R18, $-8			// stack argument count
 	ADD	R19, R19, R19			// words to bytes
 	ADD	R19, R19, R19
@@ -95,7 +116,7 @@ call:
 	RET
 
 // syscall_x509 calls a C function with five integer and one floating argument.
-TEXT runtime·syscall_x509(SB), NOSPLIT, $8-0
+TEXT runtime·syscall_x509(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R12, 0(R14)			// fn
 	LWZ	R3, 4(R14)			// a1
@@ -109,46 +130,46 @@ TEXT runtime·syscall_x509(SB), NOSPLIT, $8-0
 	STW	R3, 32(R14)			// r1
 	RET
 
-TEXT runtime·pthread_attr_init_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_attr_init_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_pthread_attr_init(SB)
 	RET
 
-TEXT runtime·pthread_attr_getstacksize_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_attr_getstacksize_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_pthread_attr_getstacksize(SB)
 	RET
 
-TEXT runtime·pthread_attr_setdetachstate_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_attr_setdetachstate_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_pthread_attr_setdetachstate(SB)
 	RET
 
-TEXT runtime·pthread_create_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_create_trampoline(SB), NOSPLIT, $40-0
 	OR	R14, R3, R3
 	LWZ	R4, 0(R14)			// attr
 	LWZ	R5, 4(R14)			// start
 	LWZ	R6, 8(R14)			// arg
-	ADDI	R3, R1, $24			// pthread_t temporary
+	ADDI	R3, R1, $56			// pthread_t temporary, above the home area
 	BL	libc_pthread_create(SB)
 	RET
 
-TEXT runtime·raise_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·raise_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_raise(SB)
 	RET
 
-TEXT runtime·pthread_self_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_self_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	BL	libc_pthread_self(SB)
 	STW	R3, 0(R14)
 	RET
 
-TEXT runtime·pthread_kill_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_kill_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)			// signal
 	LWZ	R3, 0(R14)			// pthread
@@ -159,7 +180,7 @@ TEXT runtime·pthread_kill_trampoline(SB), NOSPLIT, $8-0
 TEXT runtime·osinit_hack_trampoline(SB), NOSPLIT, $0-0
 	RET
 
-TEXT runtime·mmap_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·mmap_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R3, 0(R14)			// addr
 	LWZ	R4, 4(R14)			// length
@@ -183,14 +204,14 @@ mmaperr:
 	STW	R4, 28(R14)
 	RET
 
-TEXT runtime·munmap_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·munmap_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_munmap(SB)
 	RET
 
-TEXT runtime·madvise_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·madvise_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -198,7 +219,7 @@ TEXT runtime·madvise_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_madvise(SB)
 	RET
 
-TEXT runtime·msync_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·msync_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -206,14 +227,14 @@ TEXT runtime·msync_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_msync(SB)
 	RET
 
-TEXT runtime·mlock_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·mlock_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_mlock(SB)
 	RET
 
-TEXT runtime·read_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·read_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)			// buffer
 	LWZ	R5, 8(R14)			// count
@@ -228,7 +249,7 @@ readerr:
 	NEG	R3, R3
 	RET
 
-TEXT runtime·pipe_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pipe_trampoline(SB), NOSPLIT, $32-0
 	BL	libc_pipe(SB)
 	CMPWI	R3, $0
 	BC	12, 2, pipeok
@@ -239,7 +260,7 @@ TEXT runtime·pipe_trampoline(SB), NOSPLIT, $8-0
 pipeok:
 	RET
 
-TEXT runtime·close_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·close_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_close(SB)
 	CMPWI	R3, $-1
@@ -251,7 +272,7 @@ closeerr:
 	NEG	R3, R3
 	RET
 
-TEXT runtime·exit_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·exit_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_exit(SB)
 	ADDI	R3, R0, $0
@@ -259,12 +280,12 @@ TEXT runtime·exit_trampoline(SB), NOSPLIT, $8-0
 	STW	R3, 0(R4)			// must not return
 	RET
 
-TEXT runtime·usleep_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·usleep_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_usleep(SB)
 	RET
 
-TEXT runtime·write_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·write_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)			// buffer
 	LWZ	R5, 8(R14)			// count
@@ -279,7 +300,7 @@ writeerr:
 	NEG	R3, R3
 	RET
 
-TEXT runtime·open_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·open_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)			// flags
 	LWZ	R5, 8(R14)			// mode
@@ -289,22 +310,22 @@ TEXT runtime·open_trampoline(SB), NOSPLIT, $8-0
 
 // nanotime_trampoline asks Leopard for its raw mach clock and timebase.
 // The 32-bit Darwin ABI returns uint64 in R3 (high word), R4 (low word).
-TEXT runtime·nanotime_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·nanotime_trampoline(SB), NOSPLIT, $40-0
 	OR	R14, R3, R3
 	BL	libc_mach_absolute_time(SB)
 	STW	R3, 0(R14)
 	STW	R4, 4(R14)
-	ADDI	R3, R1, $24
+	ADDI	R3, R1, $56			// mach_timebase_info, above the home area
 	BL	libc_mach_timebase_info(SB)
-	LWZ	R15, 24(R1)			// numer
-	LWZ	R16, 28(R1)			// denom
+	LWZ	R15, 56(R1)			// numer
+	LWZ	R16, 60(R1)			// denom
 	STW	R15, 8(R14)
 	STW	R16, 12(R14)
 	RET
 
 // walltime uses gettimeofday on Leopard: timeval matches the 32-bit
 // timespec layout here, with microseconds converted to nanoseconds in place.
-TEXT runtime·walltime_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·walltime_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	ADDI	R4, R0, $0
 	BL	libc_gettimeofday(SB)
@@ -314,7 +335,7 @@ TEXT runtime·walltime_trampoline(SB), NOSPLIT, $8-0
 	STW	R3, 4(R14)
 	RET
 
-TEXT runtime·sigaction_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·sigaction_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -322,7 +343,7 @@ TEXT runtime·sigaction_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_sigaction(SB)
 	RET
 
-TEXT runtime·sigprocmask_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·sigprocmask_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -330,19 +351,19 @@ TEXT runtime·sigprocmask_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_pthread_sigmask(SB)
 	RET
 
-TEXT runtime·sigaltstack_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·sigaltstack_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_sigaltstack(SB)
 	RET
 
-TEXT runtime·raiseproc_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·raiseproc_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_raise(SB)
 	RET
 
-TEXT runtime·setitimer_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·setitimer_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -350,7 +371,7 @@ TEXT runtime·setitimer_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_setitimer(SB)
 	RET
 
-TEXT runtime·sysctl_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·sysctl_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -361,7 +382,7 @@ TEXT runtime·sysctl_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_sysctl(SB)
 	RET
 
-TEXT runtime·sysctlbyname_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·sysctlbyname_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -371,7 +392,7 @@ TEXT runtime·sysctlbyname_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_sysctlbyname(SB)
 	RET
 
-TEXT runtime·fcntl_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·fcntl_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R3, 0(R14)			// fd
 	LWZ	R4, 4(R14)			// command
@@ -390,11 +411,11 @@ fcntlret:
 	STW	R4, 16(R14)
 	RET
 
-TEXT runtime·kqueue_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·kqueue_trampoline(SB), NOSPLIT, $32-0
 	BL	libc_kqueue(SB)
 	RET
 
-TEXT runtime·kevent_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·kevent_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -411,38 +432,38 @@ TEXT runtime·kevent_trampoline(SB), NOSPLIT, $8-0
 keventok:
 	RET
 
-TEXT runtime·pthread_mutex_init_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_mutex_init_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_pthread_mutex_init(SB)
 	RET
 
-TEXT runtime·pthread_mutex_lock_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_mutex_lock_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_pthread_mutex_lock(SB)
 	RET
 
-TEXT runtime·pthread_mutex_unlock_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_mutex_unlock_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_pthread_mutex_unlock(SB)
 	RET
 
-TEXT runtime·pthread_cond_init_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_cond_init_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_pthread_cond_init(SB)
 	RET
 
-TEXT runtime·pthread_cond_wait_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_cond_wait_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_pthread_cond_wait(SB)
 	RET
 
-TEXT runtime·pthread_cond_timedwait_relative_np_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_cond_timedwait_relative_np_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)
 	LWZ	R5, 8(R14)
@@ -450,13 +471,13 @@ TEXT runtime·pthread_cond_timedwait_relative_np_trampoline(SB), NOSPLIT, $8-0
 	BL	libc_pthread_cond_timedwait_relative_np(SB)
 	RET
 
-TEXT runtime·pthread_cond_signal_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·pthread_cond_signal_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_pthread_cond_signal(SB)
 	RET
 
 // Leopard lacks arc4random_buf; assemble the same stream from arc4random words.
-TEXT runtime·arc4random_buf_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·arc4random_buf_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R15, 4(R14)			// remaining bytes
 	ADDI	R16, R0, $0			// bytes left in current word
@@ -480,11 +501,11 @@ arc4byte:
 arc4done:
 	RET
 
-TEXT runtime·issetugid_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·issetugid_trampoline(SB), NOSPLIT, $32-0
 	BL	libc_issetugid(SB)
 	RET
 
-TEXT runtime·mach_vm_region_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·mach_vm_region_trampoline(SB), NOSPLIT, $40-0
 	OR	R14, R3, R3
 	BL	libc_task_self_trap(SB)		// task self port
 	LWZ	R4, 0(R14)			// address
@@ -492,13 +513,13 @@ TEXT runtime·mach_vm_region_trampoline(SB), NOSPLIT, $8-0
 	LWZ	R6, 8(R14)			// flavor
 	LWZ	R7, 12(R14)			// info
 	LWZ	R8, 16(R14)			// count
-	ADDI	R9, R1, $24			// object name output
+	ADDI	R9, R1, $56			// object name output, above the home area
 	ADDI	R0, R0, $0			// task_self_trap is C and clobbers R0.
-	STW	R0, 24(R1)
+	STW	R0, 56(R1)
 	BL	libc_mach_vm_region(SB)
 	RET
 
-TEXT runtime·proc_regionfilename_trampoline(SB), NOSPLIT, $8-0
+TEXT runtime·proc_regionfilename_trampoline(SB), NOSPLIT, $32-0
 	OR	R14, R3, R3
 	LWZ	R4, 4(R14)			// address high word
 	LWZ	R5, 8(R14)			// address low word
