@@ -161,7 +161,9 @@ TEXT runtime·mmap_trampoline(SB), NOSPLIT, $8-0
 	LWZ	R5, 8(R14)			// prot
 	LWZ	R6, 12(R14)			// flags
 	LWZ	R7, 16(R14)			// fd
-	LWZ	R8, 20(R14)			// offset
+	// Go's offset is uint32; libc's off_t is the 64-bit pair R8:R9.
+	ADDI	R8, R0, $0			// offset high word (zero extension)
+	LWZ	R9, 20(R14)			// offset low word
 	BL	libc_mmap(SB)
 	CMPWI	R3, $-1
 	BC	12, 2, mmaperr
