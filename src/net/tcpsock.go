@@ -118,6 +118,9 @@ type TCPConn struct {
 // If the Idle, Interval, or Count fields are zero, a default value is chosen.
 // If a field is negative, the corresponding socket-level option will be left unchanged.
 //
+// On Darwin/ppc and Darwin/ppc64 (Leopard), only Idle is configurable per socket.
+// Interval and Count are ignored, leaving the kernel's system-wide defaults in effect.
+//
 // Note that prior to Windows 10 version 1709, neither setting Idle and Interval
 // separately nor changing Count (which is usually 10) is supported.
 // Therefore, it's recommended to set both Idle and Interval to non-negative values
