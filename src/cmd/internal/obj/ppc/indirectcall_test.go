@@ -7,7 +7,9 @@ package ppc
 import (
 	"cmd/internal/obj"
 	"encoding/binary"
+	"fmt"
 	"internal/abi"
+	"strings"
 	"testing"
 )
 
@@ -48,10 +50,10 @@ func indirectCallFixture(t *testing.T, indirect bool) (*obj.Link, *obj.LSym, *ob
 // the return address as it branches, so there is no window to guard: the
 // instruction stream contains no CTR-dependent call at all.
 //
-// The load-bearing part of the change in this package is the leaf
-// classification: BLRL is register-indirect and carries no symbol, so a
-// function that calls through LR must be recognized as a call-making function
-// and given a frame and a saved LR.
+// The call pair needs no window, but the automatically inserted MFLR R0 / STW
+// prologue does: a restart must reload LR before retrying its store. The window
+// check below is load-bearing alongside leaf classification and the encoded
+// call pair. BLRL carries no symbol, but still requires a frame and saved LR.
 func TestIndirectCallUsesLinkRegister(t *testing.T) {
 	ctxt, s, text := indirectCallFixture(t, true)
 
@@ -65,9 +67,9 @@ func TestIndirectCallUsesLinkRegister(t *testing.T) {
 		if p.As == ABCTRL {
 			t.Errorf("CTR-based indirect call still emitted: %v", p)
 		}
-		if p.As == obj.APCDATA && p.From.Offset == abi.PCDATA_UnsafePoint {
-			t.Errorf("unsafe-point marker emitted; the LR form needs no unsafe window: %v", p)
-		}
+	}
+	if err := indirectCallWindowError(text); err != nil {
+		t.Error(err)
 	}
 
 	assemble(ctxt, s, nil)
@@ -83,6 +85,119 @@ func TestIndirectCallUsesLinkRegister(t *testing.T) {
 	}
 	if !pair {
 		t.Errorf("no mtlr r12 ; blrl pair in the %d encoded words", n)
+	}
+}
+
+// indirectCallWindowError checks the preprocessed NOSPLIT fixture, not the
+// compiler's pre-prologue stream. The only allowed unsafe-point markers bracket
+// the LR-save pair; the restart destination must be the MFLR itself. The shared
+// scorer models value/run-start at each instruction, not just marker presence.
+func indirectCallWindowError(text *obj.Prog) error {
+	foundMarker := false
+	for p := text.Link; p != nil; p = p.Link {
+		foundMarker = foundMarker || isUnsafePointPCDATA(p)
+	}
+	if !foundMarker {
+		return fmt.Errorf("missing LR-save unsafe-point markers")
+	}
+	v := scorePrologueWindow(text)
+	if !v.pairFound || v.linkReg != REG_R0 {
+		return fmt.Errorf("missing MFLR R0 / STW R0,8(SP) LR-save pair: %+v", v)
+	}
+	if !v.markedAtMFLR || !v.startsAtMFLR || !v.markedAtSTW {
+		return fmt.Errorf("LR-save restart must begin at MFLR and cover STW: %+v", v)
+	}
+	if !v.closed || v.width != 2*insnSize || v.worstDispl != insnSize {
+		return fmt.Errorf("LR-save restart must end immediately after STW: %+v", v)
+	}
+	markers := 0
+	for p := text.Link; p != nil; p = p.Link {
+		if isUnsafePointPCDATA(p) {
+			markers++
+			value := p.To.Offset
+			want := int64(abi.UnsafePointRestart1)
+			if markers == 2 {
+				want = abi.UnsafePointSafe
+			}
+			if markers > 2 || value != want {
+				return fmt.Errorf("unexpected unsafe-point marker %d: value %d, want %d", markers, value, want)
+			}
+			continue
+		}
+		if p.As == AMTCTR || p.As == ABCTRL {
+			return fmt.Errorf("CTR-dependent indirect call emitted")
+		}
+	}
+	// Exactly this Restart1/Safe bracket, closing after the prologue STW,
+	// leaves no unsafe window over the later MTLR/BLRL call pair.
+	if markers != 2 {
+		return fmt.Errorf("got %d unsafe-point markers, want 2", markers)
+	}
+	return nil
+}
+
+// These controls mutate fresh output from preprocess, as the epilogue controls
+// do, rather than restating an expected prologue by hand. Each must reach the
+// same checker as the load-bearing test and fail for its own defect.
+func TestIndirectCallWindowRejectsBrokenShapes(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"no-markers", "missing LR-save unsafe-point markers"},
+		{"restart-after-MFLR", "LR-save restart must begin at MFLR and cover STW"},
+		{"window-covers-call", "LR-save restart must end immediately after STW"},
+		{"wrong-link-slot", "missing MFLR R0 / STW R0,8(SP) LR-save pair"},
+		{"Restart2", "unexpected unsafe-point marker 1"},
+		{"extra-call-marker", "unexpected unsafe-point marker 3"},
+		{"CTR-call", "CTR-dependent indirect call emitted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, text := indirectCallFixture(t, true)
+			if err := indirectCallWindowError(text); err != nil {
+				t.Fatalf("unmutated fixture: %v", err)
+			}
+			open := text.Link
+			mflr, stw := open.Link, open.Link.Link
+			close := stw.Link
+			switch tc.name {
+			case "no-markers":
+				text.Link, stw.Link = mflr, close.Link
+			case "restart-after-MFLR":
+				text.Link, mflr.Link, open.Link = mflr, open, stw
+			case "window-covers-call":
+				stw.Link = close.Link
+				for p := stw; p != nil; p = p.Link {
+					if p.As == ABLRL {
+						close.Link, p.Link = p.Link, close
+						break
+					}
+				}
+			case "wrong-link-slot":
+				stw.To.Offset = 0
+			case "Restart2":
+				open.To.Offset = abi.UnsafePointRestart2
+			case "extra-call-marker":
+				for p := close; p != nil; p = p.Link {
+					if p.Link != nil && p.Link.As == AMTLR && p.Link.From.Reg == REG_R12 {
+						marker := *open
+						marker.Link, p.Link = p.Link, &marker
+						break
+					}
+				}
+			case "CTR-call":
+				for p := text.Link; p != nil; p = p.Link {
+					if p.As == AMTLR && p.From.Reg == REG_R12 {
+						p.As = AMTCTR
+					}
+					if p.As == ABLRL {
+						p.As = ABCTRL
+					}
+				}
+			}
+			err := indirectCallWindowError(text)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("broken emitted shape: got %v, want rejection %q", err, tc.want)
+			}
+			t.Logf("%s rejected: %v", tc.name, err)
+		})
 	}
 }
 
