@@ -478,8 +478,8 @@ TEXT runtime·pthread_cond_signal_trampoline(SB), NOSPLIT, $32-0
 
 // Leopard lacks arc4random_buf; assemble the same stream from arc4random words.
 TEXT runtime·arc4random_buf_trampoline(SB), NOSPLIT, $32-0
-	OR	R14, R3, R3
-	LWZ	R15, 4(R14)			// remaining bytes
+	LWZ	R15, 4(R3)			// remaining bytes
+	LWZ	R14, 0(R3)			// destination buffer
 	ADDI	R16, R0, $0			// bytes left in current word
 	ADDI	R31, R0, $8			// shift count
 arc4next:
@@ -487,7 +487,7 @@ arc4next:
 	BC	12, 0, arc4done
 	BC	12, 2, arc4done
 	CMPWI	R16, $0
-	BC	12, 2, arc4byte
+	BC	4, 2, arc4byte
 	BL	libc_arc4random(SB)
 	OR	R17, R3, R3
 	ADDI	R16, R0, $4
