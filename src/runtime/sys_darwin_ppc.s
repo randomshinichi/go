@@ -489,9 +489,11 @@ TEXT runtime·mach_vm_region_trampoline(SB), NOSPLIT, $8-0
 
 TEXT runtime·proc_regionfilename_trampoline(SB), NOSPLIT, $8-0
 	OR	R14, R3, R3
-	LWZ	R4, 4(R14)			// address
-	LWZ	R5, 8(R14)			// buffer
-	LWZ	R6, 12(R14)			// buffer size
+	LWZ	R4, 4(R14)			// address high word
+	LWZ	R5, 8(R14)			// address low word
+	LWZ	R6, 12(R14)			// buffer
+	// Go's bufSize is int64; libc takes uint32_t (the low word).
+	LWZ	R7, 20(R14)			// buffer size
 	LWZ	R3, 0(R14)			// pid
 	BL	libc_proc_regionfilename(SB)
 	RET
