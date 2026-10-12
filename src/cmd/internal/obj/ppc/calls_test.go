@@ -61,7 +61,7 @@ func TestIndirectCallAndTailFrames(t *testing.T) {
 				t.Fatalf("tail branch links or returns: %08x", word(n-1))
 			}
 			if tc.indirect {
-				want := []uint32{0x7d8803a6, 0x4e800021, 0x38210000 | uint32(tc.frame), 0x83e10008, 0x7fe803a6, 0x48000000}
+				want := []uint32{0x7d8803a6, 0x4e800021, 0x83e10000 | uint32(tc.frame+8), 0x7fe803a6, 0x38210000 | uint32(tc.frame), 0x48000000}
 				for i, w := range want {
 					if word(n-len(want)+i) != w {
 						t.Errorf("word %d = %08x want %08x", i, word(n-len(want)+i), w)
