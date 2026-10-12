@@ -21,15 +21,18 @@ package os_test
 //     even transiently. Comparing Getwd before and after an operation is blind
 //     to a swap that is restored before the operation returns -- which is the
 //     shape a cwd-based fallback would have, and the opposite of what the
-//     comment on TestRootNotSupportedDarwinPPC promises. The detector here is
-//     the chdir itself, recorded where package os performs it, so the attempt is
-//     what is asserted, not its endpoints. There is no polling: a poller would
-//     race with a swap this short, and a race is not a detector.
+//     comment on TestRootNotSupportedDarwinPPC promises. TestRootConfinedOps-
+//     NoChdirDarwinPPC records the chdir where package os performs it, and
+//     TestRootConfinedOpsNoChdirSyscallDarwinPPC records it one layer lower, at
+//     the libc functions syscall.Chdir/Fchdir are imported from, so neither the
+//     os calls nor a raw syscall can hide a swap. There is no polling: a poller
+//     would race with a swap this short, and a race is not a detector.
 //
 // Neither test claims Root works, or makes it work. Both are instruments for
 // refusals that are believed correct today.
 
 import (
+	"bytes"
 	"errors"
 	"internal/testlog"
 	"io/fs"
@@ -240,6 +243,106 @@ func sameDir(t *testing.T, a, b string) bool {
 		return false
 	}
 	return os.SameFile(ai, bi)
+}
+
+// chdirInterposerLogEnv names the file the libc/syscall-boundary interposer
+// writes to (probes/ppc-mac/chdir-interpose.c). TestRootConfinedOpsNoChdir-
+// SyscallDarwinPPC skips without it, like the close-on-exec child helper in
+// sys_darwin_ppc_test.go skips without its own variable.
+const chdirInterposerLogEnv = "PPC32_CHDIR_LOG"
+
+// chdirInterposerEnv returns the interposer's log path, or "" when it is not
+// loaded.
+func chdirInterposerLog() string {
+	return os.Getenv(chdirInterposerLogEnv)
+}
+
+// TestRootConfinedOpsNoChdirSyscallDarwinPPC is the requirement of
+// TestRootConfinedOpsNoChdirDarwinPPC seen from below package os. The recorder
+// there is internal/testlog, which sees the calls package os makes; an operation
+// that changed directory with syscall.Chdir or syscall.Fchdir directly never
+// reaches it. This one interposes the libc functions those calls are imported
+// from, so every caller in the process is covered, and it asserts the attempt's
+// own path rather than a cwd read before and after.
+//
+// Probe the instrument before believing it: the liveness control at the end uses
+// a raw syscall.Chdir/Fchdir pair precisely because the other instrument cannot
+// see it. If those do not appear here, the interposer is not loaded and this test
+// would pass for the wrong reason.
+func TestRootConfinedOpsNoChdirSyscallDarwinPPC(t *testing.T) {
+	logPath := chdirInterposerLog()
+	if logPath == "" {
+		t.Skipf("needs the chdir interposer: build probes/ppc-mac/chdir-interpose.c on the target and run with DYLD_INSERT_LIBRARIES=<dylib> %s=<file>", chdirInterposerLogEnv)
+	}
+	clearLog := func() {
+		t.Helper()
+		if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+			t.Fatalf("clearing %s: %v", logPath, err)
+		}
+	}
+	showsDir := func(want string) bool {
+		t.Helper()
+		b, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("reading %s: %v", logPath, err)
+		}
+		return bytes.Contains(b, []byte("chdir "+want+"\n"))
+	}
+
+	rootDir, cwd := t.TempDir(), t.TempDir()
+	confinedTree(t, rootDir, "root")
+	confinedTree(t, cwd, "cwd")
+	t.Chdir(cwd)
+
+	r, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatalf("OpenRoot: %v", err)
+	}
+	defer r.Close()
+
+	for name, op := range rootOpsDarwinPPC(r) {
+		clearLog()
+		err := op()
+		b, rerr := os.ReadFile(logPath)
+		if rerr != nil {
+			t.Fatalf("reading %s: %v", logPath, rerr)
+		}
+		if !errors.Is(err, rootRefusalDarwinPPC(name)) {
+			t.Errorf("Root.%s = %v; want an error wrapping %v", name, err, rootRefusalDarwinPPC(name))
+		}
+		if len(bytes.TrimSpace(b)) != 0 {
+			t.Errorf("Root.%s reached the working directory through the syscall boundary: %q; a confined operation must be refused without changing directory, whether or not it changes back", name, bytes.TrimSpace(b))
+		}
+	}
+
+	// Liveness: the two calls the os-level recorder cannot see. Both must be
+	// recorded, and the chdir must be recorded as the path asked for.
+	clearLog()
+	if err := syscall.Chdir(rootDir); err != nil {
+		t.Fatalf("syscall.Chdir(%q): %v", rootDir, err)
+	}
+	f, err := os.Open(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = syscall.Fchdir(int(f.Fd()))
+	f.Close()
+	if err != nil {
+		t.Fatalf("syscall.Fchdir: %v", err)
+	}
+	if !showsDir(rootDir) {
+		t.Fatalf("the chdir interposer is not live: syscall.Chdir(%q) was not recorded in %s", rootDir, logPath)
+	}
+	b, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte("fchdir ")) {
+		t.Fatalf("the chdir interposer did not record syscall.Fchdir: %q", b)
+	}
+	if err := syscall.Chdir(cwd); err != nil {
+		t.Fatalf("syscall.Chdir(%q): %v", cwd, err)
+	}
 }
 
 // checkInRootRefusal requires exactly the refusal statat_darwin_ppc.go makes for
