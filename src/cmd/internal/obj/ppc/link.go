@@ -308,6 +308,33 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			continue
 		}
 		// Rewrite in place so branches to a return also execute its epilogue.
+		// Go ppc32 teardown contract: restore the entry LR BEFORE releasing SP.
+		// At the first PC whose PCSP delta is zero, LR must already name the
+		// caller, not this function's last call. asyncPreempt resumes through
+		// CTR and preserves that interrupted LR; popping first exposes a fake
+		// frameless caller to the unwinder. Unsafe marking would only exclude
+		// preemption, not repair the state seen by SIGPROF, and restarting a
+		// completed pop would move SP twice. Keep the frame until MTLR commits.
+		if !leaf {
+			if frame <= 32752 {
+				p.As, p.From, p.To = ALWZ, mem(frame+8), reg(REG_R31)
+				p.Reg = 0
+			} else {
+				// Only R31 is reserved scratch. Compute caller-SP in it, then
+				// consume it loading LR. Rematerialize the release constant below
+				// rather than clobbering an allocatable register across a tail call.
+				p.As = AADDIS
+				p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: (frame + 0x8000) >> 16}
+				p.Reg, p.To = REG_R0, reg(REG_R31)
+				p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: int64(int16(frame))}, reg(REG_R31))
+				p.Reg = REG_R31
+				p = appendOp(p, AADD, reg(REGSP), reg(REG_R31))
+				p.Reg = REG_R31
+				p = appendOp(p, ALWZ, obj.Addr{Type: obj.TYPE_MEM, Reg: REG_R31, Offset: 8}, reg(REG_R31))
+			}
+			p = appendOp(p, AMTLR, reg(REG_R31), obj.Addr{})
+			p = obj.Appendp(p, newprog) // filled with the first SP-restore op below
+		}
 		var stackAdj *obj.Prog
 		if frame <= 32752 {
 			p.As, p.From, p.To = AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REGSP)
@@ -328,10 +355,6 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = q
 		}
 		stackAdj.Spadj = -int32(frame)
-		if !leaf {
-			p = appendOp(p, ALWZ, mem(8), reg(REG_R31))
-			p = appendOp(p, AMTLR, reg(REG_R31), obj.Addr{})
-		}
 		p = appendOp(p, retAs, obj.Addr{}, target)
 		// Balance the linear PC/SP table after the return (ppc64 does likewise).
 		p.Spadj = int32(frame)
