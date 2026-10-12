@@ -398,6 +398,12 @@ TEXT runtime·kevent_trampoline(SB), NOSPLIT, $8-0
 	LWZ	R8, 20(R14)
 	LWZ	R3, 0(R14)
 	BL	libc_kevent(SB)
+	CMPWI	R3, $-1
+	BC	4, 2, keventok
+	BL	libc_error(SB)
+	LWZ	R3, 0(R3)			// errno
+	NEG	R3, R3				// caller wants it as a negative error code
+keventok:
 	RET
 
 TEXT runtime·pthread_mutex_init_trampoline(SB), NOSPLIT, $8-0
