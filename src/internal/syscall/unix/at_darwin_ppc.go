@@ -109,6 +109,17 @@ func Fstatat(dirfd int, path string, stat *syscall.Stat_t, flags int) error {
 //go:linkname fstatat syscall.fstatat
 func fstatat(dirfd int, path string, stat *syscall.Stat_t, flags int) error
 
+// LstatatByPath is lstat of name inside the directory open as dirfd, done by
+// resolving dirfd to a path (syscall.lstatatByPath, which documents the
+// measurement it rests on and what it costs). It is the one exception to the
+// ENOTSUP rule and exists only for (*os.File).Readdir. Fstatat above keeps
+// refusing a real dirfd, so os.Root's lstat of an entry stays ENOTSUP: Root's
+// whole purpose is the race protection this path form gives up. Mirrors
+// at_darwin_ppc64.go.
+//
+//go:linkname LstatatByPath syscall.lstatatByPath
+func LstatatByPath(dirfd int, name string, stat *syscall.Stat_t) error
+
 // lchmod changes the link itself for AT_SYMLINK_NOFOLLOW.
 //
 //go:linkname lchmod syscall.lchmod

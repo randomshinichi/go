@@ -53,6 +53,7 @@ func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
 // used by internal/syscall/unix
 //
 //go:linkname lchmod
+//go:linkname lstatatByPath
 
 // Leopard does not implement the POSIX *at calls. Preserve the path-based
 // fallback contract and return ENOTSUP for real directory descriptors.
@@ -68,6 +69,48 @@ func fstatat(fd int, path string, stat *Stat_t, flags int) error {
 		return Lstat(path, stat)
 	}
 	return Stat(path, stat)
+}
+
+// lstatatByPath is the one *at operation implemented for a real directory
+// descriptor: it resolves the directory's current path (fcntl F_GETPATH, which
+// Leopard has — measured F_GETPATH=50 in syscall/testdata/darwin_ppc32/
+// constants.txt) and then lstats dirpath + "/" + name. It exists for
+// (*os.File).Readdir, which stats every entry of a directory it has open.
+//
+// SECURITY-RELEVANT DIVERGENCE (identical trade to darwin/ppc64, which this
+// mirrors): it looks the path up and then uses it, so it loses the
+// descriptor-based call's symlink-race (TOCTOU) protection. If the directory
+// is renamed/removed/replaced between F_GETPATH and the lstat, the result
+// describes whatever is at the old path now. It only ever reads; nothing that
+// writes is given this form (they stay ENOTSUP for a real descriptor, and
+// os.Root is refused). A very deep path that overflows MAXPATHLEN fails here
+// with ENAMETOOLONG where the descriptor version would not.
+//
+// name must be a single directory-entry name: empty or containing '/' is
+// refused so the call cannot be steered out of the directory. With _AT_FDCWD
+// it is plain lstat.
+func lstatatByPath(dirfd int, name string, stat *Stat_t) error {
+	if dirfd == _AT_FDCWD {
+		return Lstat(name, stat)
+	}
+	if name == "" {
+		return ENOENT
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' {
+			return EINVAL
+		}
+	}
+	const maxPathLen = 1024 // MAXPATHLEN, the buffer size F_GETPATH requires
+	var buf [maxPathLen]byte
+	if _, err := fcntlPtr(dirfd, F_GETPATH, unsafe.Pointer(&buf[0])); err != nil {
+		return err
+	}
+	n := clen(buf[:])
+	if n == 0 {
+		return ENOENT
+	}
+	return Lstat(string(buf[:n])+"/"+name, stat)
 }
 
 func utimensat(dirfd int, path string, times *[2]Timespec, flags int) error {
