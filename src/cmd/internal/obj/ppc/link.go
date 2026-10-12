@@ -443,11 +443,20 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		pc := int64(0)
 		for q := p.Link; q != nil; q = q.Link {
 			q.Pc = pc
-			if q.As != obj.ATEXT && q.As != obj.ANOP && q.As != obj.AFUNCDATA && q.As != obj.APCDATA {
+			switch q.As {
+			case obj.ACALL, ABL, obj.AJMP, AB, ABC:
+				// Branches are one word, but cannot be encoded until all
+				// target PCs are assigned and conditional branches relaxed.
 				pc += 4
-				if isSymbolAddress(q) {
-					pc += 4 // addis + addi, not one addi
+			default:
+				// Use the encoder's actual width: large immediates and stack
+				// operands expand to multiple words, not just symbol addresses.
+				// These PCs also determine relocations and all pc-value tables.
+				w, ok := encodeProg(ctxt, q, autosize)
+				if !ok {
+					return
 				}
+				pc += int64(4 * len(w))
 			}
 		}
 		var relaxed bool
