@@ -170,6 +170,9 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p.Reg = scratch
 		return p
 	}
+	// Capture the compiler's entry intent BEFORE splicing, while the head of the
+	// list is still untouched. Both unsafe windows below close back to this value.
+	restore := unsafePointAtEntry(text)
 	p := text
 	if !leaf && !s.NoFrame() {
 		// The return address lives in R0 for exactly two instructions: the MFLR that
@@ -201,9 +204,6 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Assembly functions also receive this prologue but are never preempted
 		// (isAsyncSafePoint returns false for FuncFlagAsm before it ever reads the
 		// restart case), so the markers there are inert, not harmful.
-		// Capture the compiler's entry intent BEFORE splicing, while the head of the
-		// list is still untouched.
-		restore := unsafePointAtEntry(text)
 		p = appendUnsafePoint(p, abi.UnsafePointRestart1)
 		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
 		// Save in the caller's linkage area BEFORE moving SP, as measured.
@@ -213,7 +213,42 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
 		p.Reg = REG_R0
 	}
-	if frame != 0 && !s.NoSplit() {
+	// splitCheck is true when the stack-guard loop below is emitted. It also decides
+	// whether the unsafe window around that loop and the frame allocation is opened
+	// and closed again after the allocation.
+	splitCheck := frame != 0 && !s.NoSplit()
+	if splitCheck {
+		// From here until the STWU/STWUX has run, this function has no frame (its
+		// PCSP delta is 0) AND its link register is not the caller's: the BL to
+		// runtime.stackcheck (and to runtime.morestack on the slow path) overwrote
+		// LR with an address inside this very function, and the caller's return
+		// address is only in the save slot the prologue just wrote. The unwinder
+		// reads LR from the register for a frameless innermost PC, so a goroutine
+		// stopped anywhere in that run -- including the loop's own re-execution
+		// after morestack returns -- would unwind through a bogus caller. At the PC
+		// right after the BL, PC == LR and SP == FP, which is the unconditional
+		// "traceback stuck" throw (runtime/traceback.go). ppc64 avoids the shape
+		// entirely by comparing the guard inline, and obj/ppc64/obj9.go marks its
+		// bound check unsafe (issue #35470, a different reason: a resumed
+		// preemption would call morestack needlessly). Marking this run unsafe
+		// keeps these PCs out of isAsyncSafePoint, so no preemption lands in them
+		// and no GC stack scan has to unwind from them.
+		//
+		// This does NOT cover a SIGPROF landing in the run: profiling never asks
+		// whether a PC is a safe point. The repair for that half is on the runtime
+		// side, in runtime.stackcheck, which should return with LR reloaded from the
+		// save slot (8(SP)) so that LR is the caller's at every PC of this run; the
+		// traceback is not special-cased because nothing in the tables tells it a
+		// frameless PC is in this window rather than in a frameless leaf. The
+		// morestack path already does this: runtime.morestack saves R5, the slot
+		// value, as the goroutine's gobuf_lr. Decision recorded in bead goppc-1ye4.
+		//
+		// The window closes after the STWU/STWUX below, whose own PC is still
+		// frameless with a stale LR; after it the frame exists and the unwinder
+		// reads LR from the save slot. Zero code bytes are added.
+		p = appendUnsafePoint(p, abi.UnsafePointUnsafe)
+	}
+	if splitCheck {
 		// The guard check is a LOOP, not a straight line. runtime.newstack can
 		// return WITHOUT growing the stack: its preemption path may put the
 		// goroutine back on a stack the shrinker measured while this frame was
@@ -261,6 +296,9 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p.Reg = REG_R31
 		}
 		p.Spadj = int32(frame)
+		if splitCheck {
+			p = appendUnsafePoint(p, restore)
+		}
 	}
 	for p := text.Link; p != nil; p = p.Link {
 		if p.As == obj.AGETCALLERPC {
