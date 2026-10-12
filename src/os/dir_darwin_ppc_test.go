@@ -15,10 +15,14 @@ package os_test
 // (statat_darwin_ppc.go -> syscall.lstatatByPath). The process working directory
 // is the one wrong answer that would still look plausible: it exists, and it can
 // hold entries of the same names. So the working directory here contains "f"
-// with other contents and a symlink "link" pointing elsewhere, and the
-// assertions are on content (5 bytes, not 1) and on identity, not merely on the
-// names being findable. A resolution that fell back to the working directory
-// would produce wrong FileInfos rather than a missing-file error.
+// with other contents, a "sub" that is a file rather than a directory, and a
+// symlink "link" pointing elsewhere: every name of the directory under test
+// exists in the working directory with a plausible but wrong answer. The
+// assertions are then on content (5 bytes, not 7) and on identity, so a
+// resolution that fell back to the working directory is reported as a wrong
+// FileInfo rather than as a missing-file error -- the missing-file error is
+// what this test would give by accident if the decoy were incomplete, and by
+// accident is not a detector.
 //
 // TestReaddirStatDarwinPPC already covers entry-by-entry agreement with Lstat
 // for a directory whose entries do not exist in the working directory; this one
@@ -45,6 +49,9 @@ func TestReaddirDecoyCwdDarwinPPC(t *testing.T) {
 	if err := os.Symlink("elsewhere", filepath.Join(cwd, "link")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(cwd, "sub"), []byte("decoy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -67,13 +74,13 @@ func TestReaddirDecoyCwdDarwinPPC(t *testing.T) {
 		t.Fatalf("Readdir returned %d entries (%v); want f, link, sub", len(got), got)
 	}
 	if fi := got["f"]; fi == nil || !fi.Mode().IsRegular() || fi.Size() != 5 {
-		t.Errorf("f = %v; want the 5-byte regular file in %s, not the 1-byte file of the same name in the working directory %s", fi, dir, cwd)
+		t.Errorf("f = %v; want the 5-byte regular file in %s, not the decoy of the same name in the working directory %s", fi, dir, cwd)
 	}
 	if fi := got["link"]; fi == nil || fi.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("link = %v; want the symbolic link itself, not its target", fi)
 	}
 	if fi := got["sub"]; fi == nil || !fi.IsDir() {
-		t.Errorf("sub = %v; want a directory", fi)
+		t.Errorf("sub = %v; want the directory %s/sub, not the decoy file of the same name in the working directory %s", fi, dir, cwd)
 	}
 	for name, fi := range got {
 		want, err := os.Lstat(filepath.Join(dir, name))
