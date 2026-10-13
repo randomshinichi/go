@@ -100,6 +100,37 @@ func (op Op) isLoweredGetClosurePtr() bool {
 	return false
 }
 
+// killsVar reports whether v is a value that kills the liveness of n, as
+// liveness.valueEffects counts it (liveness/plive.go:284): a VarDef of n kills
+// it, and so does a symbolic write to n when a single store covers all of n's
+// type. Aggregates can be written field by field, and liveness deliberately
+// does not count such a write as a kill, so fullWrite must answer the same way
+// or the scheduler would order an address after a write that leaves the
+// result live before its definition.
+func killsVar(v *Value, n *ir.Name) bool {
+	if v.Aux != n {
+		return false
+	}
+	if v.Op == OpVarDef {
+		return true
+	}
+	return v.Op.SymEffect()&SymWrite != 0 && fullWrite(n.Type())
+}
+
+// fullWrite reports whether one store to a value of type t covers all of t.
+// liveness.isfat (liveness/plive.go:1524) is the authority here; this is
+// deliberately narrower than that, so that a disagreement can only make the
+// scheduler call a kill something else and fall back to ordering an address
+// after the OpVarDef -- which is the constraint it would have added before
+// kills were considered at all.
+func fullWrite(t *types.Type) bool {
+	switch t.Kind() {
+	case types.TSTRUCT, types.TARRAY, types.TSLICE, types.TSTRING, types.TINTER:
+		return false
+	}
+	return true
+}
+
 // Schedule the Values in each Block. After this phase returns, the
 // order of b.Values matters and is the order in which those values
 // will appear in the assembly output. For now it generates a
@@ -278,48 +309,63 @@ func schedule(f *Func) {
 			}
 		}
 
-		// In the entry block, force the first VarDef of a result parameter
-		// (ir.PPARAMOUT) to be scheduled before every value that computes the
-		// address of that result.
+		// In the entry block, force the address of a result parameter
+		// (ir.PPARAMOUT) to be scheduled after the value that first kills that
+		// result.
 		//
 		// The address of a result is built from the function's initial memory
 		// (buildssa, decladdrs) rather than from the memory after the VarDef
-		// that zeroResults emits, so nothing else orders the two. Liveness
-		// counts taking an address as a use (liveness.affectedVar), so if the
-		// scheduler puts the address above its own VarDef, the result is live
-		// on entry to the function -- where liveness.prologue only accepts
-		// ir.PPARAM (liveness/plive.go:855-863). Such a function does not
-		// compile today, so satisfying this edge cannot change the schedule of
-		// a function that does.
+		// that zeroResults emits, so no edge otherwise orders the two. Liveness
+		// counts taking an address as a use (liveness.affectedVar), and
+		// liveness.prologue rejects a variable that is live on entry to a
+		// function unless it is an ir.PPARAM (liveness/plive.go:855-863), so an
+		// address scheduled ahead of every definition of its result is a
+		// compiler error: the address has to follow the first kill of the
+		// result.
+		//
+		// That kill is the OpVarDef only when nothing else kills the result
+		// first. A store that covers the result's type is a kill of it too
+		// (liveness.valueEffects, plive.go:316), so a result that such a store
+		// initializes is already live there and the address may follow the store
+		// instead. Requiring the later OpVarDef as well is not satisfiable in
+		// that case: the store sits on the VarDef's memory chain ahead of it,
+		// while the load-before-store edge above requires the load of the result
+		// to precede the VarDef, and the block then has no schedule at all.
 		if b == f.Entry {
+			var done []*ir.Name
 			for _, d := range b.Values {
 				if d.Op != OpVarDef {
 					continue
 				}
-				if n, ok := d.Aux.(*ir.Name); !ok || n.Class != ir.PPARAMOUT {
+				n, ok := d.Aux.(*ir.Name)
+				if !ok || n.Class != ir.PPARAMOUT || slices.Contains(done, n) {
 					continue
 				}
-				// Only the first VarDef of the result is constrained: a later
-				// one redefines a result that has legitimately been used.
-				// Walk the block's memory chain back to InitMem; if the walk
-				// cannot be completed, add no edge.
-				first := true
-				for m := d; first; {
+				done = append(done, n)
+				// Walk the block's memory chain back from the VarDef and
+				// remember the earliest value that kills the result. If the
+				// chain does not lead to InitMem, this block is not a shape
+				// this constraint understands; add no edge.
+				kill := d
+				for m := d; ; {
 					m = m.MemoryArg()
 					if m == nil || m.Block != b {
-						first = false
-					} else if m.Op == OpInitMem {
+						kill = nil
 						break
-					} else if m.Op == OpVarDef && m.Aux == d.Aux {
-						first = false
+					}
+					if m.Op == OpInitMem {
+						break
+					}
+					if killsVar(m, n) {
+						kill = m
 					}
 				}
-				if !first {
+				if kill == nil {
 					continue
 				}
 				for _, u := range b.Values {
-					if u.Op.SymEffect()&SymAddr != 0 && u.Aux == d.Aux {
-						edges = append(edges, edge{d, u})
+					if u.Op.SymEffect()&SymAddr != 0 && u.Aux == n {
+						edges = append(edges, edge{kill, u})
 					}
 				}
 			}
