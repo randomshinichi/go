@@ -831,6 +831,11 @@ func SetMutexProfileFraction(rate int) int {
 	}
 	old := mutexprofilerate
 	atomic.Store64(&mutexprofilerate, uint64(rate))
+	// Keep ppc32's 32-bit "profiling on" mirror in step, and store the rate
+	// first: mutexSampleContention tests the flag before it reads the rate,
+	// so a reader that sees the flag set must not find the old rate. Off ppc
+	// there is nothing to maintain. See mutexprofiling_ppc.go.
+	setMutexProfiling(rate > 0)
 	return int(old)
 }
 
