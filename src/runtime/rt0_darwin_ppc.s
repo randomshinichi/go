@@ -32,8 +32,10 @@ TEXT _rt0_ppc_darwin(SB), NOSPLIT|NOFRAME, $0-0
 	// The AND is written with R1 in BOTH the destination and source-A fields, so
 	// it computes R1 & R6 into R1 regardless of how this backend orders the two
 	// register operands — deliberate, because a boot-path instruction must not
-	// depend on an operand-order convention. Mirrors rt0_darwin_ppc64.s's RLDCR
-	// mask. Effect confirmed on hardware at runtime.schedinit (gdb), not just assembled.
+	// depend on an operand-order convention. Mirrors rt0_darwin_ppc64.s's RLDCR mask, and the
+	// emitted word was checked against that mask: INSPECTED, not measured in a live schedinit.
+	// An earlier version of this comment claimed a schedinit register measurement; that
+	// measurement is recorded as BLOCKED in goppc-xprg.20, so the claim is withdrawn here.
 	ADDI R6, R0, $-16
 	AND  R1, R1, R6
 	ADDI R1, R1, $-32
