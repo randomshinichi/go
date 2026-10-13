@@ -228,15 +228,19 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		//
 		//	if frame.pc == frame.lr && frame.sp == frame.fp { throw("traceback stuck") }
 		//
-		// which is src/runtime/traceback.go:491-497 in this tree and is
+		// which is src/runtime/traceback.go:488-492 in this tree and is
 		// unconditional -- not gated by unwindPrintErrors/unwindSilentErrors. Two
 		// independent producers reach it, which is why marking the region Unsafe is
 		// not a sufficient fix: async preemption does honour PCDATA
 		// (src/runtime/preempt.go:443-449 returns false for UnsafePointUnsafe), but
 		// the SIGPROF sampler does not consult isAsyncSafePoint at all --
-		// runtime.sigprof hands the interrupted pc/sp/lr straight to
-		// unwinder.initAt (src/runtime/proc.go:5822), so a CPU-profile sample taken
-		// at that one PC throws no matter how the region is marked. Observed on
+		// runtime.sighandler calls sigprof(c.sigpc(), c.sigsp(), c.siglr(), ...)
+		// (src/runtime/signal_unix.go:706), which hands the interrupted pc/sp/lr
+		// straight to unwinder.initAt (src/runtime/proc.go:5815-5818), so a
+		// CPU-profile sample taken at that one PC throws no matter how the region is
+		// marked. Only the register STATE can prevent that, which is why the gate in
+		// prologuestuck_test.go asserts it (LR is the caller's at every frameless PC)
+		// and does not read the marking for the SIGPROF half. Observed on
 		// pmg5 at pc=0x11d30bc = bufio.(*Writer).Write+0x14 (bead goppc-h890, from
 		// `go tool objdump` of the same binary: CALL runtime.stackcheck at
 		// 0x11d30b8, CMPW R3,$0 at 0x11d30bc, MOVWU R1,-96(R1) only at 0x11d30d0).
@@ -328,10 +332,21 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// allocation and the back edge becomes dead code.
 		p = appendOp(p, AB, obj.Addr{}, obj.Addr{Type: obj.TYPE_BRANCH})
 		p.To.SetTarget(recheck)
-		// Reopen preemption only at `done`, i.e. after the back edge, so every PC in
-		// the region above stays unsampleable; the frame allocation below is the
-		// first preemptible PC of the function, and by then R0 has been stored and
-		// SP has moved, so pc != lr holds at it.
+		// Reopen preemption only at `done`, i.e. after the back edge. This Unsafe
+		// run is for ASYNC PREEMPTION alone (issue #35470 above). It does not make
+		// any PC of the run unsampleable: SIGPROF never reads PCDATA_UnsafePoint, and
+		// nothing here relies on it for profiling. What keeps a profiling sample, or
+		// the GC scan of a preempted goroutine, from throwing in this region is the
+		// register state: no branch-and-link sits on any path from entry to the
+		// allocation except the BL to morestack, and that one comes back through
+		// runtime.gogo, which does MTLR gobuf_lr -- the entry LR, because the grow
+		// path just reloaded R5 from the linkage slot (src/runtime/asm_ppc.s, gogo and
+		// morestack) -- before jumping to the back edge. So LR is the caller's at
+		// every PC of the guard, marked or not; the allocation below, which is
+		// preemptible and sampleable with SP not yet moved, has the caller's LR too.
+		// TestPrologueLRIsCallersAtEveryFramelessPC asserts exactly that, and
+		// TestPrologueGateRejectsCounterfeits shows it is the state, not the marker,
+		// that decides.
 		p = appendUnsafePoint(p, restore)
 		done := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
 		enough.To.SetTarget(done)
