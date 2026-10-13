@@ -136,6 +136,38 @@
 (Store {t} ptr val mem) && t.Size() == 2 => (MOVHstore ptr val mem)
 (Store {t} ptr val mem) && t.Size() == 4 && !t.IsFloat() => (MOVWstore ptr val mem)
 
+// Fold an address into a load. This is ppc32's half of the rule family
+// _gen/PPC64.rules carries (fold address into load/store), and it is not only an
+// optimisation: liveness tracks a stack variable through the values whose Aux is
+// that variable, so a read written as
+//
+//	MOVWaddr [0] {x} SP     the variable, labelled
+//	MOVWaddr [0] (that)     a type-changing OffPtr, unlabelled
+//	MOVWload (that)         the read, unlabelled
+//
+// ends x's live range at the labelled MOVWaddr. When that value sits before a
+// call and the read after it, the call's stack map has no pointer bit for x even
+// though the compiler's stack-object table lists the slot (goppc-y78s: TestGCInfo
+// "stack Ptr"/"stack eface"/"stack iface" on 32-bit ppc). Folding both MOVWaddr
+// levels into the load leaves a load that carries the variable itself -- a use
+// after the call -- which is the shape every other architecture gets from the
+// same rules.
+//
+// The guards are narrower than PPC64's two clauses, and each one is a property of
+// this target rather than a preference:
+//   - is16Bit: ppc32 has no PC-relative addressing, so nothing may rely on the
+//     assembler forming a 32-bit displacement.
+//   - ptr.Op != OpSB: ppc32's obj has no relocation for a symbol in a memory
+//     displacement, and it refuses one instead of dropping it ("lwz refers to
+//     gsym, and the ppc32 relocation path does not exist yet"). A local's
+//     MOVWaddr is SP-based and lowers to NAME_AUTO, which the assembler accepts;
+//     a package-level symbol's is SB-based and lowers to NAME_EXTERN, which it
+//     does not. So the static case keeps the address-in-a-register form ppc32
+//     already emits.
+(MOV(B|BU|H|HU|W)load [off1] {sym1} p:(MOVWaddr [off2] {sym2} ptr) mem)
+	&& canMergeSym(sym1, sym2) && is16Bit(int64(off1)+int64(off2)) && ptr.Op != OpSB =>
+	(MOV(B|BU|H|HU|W)load [off1+off2] {mergeSym(sym1, sym2)} ptr mem)
+
 // Lowering constants and register moves.
 (Const(8|16) [c]) => (MOVWconst [int32(c)])
 (Const32 [c]) => (MOVWconst [c])
