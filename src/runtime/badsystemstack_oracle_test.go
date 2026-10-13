@@ -232,6 +232,12 @@ func (s *badssSink) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func (s *badssSink) isReady() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seen
+}
+
 func (s *badssSink) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -246,6 +252,8 @@ type badssRun struct {
 	state  *os.ProcessState
 	// ready reports that the child printed badssReadyLine.
 	ready bool
+	// startupExpired is true if the startup budget ran out before the ready line.
+	startupExpired bool
 	// killedByUs is true only if the parent's Kill succeeded AND the child's wait
 	// status says it died of that SIGKILL. A child that exited by itself in the
 	// instant the deadline fired is not killed, whatever the timer says.
@@ -287,9 +295,20 @@ func runBadssChild(t *testing.T, arg string, budget badssBudget) badssRun {
 		r.ready = true
 	case <-done:
 	case <-startupTimer.C:
-		kill()
+		// The ready line and the timer can both be due; the line wins.
+		if sink.isReady() {
+			r.ready = true
+		} else {
+			r.startupExpired = true
+			kill()
+		}
 	}
 	startupTimer.Stop()
+	if !r.ready && !r.startupExpired {
+		// The child ended before the select noticed its ready line. Wait has
+		// returned, so the sink is complete.
+		r.ready = sink.isReady()
+	}
 	readyAt := time.Now()
 	r.startupElapsed = readyAt.Sub(created)
 
@@ -378,7 +397,7 @@ func judgeBadss(r badssRun, e badssExpect) badssVerdict {
 	ws, _ := r.state.Sys().(syscall.WaitStatus)
 
 	switch {
-	case !r.ready && r.killedByUs:
+	case !r.ready && r.startupExpired:
 		return badssVerdict{badssInconclusive, []string{"startup-budget"},
 			facts + ": no ready line before the startup budget ran out; nothing was learned about the fault path"}
 	case !r.ready:
