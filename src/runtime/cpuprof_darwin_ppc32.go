@@ -161,8 +161,13 @@ func profSamplerTick(period int64) {
 }
 
 // threadBasicInfo is Mach's struct thread_basic_info (mach/thread_info.h).
-// Its ppc32 field offsets still require measurement on the G5; do not treat
-// the ppc64 measurement as validation for this ABI.
+// Measured on the G5 from a 32-bit process (out/ppc-mac/cpuprof-evidence/
+// abi-probe-run-1.txt, gcc -arch ppc): THREAD_BASIC_INFO_COUNT is 10 and the
+// struct is 40 bytes, with user_time at 0, system_time at 8, cpu_usage at 16,
+// policy at 20, run_state at 24, flags at 28 and sleep_time at 36. thread_info
+// returned KERN_SUCCESS and count 10 for a live thread. cpu_usage stayed 0
+// across a spin, which is why threadCPUTime reads user_time+system_time: it is
+// the pair the kernel keeps current here, and the pair the ppc64 sampler reads.
 type threadBasicInfo struct {
 	userSec, userUsec     int32
 	systemSec, systemUsec int32
@@ -177,7 +182,8 @@ type threadBasicInfo struct {
 const _THREAD_BASIC_INFO = 3
 
 // threadCPUTime returns the user plus system CPU time of a thread in µs,
-// or -1 if the kernel does not answer for that thread.
+// or -1 if the kernel does not answer for that thread. It ignores cpu_usage,
+// which the G5 measurement above found to stay 0.
 //
 //go:nowritebarrierrec
 func threadCPUTime(port uint32) int64 {
