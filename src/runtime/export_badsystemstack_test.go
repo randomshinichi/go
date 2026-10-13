@@ -10,6 +10,8 @@
 
 package runtime
 
+import "unsafe"
+
 // gBadSystemstack is the g the witness hands to setg. Only its ADDRESS matters:
 // systemstack branches to systemstack_bad when the current g is neither
 // m.gsignal, m.g0 nor m.curg, so any g that is none of those three reaches the
@@ -42,7 +44,8 @@ func BadSystemstackBranchTaken() {
 	// line the test harness writes first is enough to change it - so zero it.
 	real.sched = gobuf{}
 	fake := &gBadSystemstack
-	*fake = *real
+	// memmove, not *fake = *real: g embeds a noCopy atomic, which vet rejects.
+	memmove(unsafe.Pointer(fake), unsafe.Pointer(real), unsafe.Sizeof(*real))
 	// A pending preemption is a sentinel placed in stackguard0. morestack on a g
 	// that is not in allgs is not survivable, so do not inherit it.
 	if fake.stackguard0 == stackPreempt {
