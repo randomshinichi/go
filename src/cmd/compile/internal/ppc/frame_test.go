@@ -146,9 +146,22 @@ func TestGoStackCallsQEMU(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var asm strings.Builder
-			// Initial Linux SP is not a Go frame. Reserve a private, aligned
-			// caller area and keep its address in g (reserved from allocation).
-			fmt.Fprintf(&asm, "clrrwi 1,1,4\naddi 1,1,-256\nmr 30,1\nli 0,0\nstw 0,4(1)\n%sbl fn_%s\ncmpw 1,30\nbne harness_bad\n%sli 0,1\nsc\nharness_bad:\nli 3,250\nli 0,1\nsc\nharness_stackcheck:\nli 3,0\nblr\nharness_morestack:\nblr\n", tc.setup, tc.entry, tc.check)
+			// Initial Linux SP is not a Go frame. Reserve a private, aligned caller
+			// area, keep its address in R2 as the SP canary, and give the g register
+			// (R30, cmd/internal/obj/ppc/regs.go: REGG) a *dereferenceable* fake g
+			// inside that block. The linker-inserted prologue guard reads
+			// g->stackguard0 inline through R30 (bead goppc-h890 removed the
+			// `BL runtime.stackcheck` that used to perform this load inside the stub),
+			// so an unmapped R30 faults in the guard. The guard word is 0 -- the
+			// smallest possible bound -- so no fixture function is ever asked to grow
+			// and the grow stubs below stay unreachable.
+			//
+			// 1600 is the same offset calls_test.go, intops_test.go and wb_test.go
+			// use, and it is deliberately not the stack pointer: R30 = SP would put
+			// g+8 on the prologue's own saved-LR slot at SP+8 and the guard would then
+			// read a live return address. The reservation is sized past g+8 for that
+			// reason (256 bytes, the old size, did not fit at 1600).
+			fmt.Fprintf(&asm, "clrrwi 1,1,4\naddi 1,1,-2048\nmr 2,1\naddi 30,2,1600\nli 0,0\nstw 0,8(30)\n%sbl fn_%s\ncmpw 1,2\nbne harness_bad\naddi 4,2,1600\ncmpw 30,4\nbne harness_bad\n%sli 0,1\nsc\nharness_bad:\nli 3,250\nli 0,1\nsc\nharness_stackcheck:\nli 3,0\nblr\nharness_morestack:\nli 3,99\nli 0,1\nsc\nharness_morestack_noctxt:\nli 3,99\nli 0,1\nsc\n", tc.setup, tc.entry, tc.check)
 			mutated := 0
 			for _, fn := range []string{"leaf", "middle", "outer", "sum12", "many", "wideleaf", "wide", "spilled", "branchCall", "largeFrame"} {
 				words := emittedWords(t, string(out), "main."+fn)
@@ -169,13 +182,13 @@ func TestGoStackCallsQEMU(t *testing.T) {
 					}
 					for _, target := range calls {
 						stackcheck = stackcheck || target == "runtime.stackcheck"
-						morestack = morestack || target == "runtime.morestack"
+						morestack = morestack || target == "runtime.morestack" || target == "runtime.morestack_noctxt"
 					}
 					if stackcheck {
 						t.Fatalf("large-frame prologue calls runtime.stackcheck again: a branch-and-link before the frame is established makes the PC it returns to fatal for the unwinder")
 					}
 					if !guardLoad || !morestack {
-						t.Fatalf("large-frame compile lost the stack-growth path: inlineGuard=%v morestack=%v", guardLoad, morestack)
+						t.Fatalf("large-frame compile lost the stack-growth path: inlineGuard=%v morestack=%v targets=%v", guardLoad, morestack, calls)
 					}
 				}
 				for i, w := range words {
@@ -240,7 +253,11 @@ func TestGoStackCallsQEMU(t *testing.T) {
 	}
 }
 
-var fixtureCallReloc = regexp.MustCompile(`^(\d+)\+4 R_CALLPOWER ((?:main\.\w+)|(?:runtime\.(?:stackcheck|morestack)))\+0$`)
+// The grow path of the inline prologue guard is a branch-and-link to
+// runtime.morestack_noctxt (src/cmd/internal/obj/ppc/link.go), not to the old
+// runtime.stackcheck helper, so it is a call this adapter has to name and stub
+// rather than treat as an unsupported relocation.
+var fixtureCallReloc = regexp.MustCompile(`^(\d+)\+4 R_CALLPOWER ((?:main\.\w+)|(?:runtime\.(?:stackcheck|morestack_noctxt|morestack)))\+0$`)
 
 // The calls/GetG fixtures also use closure code addresses and method symbols.
 // Share the whole-function relocation adapter, keeping unsupported relocations
