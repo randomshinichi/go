@@ -85,11 +85,11 @@ var badssAbortExpect = badssExpect{
 func TestSystemstackBadBranchTaken(t *testing.T) {
 	// Control: with the real g, systemstack must return normally. This catches a
 	// witness that is fatal no matter what it is handed.
-	r := runBadssChild(t, badssControlArg, badssDefaultBudget)
+	r := runBadssChild(t, badssControlArg, badssWitnessBudget(t))
 	badssApply(t, "control child (g unmodified)", r, judgeBadss(r, badssControlExpect))
 
 	// Witness: the only difference from the control is the g's address.
-	r = runBadssChild(t, badssTakenArg, badssDefaultBudget)
+	r = runBadssChild(t, badssTakenArg, badssWitnessBudget(t))
 	badssApply(t, "witness child (g replaced by a copy at another address)", r, judgeBadss(r, badssWitnessExpect))
 }
 
@@ -100,6 +100,6 @@ func TestSystemstackBadBranchTaken(t *testing.T) {
 // and then does not exit, the non-exit is a property of the fatal epilogue on
 // ppc32 and not something the systemstack_bad change caused.
 func TestAbortEpilogueOnRealG(t *testing.T) {
-	r := runBadssChild(t, badssAbortArg, badssDefaultBudget)
+	r := runBadssChild(t, badssAbortArg, badssWitnessBudget(t))
 	badssApply(t, "abort-only child (real g, no systemstack)", r, judgeBadss(r, badssAbortExpect))
 }
