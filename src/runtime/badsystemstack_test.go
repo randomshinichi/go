@@ -7,15 +7,9 @@
 package runtime_test
 
 import (
-	"bytes"
 	"os"
-	"os/exec"
 	"runtime"
-	"strings"
 	"testing"
-	"time"
-
-	"internal/testenv"
 )
 
 // systemstack_bad is fatal by construction: badsystemstack writes its message
@@ -29,69 +23,46 @@ const (
 	badssAbortArg   = "badssAbortOnly"
 )
 
-// Checked by TestSystemstackBadBranchTaken and TestAbortEpilogueOnRealG.
-const (
-	badssFatalLine    = "fatal: systemstack called from unexpected goroutine"
-	badssReturnedLine = "badss: returned without taking the fatal branch"
-	badssControlLine  = "badss: control returned from systemstack"
-	badssFaultLine    = "SIGBUS: bus error"
-)
-
-// badssChildGrace bounds the wait for a child. Every mode here ends in the fatal
-// path, which faults on purpose, and every child must terminate on its own: a
-// child that has to be killed is a failure (goppc-0v7x - on darwin a fault
-// raised inside the fatal report used to be retried by the kernel forever). The
-// grace only keeps a regression from hanging the test binary.
-const badssChildGrace = 30 * time.Second
-
 func init() {
 	if len(os.Args) != 2 {
 		return
 	}
 	switch os.Args[1] {
 	case badssTakenArg:
+		badssChildReady()
 		// g is replaced by a copy at a different address, so it is neither
 		// m.gsignal, m.g0 nor m.curg: systemstack must take its fatal branch.
 		runtime.BadSystemstackBranchTaken()
 		os.Stderr.WriteString(badssReturnedLine + "\n")
 		os.Exit(97)
 	case badssControlArg:
+		badssChildReady()
 		// The same call with the untouched g: systemstack must not take the
 		// fatal branch, and must return.
 		runtime.SystemstackOnRealG()
 		os.Stderr.WriteString(badssControlLine + "\n")
 		os.Exit(0)
 	case badssAbortArg:
+		badssChildReady()
 		// abort() from the ordinary g, systemstack not involved at all.
 		runtime.AbortForTesting()
 	}
 }
 
-// runBadssChild re-execs this test binary in one of the witness modes and returns
-// everything the child printed on stderr, its process state, and whether it had
-// to be killed. killed is true when the child neither exited nor died within
-// badssChildGrace.
-func runBadssChild(t *testing.T, arg string) (out string, state os.ProcessState, killed bool) {
-	t.Helper()
-	cmd := exec.Command(testenv.Executable(t), arg)
-	cmd = testenv.CleanCmdEnv(cmd)
-	// Only stderr: the fatal path and every marker here write to fd 2, and one
-	// shared bytes.Buffer for both streams would be written by two copiers.
-	var buf bytes.Buffer
-	cmd.Stderr = &buf
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", arg, err)
-	}
-	done := make(chan struct{})
-	go func() { cmd.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(badssChildGrace):
-		killed = true
-		cmd.Process.Kill()
-		<-done
-	}
-	return buf.String(), *cmd.ProcessState, killed
+// badssControlExpect: with the real g, systemstack returns and the child exits 0.
+var badssControlExpect = badssExpect{
+	exitCode:  0,
+	markers:   []string{badssControlLine},
+	forbidden: []string{badssFatalLine, badssFaultLine},
+}
+
+// badssAbortExpect: abort() from the ordinary g faults, the whole report is
+// written, and the child exits 2 by itself. The register dump is the last thing
+// the report prints, so "link 0x" is the terminal evidence.
+var badssAbortExpect = badssExpect{
+	exitCode:  2,
+	markers:   []string{badssFaultLine, "goroutine 1 gp=", "runtime.abort()", "pc   0x", "link 0x"},
+	forbidden: []string{badssFatalLine, badssReturnedLine},
 }
 
 // TestSystemstackBadBranchTaken is the witness for the landed ppc32 change that
@@ -104,41 +75,22 @@ func runBadssChild(t *testing.T, arg string) (out string, state os.ProcessState,
 // pass unless the fatal branch really ran: a witness that never reaches
 // systemstack_bad prints badssReturnedLine and exits 97 instead of printing the
 // fatal message.
+//
+// The witness grades diagnostic completion, not wall expiry (goppc-0v7x review
+// 691deaec). It passes only if the child terminated by itself with exit 4 after
+// printing the whole nested report (see badssWitnessExpect). A child that is
+// still alive when the budget ends is a wedge only if it had spent its whole CPU
+// budget; otherwise the target was too loaded to say, and the test skips with
+// INFRASTRUCTURE-INCONCLUSIVE. See badsystemstack_oracle_test.go.
 func TestSystemstackBadBranchTaken(t *testing.T) {
 	// Control: with the real g, systemstack must return normally. This catches a
 	// witness that is fatal no matter what it is handed.
-	out, state, killed := runBadssChild(t, badssControlArg)
-	switch {
-	case killed:
-		t.Errorf("control child had to be killed; systemstack must return with an unmodified g\n%s", out)
-	case !state.Success():
-		t.Errorf("control child did not exit 0: %v\n%s", state, out)
-	}
-	if !strings.Contains(out, badssControlLine) {
-		t.Errorf("control child did not reach the end of the control path\n%s", out)
-	}
-	if strings.Contains(out, badssFatalLine) {
-		t.Errorf("control child took the fatal branch with an unmodified g\n%s", out)
-	}
-	t.Logf("control child (g unmodified), exit %v, killed=%v:\n%s", state, killed, out)
+	r := runBadssChild(t, badssControlArg, badssDefaultBudget)
+	badssApply(t, "control child (g unmodified)", r, judgeBadss(r, badssControlExpect))
 
 	// Witness: the only difference from the control is the g's address.
-	out, state, killed = runBadssChild(t, badssTakenArg)
-	if !strings.Contains(out, badssFatalLine) {
-		t.Errorf("systemstack_bad did not run: want %q in the child's output\n"+
-			"exit %v, killed=%v\n%s", badssFatalLine, state, killed, out)
-	}
-	if strings.Contains(out, badssReturnedLine) {
-		t.Errorf("the witness returned instead of aborting; the fatal branch was not taken\n%s", out)
-	}
-	if killed {
-		t.Errorf("the witness child never exited and had to be killed: the fatal report "+
-			"faulted again and the fault was not delivered (goppc-0v7x)\n%s", out)
-	} else if state.Success() {
-		t.Errorf("the witness exited 0; systemstack_bad's abort() must never return\n%s", out)
-	}
-	t.Logf("witness child (g replaced by a copy at another address), exit %v, killed=%v:\n%s",
-		state, killed, out)
+	r = runBadssChild(t, badssTakenArg, badssDefaultBudget)
+	badssApply(t, "witness child (g replaced by a copy at another address)", r, judgeBadss(r, badssWitnessExpect))
 }
 
 // TestAbortEpilogueOnRealG is the witness's second control and it exists to keep
@@ -148,14 +100,6 @@ func TestSystemstackBadBranchTaken(t *testing.T) {
 // and then does not exit, the non-exit is a property of the fatal epilogue on
 // ppc32 and not something the systemstack_bad change caused.
 func TestAbortEpilogueOnRealG(t *testing.T) {
-	out, state, killed := runBadssChild(t, badssAbortArg)
-	if !strings.Contains(out, badssFaultLine) {
-		t.Errorf("abort() did not fault as designed: want %q\n"+
-			"exit %v, killed=%v\n%s", badssFaultLine, state, killed, out)
-	}
-	if killed || state.ExitCode() != 2 {
-		t.Errorf("abort-only child must report and exit 2 by itself: exit %v, killed=%v\n%s",
-			state, killed, out)
-	}
-	t.Logf("abort-only child (real g, no systemstack), exit %v, killed=%v:\n%s", state, killed, out)
+	r := runBadssChild(t, badssAbortArg, badssDefaultBudget)
+	badssApply(t, "abort-only child (real g, no systemstack)", r, judgeBadss(r, badssAbortExpect))
 }
