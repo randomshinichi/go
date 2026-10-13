@@ -237,7 +237,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// This does NOT cover a SIGPROF landing in the run: profiling never asks
 		// whether a PC is a safe point. The repair for that half is on the runtime
 		// side, in runtime.stackcheck, which NOW returns with LR reloaded from the
-		// save slot (8(SP)) -- landed as goppc-1ye4, commit 7113fee629, so this is a
+		// save slot (8(SP)) -- landed as goppc-1ye4, commit 95cd04cfc3 (cherry-picked; 7113fee629 is the lane-branch SHA), so this is a
 		// statement of fact rather than an intention -- so that LR is the caller's at
 		// every PC of this run; the
 		// traceback is not special-cased because nothing in the tables tells it a
