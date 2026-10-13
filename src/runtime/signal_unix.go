@@ -795,6 +795,11 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
+	// The fatal report below walks stacks and may itself fault. A fault is
+	// only delivered to us again if its signal is not blocked, and setsig
+	// blocked every signal for the duration of this handler.
+	unblockFaultSignals()
+
 	mp.throwing = throwTypeRuntime
 	mp.caughtsig.set(gp)
 
@@ -1361,6 +1366,31 @@ func unblocksig(sig uint32) {
 	var set sigset
 	sigaddset(&set, int(sig))
 	sigprocmask(_SIG_UNBLOCK, &set, nil)
+}
+
+// unblockFaultSignals removes the synchronous hardware-fault signals from the
+// current thread's signal mask. It is called by sighandler when it is about to
+// print a fatal report, so that a fault raised by the report itself (typically
+// the unwinder reading a corrupt stack) is delivered to sighandler again and
+// ends in startpanic_m's m.dying ladder instead of retrying forever.
+//
+// Only darwin and ios need this. When a fault occurs while its signal is blocked,
+// Linux force-delivers the default action and the process dies; xnu's
+// threadsignal only marks the signal pending, so the thread resumes at the
+// faulting instruction and faults again in a kernel-side loop, never exiting
+// (goppc-0v7x).
+//
+//go:nosplit
+//go:nowritebarrierrec
+func unblockFaultSignals() {
+	if GOOS != "darwin" && GOOS != "ios" {
+		return
+	}
+	unblocksig(_SIGILL)
+	unblocksig(_SIGTRAP)
+	unblocksig(_SIGFPE)
+	unblocksig(_SIGBUS)
+	unblocksig(_SIGSEGV)
 }
 
 // minitSignals is called when initializing a new m to set the

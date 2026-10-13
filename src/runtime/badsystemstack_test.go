@@ -38,9 +38,10 @@ const (
 )
 
 // badssChildGrace bounds the wait for a child. Every mode here ends in the fatal
-// path, which faults on purpose; on ppc32 the fault is reported and the process
-// is then not observed to exit (bead goppc-0v7x). The witness has to read the
-// child's OUTPUT, so it must not be turned into a test timeout by that.
+// path, which faults on purpose, and every child must terminate on its own: a
+// child that has to be killed is a failure (goppc-0v7x - on darwin a fault
+// raised inside the fatal report used to be retried by the kernel forever). The
+// grace only keeps a regression from hanging the test binary.
 const badssChildGrace = 30 * time.Second
 
 func init() {
@@ -130,7 +131,10 @@ func TestSystemstackBadBranchTaken(t *testing.T) {
 	if strings.Contains(out, badssReturnedLine) {
 		t.Errorf("the witness returned instead of aborting; the fatal branch was not taken\n%s", out)
 	}
-	if !killed && state.Success() {
+	if killed {
+		t.Errorf("the witness child never exited and had to be killed: the fatal report "+
+			"faulted again and the fault was not delivered (goppc-0v7x)\n%s", out)
+	} else if state.Success() {
 		t.Errorf("the witness exited 0; systemstack_bad's abort() must never return\n%s", out)
 	}
 	t.Logf("witness child (g replaced by a copy at another address), exit %v, killed=%v:\n%s",
@@ -148,6 +152,10 @@ func TestAbortEpilogueOnRealG(t *testing.T) {
 	if !strings.Contains(out, badssFaultLine) {
 		t.Errorf("abort() did not fault as designed: want %q\n"+
 			"exit %v, killed=%v\n%s", badssFaultLine, state, killed, out)
+	}
+	if killed || state.ExitCode() != 2 {
+		t.Errorf("abort-only child must report and exit 2 by itself: exit %v, killed=%v\n%s",
+			state, killed, out)
 	}
 	t.Logf("abort-only child (real g, no systemstack), exit %v, killed=%v:\n%s", state, killed, out)
 }
