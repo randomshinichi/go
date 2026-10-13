@@ -101,10 +101,10 @@ func (op Op) isLoweredGetClosurePtr() bool {
 }
 
 // killsVar reports whether v is a value that kills the liveness of n, as
-// liveness.valueEffects counts it (liveness/plive.go:284): a VarDef of n kills
+// liveness.valueEffects counts it (liveness/plive.go:316): a VarDef of n kills
 // it, and so does a symbolic write to n when a single store covers all of n's
 // type. Aggregates can be written field by field, and liveness deliberately
-// does not count such a write as a kill, so fullWrite must answer the same way
+// does not count such a write as a kill, so FullWrite must answer the same way
 // or the scheduler would order an address after a write that leaves the
 // result live before its definition.
 func killsVar(v *Value, n *ir.Name) bool {
@@ -114,18 +114,53 @@ func killsVar(v *Value, n *ir.Name) bool {
 	if v.Op == OpVarDef {
 		return true
 	}
-	return v.Op.SymEffect()&SymWrite != 0 && fullWrite(n.Type())
+	return v.Op.SymEffect()&SymWrite != 0 && FullWrite(n.Type())
 }
 
-// fullWrite reports whether one store to a value of type t covers all of t.
-// liveness.isfat (liveness/plive.go:1524) is the authority here; this is
-// deliberately narrower than that, so that a disagreement can only make the
-// scheduler call a kill something else and fall back to ordering an address
-// after the OpVarDef -- which is the constraint it would have added before
-// kills were considered at all.
-func fullWrite(t *types.Type) bool {
+// FullWrite reports whether one store to a value of type t covers all of t,
+// which is what liveness.valueEffects asks when it decides whether a symbolic
+// write kills a variable's liveness: it counts the write as a kill unless
+// isfat(n.Type()) says the variable needs several assignments to initialize.
+//
+// FullWrite is therefore the negation of liveness.isfat (liveness/plive.go:1524),
+// including isfat's recursion through one-element arrays and one-field
+// structs, and including its SIMD case: a store to a one-element array or
+// one-field struct is a full write exactly when a store to the element is,
+// and a SIMD struct is not fat at all. The two have to agree, because the
+// scheduler uses this answer to find the values that kill a result (killsVar)
+// and orders the result's addresses after the first of them. A kill missed
+// here is not a more conservative schedule: the edge then comes from the
+// OpVarDef instead, and the OpVarDef is behind whatever else killed the
+// result on its memory chain, so the block can end up with no schedule at
+// all.
+//
+// liveness imports this package, so isfat cannot be called from here; the
+// agreement is pinned instead by TestFullWriteAgreesWithIsFat in
+// cmd/compile/internal/liveness, which compares this function against the real
+// isfat over the type shapes a result can have.
+func FullWrite(t *types.Type) bool {
+	// Mirrors isfat, negated: isfat(nil) is false.
+	if t == nil {
+		return true
+	}
 	switch t.Kind() {
-	case types.TSTRUCT, types.TARRAY, types.TSLICE, types.TSTRING, types.TINTER:
+	case types.TSLICE, types.TSTRING, types.TINTER:
+		return false
+	case types.TARRAY:
+		// Array of 1 element, check if element is fat.
+		if t.NumElem() == 1 {
+			return FullWrite(t.Elem())
+		}
+		return false
+	case types.TSTRUCT:
+		// A SIMD struct is not fat (isfat's TSTRUCT case returns false for it).
+		if t.IsSIMD() {
+			return true
+		}
+		// Struct with 1 field, check if field is fat.
+		if t.NumFields() == 1 {
+			return FullWrite(t.Field(0).Type)
+		}
 		return false
 	}
 	return true
