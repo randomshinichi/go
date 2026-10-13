@@ -85,16 +85,14 @@ func init() {
 
 // A fatal fault that is not nested. The report must run to its end exactly once:
 // no "panic during panic", and the original fault is the only one attributed.
-var badssPlainFatalFault = func(signal string) badssExpect {
+// The fault is on g0, so the report is the signal handler's own (not sigpanic's
+// "unexpected signal during runtime execution", which is for faults on a user g).
+func badssPlainFatalFault(signal string) badssExpect {
 	return badssExpect{
-		exitCode: 2,
-		markers: []string{
-			"fatal error: unexpected signal during runtime execution",
-			signal,
-			"goroutine 1 gp=",
-			"link 0x",
-		},
+		exitCode:  2,
+		markers:   []string{signal, "PC=0x", "goroutine 0 gp=", "goroutine 1 gp=", "link 0x"},
 		forbidden: []string{badssReturnedLine, "panic during panic", "stack trace unavailable"},
+		once:      []string{signal},
 	}
 }
 
@@ -102,8 +100,8 @@ func TestFatalFaultOnSystemstackKeepsItsReport(t *testing.T) {
 	for _, c := range []struct {
 		name, arg, signal string
 	}{
-		{"unmapped-address", badssSegvG0Arg, "[signal SIGSEGV: segmentation violation"},
-		{"nil-address", badssNilG0Arg, "[signal SIGBUS: bus error"},
+		{"unmapped-address", badssSegvG0Arg, "SIGSEGV: segmentation violation"},
+		{"nil-address", badssNilG0Arg, "SIGBUS: bus error"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := runBadssChild(t, c.arg, badssWitnessBudget(t))
@@ -129,5 +127,6 @@ func TestSigtrapWithoutDebuggerIsReportedAsSigtrap(t *testing.T) {
 		exitCode:  2,
 		markers:   []string{"SIGTRAP: trace trap", "goroutine ", "link 0x"},
 		forbidden: []string{badssTrapDoneLine, "panic during panic", "SIGBUS", "SIGSEGV"},
+		once:      []string{"SIGTRAP: trace trap"},
 	}))
 }
