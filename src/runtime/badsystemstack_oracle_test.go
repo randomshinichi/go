@@ -1,0 +1,474 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build unix
+
+package runtime_test
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"internal/testenv"
+)
+
+// This file is the oracle behind the fatal-path witnesses in
+// badsystemstack_test.go (goppc-0v7x). The witnesses re-exec the test binary into
+// a child that is going to crash on purpose, and the question the parent has to
+// answer is not "did the child die" but "did the child finish its diagnostic and
+// terminate by itself". Three observations look alike from outside and must not
+// be confused:
+//
+//   - a runtime wedge: the fatal report faulted again and the fault was never
+//     delivered (on darwin the kernel just retries the faulting instruction,
+//     forever, in system time). The child is alive and consuming CPU.
+//   - a starved child: a loaded one-CPU target never gave the child the CPU it
+//     needs. The child is alive and has consumed almost no CPU.
+//   - a counterfeit: the child prints the first line of the report and then
+//     exits some other way. It is dead, and it did not finish the report.
+//
+// Wall-clock expiry alone cannot tell the first two apart, so the child bounds
+// itself in CPU time (RLIMIT_CPU, set in the child before it does anything
+// interesting) and the parent reads back the CPU the child actually consumed.
+// Only a child that has spent its whole CPU budget without exiting is a wedge.
+// A child that was still alive when the wall budget ran out with its CPU budget
+// unspent says nothing about the runtime, and the test says so and skips.
+
+// Checked by the witnesses in badsystemstack_test.go and by the oracle self-test.
+const (
+	badssFatalLine    = "fatal: systemstack called from unexpected goroutine"
+	badssReturnedLine = "badss: returned without taking the fatal branch"
+	badssControlLine  = "badss: control returned from systemstack"
+	badssFaultLine    = "SIGBUS: bus error"
+)
+
+const (
+	// badssReadyLine is the first thing every child writes, after it has
+	// installed its CPU limit and before it does anything that can fault. The
+	// parent starts its wall timer when it sees this line, not at process
+	// creation, so the exec and loader time of a loaded target is not charged to
+	// the fault path.
+	badssReadyLine = "badss: ready"
+
+	// badssCPUEnv carries the child's CPU budget in whole seconds.
+	badssCPUEnv = "BADSS_CHILD_CPU_SECS"
+
+	// badssPrologueFailedExit is the exit status of a child that could not
+	// install its CPU limit. It is outside every status the fatal ladder uses.
+	badssPrologueFailedExit = 96
+)
+
+// The counterfeit children below are ONLY used by TestBadssOracleCounterfeits, to
+// prove the oracle can reject what it claims to reject. None of them touches the
+// runtime fault path.
+const (
+	badssCounterfeitPrefixExit3Arg = "badssCounterfeitPrefixExit3"
+	badssCounterfeitFullExit3Arg   = "badssCounterfeitFullTextExit3"
+	badssCounterfeitCompleteArg    = "badssCounterfeitComplete"
+	badssCounterfeitReturnedArg    = "badssCounterfeitReturned"
+	badssCounterfeitSleeperArg     = "badssCounterfeitSleeper"
+	badssCounterfeitSpinnerArg     = "badssCounterfeitSpinner"
+	badssCounterfeitNeverReadyArg  = "badssCounterfeitNeverReady"
+)
+
+func init() {
+	if len(os.Args) != 2 {
+		return
+	}
+	switch os.Args[1] {
+	case badssCounterfeitPrefixExit3Arg:
+		// The motivating counterfeit: the first line of the fatal report, then a
+		// plain exit 3. The rest of the report is lost.
+		badssChildReady()
+		os.Stderr.WriteString(badssFatalLine)
+		os.Exit(3)
+	case badssCounterfeitFullExit3Arg:
+		// Every marker of the nested report, in order, and still the wrong exit.
+		badssChildReady()
+		os.Stderr.WriteString(badssNestedReport)
+		os.Exit(3)
+	case badssCounterfeitCompleteArg:
+		// Positive control for the oracle: exactly the shape of a good witness.
+		badssChildReady()
+		os.Stderr.WriteString(badssNestedReport)
+		os.Exit(4)
+	case badssCounterfeitReturnedArg:
+		badssChildReady()
+		os.Stderr.WriteString(badssReturnedLine + "\n")
+		os.Exit(97)
+	case badssCounterfeitSleeperArg:
+		// Alive, ready, and using no CPU at all: a perfectly starved child.
+		badssChildReady()
+		time.Sleep(time.Hour)
+	case badssCounterfeitSpinnerArg:
+		// Alive, ready, and burning CPU without ever finishing: a wedge.
+		badssChildReady()
+		for {
+		}
+	case badssCounterfeitNeverReadyArg:
+		// Never reaches the ready marker.
+		time.Sleep(time.Hour)
+	}
+}
+
+// badssWitnessExpect is what the taken-branch witness must look like when it is
+// healthy: systemstack_bad prints its message, abort() faults, the report walks a
+// stack it cannot (the unregistered copy has no saved sp), that nested fault is
+// delivered because the fault signals were unblocked, and the m.dying ladder in
+// startpanic_m (panic.go) prints "panic during panic" on the second entry and
+// "stack trace unavailable" on the third, then exit(4). Every marker is
+// terminal evidence that the ladder ran to its end.
+var badssWitnessExpect = badssExpect{
+	exitCode:  4,
+	markers:   []string{badssFatalLine, badssFaultLine, "panic during panic", badssFaultLine, "stack trace unavailable"},
+	forbidden: []string{badssReturnedLine},
+}
+
+// badssNestedReport is the shape of the report the nested-fault witness produces
+// when the fatal ladder runs to the end: the original message, the original
+// fault, the nested fault, and the ladder's last line, in that order.
+const badssNestedReport = badssFatalLine +
+	badssFaultLine + "\nPC=0x1 m=0 sigcode=1 addr=0x0\n\ngoroutine 1 [running]:\n" +
+	"panic during panic\n" +
+	badssFaultLine + "\nPC=0x2 m=0 sigcode=1 addr=0x28\n\n" +
+	"stack trace unavailable\n"
+
+// badssChildReady is the child's prologue: bound this process in CPU time, then
+// announce readiness. The soft limit is the budget; the hard limit is two seconds
+// later, because a Go process only ignores the SIGXCPU sent at the soft limit and
+// the kernel's SIGKILL at the hard limit is what actually ends a wedge. The limit
+// is process-wide and counts system time, which is where a faulting kernel
+// retry loop spends all of its time.
+func badssChildReady() {
+	secs, err := strconv.Atoi(os.Getenv(badssCPUEnv))
+	if err != nil || secs <= 0 {
+		os.Stderr.WriteString("badss: " + badssCPUEnv + " missing or invalid\n")
+		os.Exit(badssPrologueFailedExit)
+	}
+	lim := syscall.Rlimit{Cur: uint64(secs), Max: uint64(secs) + 2}
+	if err := syscall.Setrlimit(syscall.RLIMIT_CPU, &lim); err != nil {
+		os.Stderr.WriteString("badss: setrlimit(RLIMIT_CPU): " + err.Error() + "\n")
+		os.Exit(badssPrologueFailedExit)
+	}
+	os.Stderr.WriteString(badssReadyLine + "\n")
+}
+
+// badssBudget is what a child may consume before the parent stops waiting.
+type badssBudget struct {
+	// cpu is the child's own CPU limit: user plus system seconds it may spend.
+	cpu time.Duration
+	// startup is the wall time allowed from process creation to the ready line.
+	startup time.Duration
+	// wall is the wall time allowed from the ready line to termination.
+	wall time.Duration
+}
+
+// badssDefaultBudget is generous on purpose. A healthy witness needs about 0.2 s
+// of wall on an idle iBook G4; the wedge needs the whole CPU budget before it can
+// be called one, and the wall budget is long enough to deliver that budget at
+// roughly a tenth of a CPU. Past that the target is too loaded to say anything.
+var badssDefaultBudget = badssBudget{
+	cpu:     10 * time.Second,
+	startup: 60 * time.Second,
+	wall:    120 * time.Second,
+}
+
+// badssSink collects a child's stderr and notices the ready line.
+type badssSink struct {
+	mu    sync.Mutex
+	buf   bytes.Buffer
+	seen  bool
+	ready chan struct{}
+}
+
+func newBadssSink() *badssSink { return &badssSink{ready: make(chan struct{})} }
+
+func (s *badssSink) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.buf.Write(p)
+	if !s.seen && bytes.Contains(s.buf.Bytes(), []byte(badssReadyLine)) {
+		s.seen = true
+		close(s.ready)
+	}
+	return len(p), nil
+}
+
+func (s *badssSink) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+// badssRun is everything observed about one child.
+type badssRun struct {
+	arg    string
+	budget badssBudget
+	out    string
+	state  *os.ProcessState
+	// ready reports that the child printed badssReadyLine.
+	ready bool
+	// killedByUs is true only if the parent's Kill succeeded AND the child's wait
+	// status says it died of that SIGKILL. A child that exited by itself in the
+	// instant the deadline fired is not killed, whatever the timer says.
+	killedByUs bool
+	// cpu is the user plus system time the child consumed.
+	cpu time.Duration
+	// startupElapsed and runElapsed are the wall time to the ready line and from
+	// it to termination.
+	startupElapsed, runElapsed time.Duration
+}
+
+// runBadssChild re-execs this test binary in one of the child modes.
+func runBadssChild(t *testing.T, arg string, budget badssBudget) badssRun {
+	t.Helper()
+	cmd := exec.Command(testenv.Executable(t), arg)
+	cmd = testenv.CleanCmdEnv(cmd)
+	cmd.Env = append(cmd.Env, badssCPUEnv+"="+strconv.Itoa(int(budget.cpu/time.Second)))
+	// Only stderr: the fatal path and every marker here write to fd 2.
+	sink := newBadssSink()
+	cmd.Stderr = sink
+	created := time.Now()
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting %s: %v", arg, err)
+	}
+	done := make(chan struct{})
+	go func() { cmd.Wait(); close(done) }()
+
+	r := badssRun{arg: arg, budget: budget}
+	killSent := false
+	kill := func() {
+		killSent = cmd.Process.Kill() == nil
+		<-done
+	}
+
+	// Phase 1: process creation to the ready line.
+	startupTimer := time.NewTimer(budget.startup)
+	select {
+	case <-sink.ready:
+		r.ready = true
+	case <-done:
+	case <-startupTimer.C:
+		kill()
+	}
+	startupTimer.Stop()
+	readyAt := time.Now()
+	r.startupElapsed = readyAt.Sub(created)
+
+	// Phase 2: the ready line to termination. Nothing before the ready line is
+	// charged to this timer.
+	if r.ready {
+		wallTimer := time.NewTimer(budget.wall)
+		select {
+		case <-done:
+		case <-wallTimer.C:
+			kill()
+		}
+		wallTimer.Stop()
+		r.runElapsed = time.Since(readyAt)
+	}
+	<-done
+
+	r.out = sink.String()
+	r.state = cmd.ProcessState
+	r.cpu = r.state.UserTime() + r.state.SystemTime()
+	if ws, ok := r.state.Sys().(syscall.WaitStatus); ok {
+		r.killedByUs = killSent && ws.Signaled() && ws.Signal() == syscall.SIGKILL
+	}
+	return r
+}
+
+// badssExpect is what a child that terminated by itself must have looked like.
+type badssExpect struct {
+	// exitCode is the exit status the child must have ended with.
+	exitCode int
+	// markers must all appear in out, in this order.
+	markers []string
+	// forbidden must not appear in out.
+	forbidden []string
+}
+
+const (
+	badssPass         = "PASS"
+	badssFail         = "FAIL"
+	badssInconclusive = "INFRASTRUCTURE-INCONCLUSIVE"
+)
+
+// badssVerdict is the oracle's answer. oracles names every check that rejected the
+// child, so a report can say which one caught which counterfeit.
+type badssVerdict struct {
+	status  string
+	oracles []string
+	detail  string
+}
+
+func (v badssVerdict) has(oracle string) bool {
+	for _, o := range v.oracles {
+		if o == oracle {
+			return true
+		}
+	}
+	return false
+}
+
+func (v badssVerdict) String() string {
+	if v.status == badssPass {
+		return badssPass
+	}
+	return fmt.Sprintf("%s [oracle: %s]: %s", v.status, strings.Join(v.oracles, ", "), v.detail)
+}
+
+// orderedMarkers reports the first marker that is missing, or out of order.
+func orderedMarkers(out string, markers []string) (missing string, ok bool) {
+	pos := 0
+	for _, m := range markers {
+		i := strings.Index(out[pos:], m)
+		if i < 0 {
+			return m, false
+		}
+		pos += i + len(m)
+	}
+	return "", true
+}
+
+// judgeBadss classifies one child against what it was supposed to do.
+func judgeBadss(r badssRun, e badssExpect) badssVerdict {
+	spent := r.cpu >= r.budget.cpu*3/4
+	facts := fmt.Sprintf("child %s: cpu %v of budget %v, startup %v of %v, run %v of %v",
+		r.arg, r.cpu.Round(time.Millisecond), r.budget.cpu, r.startupElapsed.Round(time.Millisecond),
+		r.budget.startup, r.runElapsed.Round(time.Millisecond), r.budget.wall)
+	ws, _ := r.state.Sys().(syscall.WaitStatus)
+
+	switch {
+	case !r.ready && r.killedByUs:
+		return badssVerdict{badssInconclusive, []string{"startup-budget"},
+			facts + ": no ready line before the startup budget ran out; nothing was learned about the fault path"}
+	case !r.ready:
+		return badssVerdict{badssFail, []string{"never-ready"},
+			facts + ": the child ended without ever printing the ready line: " + r.state.String()}
+	case r.killedByUs && spent:
+		return badssVerdict{badssFail, []string{"wedge"},
+			facts + ": the wall budget ran out with the whole CPU budget spent and the child still alive: " +
+				"the fatal report did not terminate (goppc-0v7x)"}
+	case r.killedByUs:
+		return badssVerdict{badssInconclusive, []string{"wall-budget-cpu-unspent"},
+			facts + ": the wall budget ran out with the CPU budget unspent; the child was starved of CPU, " +
+				"this is not evidence of a runtime wedge"}
+	case ws.Signaled() && (ws.Signal() == syscall.SIGKILL || ws.Signal() == syscall.SIGXCPU) && spent:
+		return badssVerdict{badssFail, []string{"wedge"},
+			facts + ": the kernel ended the child with " + ws.Signal().String() +
+				" after the child spent its whole CPU budget: the fatal report did not terminate (goppc-0v7x)"}
+	case ws.Signaled():
+		return badssVerdict{badssFail, []string{"unexpected-signal"},
+			facts + ": the child was ended by " + ws.Signal().String() + " instead of exiting by itself"}
+	}
+
+	// The child exited by itself. Run every check so the report names all of them.
+	var oracles []string
+	var why []string
+	reject := func(oracle, format string, args ...any) {
+		oracles = append(oracles, oracle)
+		why = append(why, oracle+": "+fmt.Sprintf(format, args...))
+	}
+	for _, f := range e.forbidden {
+		if strings.Contains(r.out, f) {
+			reject("forbidden-text", "found %q", f)
+		}
+	}
+	if r.state.Success() && e.exitCode != 0 {
+		reject("exit0", "the child exited 0")
+	}
+	if code := r.state.ExitCode(); code == badssPrologueFailedExit {
+		reject("prologue", "the child could not install its CPU limit")
+	} else if code != e.exitCode {
+		reject("exit-code", "exit %d, want %d", code, e.exitCode)
+	}
+	if missing, ok := orderedMarkers(r.out, e.markers); !ok {
+		reject("terminal-evidence", "marker %q missing or out of order (the report did not run to its end)", missing)
+	}
+	if len(oracles) > 0 {
+		return badssVerdict{badssFail, oracles, facts + ": " + strings.Join(why, "; ")}
+	}
+	return badssVerdict{status: badssPass, detail: facts}
+}
+
+// badssLoad is the host's load average line, for the report. Best effort.
+func badssLoad() string {
+	out, err := exec.Command("uptime").Output()
+	if err != nil {
+		return "uptime unavailable: " + err.Error()
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// badssApply reports a verdict the way every witness does: a pass is logged, a
+// rejection is an error naming the oracle, and an exhausted infrastructure budget
+// is a skip - never a pass and never the regression.
+func badssApply(t *testing.T, what string, r badssRun, v badssVerdict) {
+	t.Helper()
+	t.Logf("%s: %s\n  load: %s\n  child output:\n%s", what, v, badssLoad(), r.out)
+	switch v.status {
+	case badssFail:
+		t.Errorf("%s: oracle %s rejected: %s", what, strings.Join(v.oracles, ", "), v.detail)
+	case badssInconclusive:
+		t.Skipf("%s: %s: %s", what, badssInconclusive, v.detail)
+	}
+}
+
+// TestBadssOracleCounterfeits exercises the oracle against children that are
+// broken on purpose, because an oracle that has only ever seen a good child proves
+// nothing. Each case names the oracle that must reject it, and the positive
+// control must pass.
+func TestBadssOracleCounterfeits(t *testing.T) {
+	testenv.MustHaveExec(t)
+	quick := badssBudget{cpu: 2 * time.Second, startup: 60 * time.Second, wall: 60 * time.Second}
+	starved := badssBudget{cpu: 10 * time.Second, startup: 60 * time.Second, wall: 3 * time.Second}
+	neverReady := badssBudget{cpu: 10 * time.Second, startup: 3 * time.Second, wall: 60 * time.Second}
+
+	cases := []struct {
+		name   string
+		arg    string
+		budget badssBudget
+		status string
+		// oracles that must all have rejected the child.
+		oracles []string
+		// hostile means the host being busy can legitimately turn the expected
+		// verdict into an inconclusive one; the case is then skipped, not failed.
+		hostile bool
+	}{
+		{"positive-control-complete-report-exit-4", badssCounterfeitCompleteArg, badssDefaultBudget, badssPass, nil, false},
+		{"fatal-prefix-then-exit-3", badssCounterfeitPrefixExit3Arg, badssDefaultBudget, badssFail, []string{"exit-code", "terminal-evidence"}, false},
+		{"full-report-text-then-exit-3", badssCounterfeitFullExit3Arg, badssDefaultBudget, badssFail, []string{"exit-code"}, false},
+		{"returned-path", badssCounterfeitReturnedArg, badssDefaultBudget, badssFail, []string{"forbidden-text", "exit-code"}, false},
+		{"alive-burning-cpu-never-exits-is-a-wedge", badssCounterfeitSpinnerArg, quick, badssFail, []string{"wedge"}, true},
+		{"alive-using-no-cpu-is-starved-not-wedged", badssCounterfeitSleeperArg, starved, badssInconclusive, []string{"wall-budget-cpu-unspent"}, false},
+		{"never-ready-is-startup-starved", badssCounterfeitNeverReadyArg, neverReady, badssInconclusive, []string{"startup-budget"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := runBadssChild(t, c.arg, c.budget)
+			v := judgeBadss(r, badssWitnessExpect)
+			t.Logf("verdict: %s (host load: %s)", v, badssLoad())
+			if c.hostile && v.status == badssInconclusive {
+				t.Skipf("host too busy to spend a %v CPU budget inside %v: %s", c.budget.cpu, c.budget.wall, v)
+			}
+			if v.status != c.status {
+				t.Fatalf("verdict %s, want status %s\n%s", v, c.status, r.out)
+			}
+			for _, o := range c.oracles {
+				if !v.has(o) {
+					t.Errorf("oracle %q did not reject this child: %s", o, v)
+				}
+			}
+		})
+	}
+}

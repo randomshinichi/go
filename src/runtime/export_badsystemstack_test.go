@@ -32,6 +32,15 @@ var gBadSystemstack g
 //go:noinline
 func BadSystemstackBranchTaken() {
 	real := getg()
+	// Make the report's nested fault deterministic. The fatal report walks m.curg
+	// from curg.sched (tracebacksomeothers), and a running g's saved sp is only
+	// meaningful if it was parked: sched.sp == 0 sends the unwinder through
+	// *(0+8), a hardware fault raised INSIDE the signal handler. That nested fault
+	// is exactly what unblockFaultSignals exists to survive (goppc-0v7x), and
+	// without it the witness would not exercise the fix. Left to itself the value
+	// is whatever the last syscall or park on this g saved - the "child is ready"
+	// line the test harness writes first is enough to change it - so zero it.
+	real.sched = gobuf{}
 	fake := &gBadSystemstack
 	*fake = *real
 	// A pending preemption is a sentinel placed in stackguard0. morestack on a g
