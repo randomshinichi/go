@@ -5,6 +5,7 @@
 package ssa
 
 import (
+	"cmd/compile/internal/ir"
 	"cmd/compile/internal/types"
 	"testing"
 )
@@ -156,5 +157,51 @@ func TestCarryChainOrder(t *testing.T) {
 		t.Errorf("carry chain order is wrong: got %v, want V%d after V%d after V%d after V%d after V%d after V%d,",
 			fun.f.Blocks[0], fun.values["A1"].ID, fun.values["A1carry"].ID, fun.values["A1Carryvalue"].ID,
 			fun.values["A2"].ID, fun.values["A2carry"].ID, fun.values["A2Carryvalue"].ID)
+	}
+}
+
+// TestScheduleResultAddrAfterVarDef checks that in the entry block the first
+// VarDef of a result parameter is scheduled before every address computed for
+// that result, even when the VarDef is not ready until a chain of other memory
+// operations (the open-coded defer bits here) has been scheduled behind some
+// address computations of its own. Liveness counts an address-of as a use, so
+// the result would otherwise be live on entry to the function.
+func TestScheduleResultAddrAfterVarDef(t *testing.T) {
+	c := testConfig(t)
+	typ := c.config.Types
+	result := c.Temp(typ.Int64)
+	result.Class = ir.PPARAMOUT
+	deferBits := c.Temp(typ.UInt8)
+	fun := c.Fun("entry",
+		Bloc("entry",
+			Valu("start", OpInitMem, types.TypeMem, 0, nil),
+			Valu("sp", OpSP, typ.Uintptr, 0, nil),
+			Valu("raddr", OpAMD64LEAQ, typ.Int64.PtrTo(), 0, result, "sp"),
+			Valu("rfield1", OpAMD64LEAQ, typ.Int64.PtrTo(), 8, nil, "raddr"),
+			Valu("rfield2", OpAMD64LEAQ, typ.Int64.PtrTo(), 16, nil, "raddr"),
+			Valu("rfield3", OpAMD64LEAQ, typ.Int64.PtrTo(), 24, nil, "raddr"),
+			Valu("baddr", OpAMD64LEAQ, typ.UInt8.PtrTo(), 0, deferBits, "sp"),
+			Valu("zero", OpAMD64MOVLconst, typ.UInt8, 0, nil),
+			Valu("bstore", OpAMD64MOVBstore, types.TypeMem, 0, nil, "baddr", "zero", "start"),
+			Valu("blive", OpVarLive, types.TypeMem, 0, deferBits, "bstore"),
+			Valu("rdef", OpVarDef, types.TypeMem, 0, result, "blive"),
+			Valu("v", OpAMD64MOVQconst, typ.Int64, 7, nil),
+			Valu("s0", OpAMD64MOVQstore, types.TypeMem, 0, nil, "raddr", "v", "rdef"),
+			Valu("s1", OpAMD64MOVQstore, types.TypeMem, 0, nil, "rfield1", "v", "s0"),
+			Valu("s2", OpAMD64MOVQstore, types.TypeMem, 0, nil, "rfield2", "v", "s1"),
+			Valu("s3", OpAMD64MOVQstore, types.TypeMem, 0, nil, "rfield3", "v", "s2"),
+			Goto("exit")),
+		Bloc("exit",
+			Exit("s3")))
+	schedule(fun.f)
+	pos := map[string]int{}
+	for i, v := range fun.f.Entry.Values {
+		pos[v.String()] = i
+	}
+	rdef := pos[fun.values["rdef"].String()]
+	for _, name := range []string{"raddr", "rfield1", "rfield2", "rfield3"} {
+		if p := pos[fun.values[name].String()]; p < rdef {
+			t.Errorf("%s scheduled at %d, before VarDef of the result at %d", name, p, rdef)
+		}
 	}
 }

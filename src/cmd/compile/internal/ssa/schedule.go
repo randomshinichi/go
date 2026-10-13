@@ -6,6 +6,7 @@ package ssa
 
 import (
 	"cmd/compile/internal/base"
+	"cmd/compile/internal/ir"
 	"cmd/compile/internal/types"
 	"cmp"
 	"container/heap"
@@ -274,6 +275,53 @@ func schedule(f *Func) {
 			}
 			if s := nextMem[w.ID]; s != nil && s.Block == b {
 				edges = append(edges, edge{v, s})
+			}
+		}
+
+		// In the entry block, force the first VarDef of a result parameter
+		// (ir.PPARAMOUT) to be scheduled before every value that computes the
+		// address of that result.
+		//
+		// The address of a result is built from the function's initial memory
+		// (buildssa, decladdrs) rather than from the memory after the VarDef
+		// that zeroResults emits, so nothing else orders the two. Liveness
+		// counts taking an address as a use (liveness.affectedVar), so if the
+		// scheduler puts the address above its own VarDef, the result is live
+		// on entry to the function -- where liveness.prologue only accepts
+		// ir.PPARAM (liveness/plive.go:855-863). Such a function does not
+		// compile today, so satisfying this edge cannot change the schedule of
+		// a function that does.
+		if b == f.Entry {
+			for _, d := range b.Values {
+				if d.Op != OpVarDef {
+					continue
+				}
+				if n, ok := d.Aux.(*ir.Name); !ok || n.Class != ir.PPARAMOUT {
+					continue
+				}
+				// Only the first VarDef of the result is constrained: a later
+				// one redefines a result that has legitimately been used.
+				// Walk the block's memory chain back to InitMem; if the walk
+				// cannot be completed, add no edge.
+				first := true
+				for m := d; first; {
+					m = m.MemoryArg()
+					if m == nil || m.Block != b {
+						first = false
+					} else if m.Op == OpInitMem {
+						break
+					} else if m.Op == OpVarDef && m.Aux == d.Aux {
+						first = false
+					}
+				}
+				if !first {
+					continue
+				}
+				for _, u := range b.Values {
+					if u.Op.SymEffect()&SymAddr != 0 && u.Aux == d.Aux {
+						edges = append(edges, edge{d, u})
+					}
+				}
 			}
 		}
 
