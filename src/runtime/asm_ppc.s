@@ -266,7 +266,18 @@ systemstack_restore_noswitch:
 	LWZ R1, 28(R1)
 	RET
 systemstack_bad:
-	BL runtime·badsystemstack(SB)
+	// Hide the call from the linker's nosplit analysis, as the other
+	// architectures do (asm_ppc64x.s: "Hide call from linker nosplit
+	// analysis"). badsystemstack is nosplit and belongs to the fatal
+	// systemstack path, so its subtree is a real nosplit chain: 256 bytes
+	// here (writeErrData, write, write1, libcCall, asmcgocall). On ppc64
+	// and amd64 that subtree is larger still (304 and 224 bytes) and is
+	// hidden the same way; only on ppc32 was the call direct, and it is
+	// what pushes chansend1 over the 800 byte limit once the PGO inliner
+	// puts chansend's body inside nosplit chansend1.
+	ADDI $runtime·badsystemstack(SB), R12
+	MTCTR R12
+	BCTRL
 	BL runtime·abort(SB)
 
 // asmcgocall_no_g invokes a C function on an aligned system stack without g.
