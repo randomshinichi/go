@@ -343,6 +343,9 @@ type badssExpect struct {
 	markers []string
 	// forbidden must not appear in out.
 	forbidden []string
+	// once must each appear exactly once: the original fault is attributed one
+	// time, not replaced or repeated by a later one.
+	once []string
 }
 
 const (
@@ -442,6 +445,11 @@ func judgeBadss(r badssRun, e badssExpect) badssVerdict {
 	}
 	if missing, ok := orderedMarkers(r.out, e.markers); !ok {
 		reject("terminal-evidence", "marker %q missing or out of order (the report did not run to its end)", missing)
+	}
+	for _, o := range e.once {
+		if n := strings.Count(r.out, o); n != 1 {
+			reject("attribution", "%q appears %d times, want exactly once", o, n)
+		}
 	}
 	if len(oracles) > 0 {
 		return badssVerdict{badssFail, oracles, facts + ": " + strings.Join(why, "; ")}
