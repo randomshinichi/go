@@ -56,8 +56,8 @@ import (
 //
 // On non-Linux ARM, the 64-bit functions use instructions unavailable before the ARMv6k core.
 //
-// On ARM, 386, and 32-bit MIPS, it is the caller's responsibility to arrange
-// for 64-bit alignment of 64-bit words accessed atomically via the primitive
+// On ARM, 386, 32-bit MIPS, and 32-bit PowerPC, it is the caller's responsibility
+// to arrange for 64-bit alignment of 64-bit words accessed atomically via the primitive
 // atomic functions (types [Int64] and [Uint64] are automatically aligned).
 // The first word in an allocated struct, array, or slice; in a global
 // variable; or in a local variable (because on 32-bit architectures, the
