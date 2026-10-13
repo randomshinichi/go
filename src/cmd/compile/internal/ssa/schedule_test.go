@@ -160,26 +160,31 @@ func TestCarryChainOrder(t *testing.T) {
 	}
 }
 
-// TestScheduleResultAddrAfterVarDef checks that in the entry block the first
-// VarDef of a result parameter is scheduled before every address computed for
-// that result, even when the VarDef is not ready until a chain of other memory
-// operations (the open-coded defer bits here) has been scheduled behind some
-// address computations of its own. Liveness counts an address-of as a use, so
-// the result would otherwise be live on entry to the function.
+// TestScheduleResultAddrAfterVarDef checks that in the entry block the value
+// that first kills a result parameter is scheduled before every address
+// computed for that result, even when the VarDef is not ready until a chain of
+// other memory operations (the open-coded defer bits here) has been scheduled
+// behind some address computations of its own. Liveness counts an address-of
+// as a use (liveness.affectedVar), and liveness.prologue rejects a result that
+// is live on entry to the function (liveness/plive.go:855-863), so the four
+// field addresses here must follow the VarDef.
+//
+// The result is a pointer so that the VarDef is valid SSA: ssa/check.go:325
+// requires a VarDef to be a merge candidate or to have a pointer type.
 func TestScheduleResultAddrAfterVarDef(t *testing.T) {
 	c := testConfig(t)
 	typ := c.config.Types
-	result := c.Temp(typ.Int64)
+	result := c.Temp(typ.BytePtr)
 	result.Class = ir.PPARAMOUT
 	deferBits := c.Temp(typ.UInt8)
 	fun := c.Fun("entry",
 		Bloc("entry",
 			Valu("start", OpInitMem, types.TypeMem, 0, nil),
 			Valu("sp", OpSP, typ.Uintptr, 0, nil),
-			Valu("raddr", OpAMD64LEAQ, typ.Int64.PtrTo(), 0, result, "sp"),
-			Valu("rfield1", OpAMD64LEAQ, typ.Int64.PtrTo(), 8, nil, "raddr"),
-			Valu("rfield2", OpAMD64LEAQ, typ.Int64.PtrTo(), 16, nil, "raddr"),
-			Valu("rfield3", OpAMD64LEAQ, typ.Int64.PtrTo(), 24, nil, "raddr"),
+			Valu("raddr", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 0, result, "sp"),
+			Valu("rfield1", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 8, nil, "raddr"),
+			Valu("rfield2", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 16, nil, "raddr"),
+			Valu("rfield3", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 24, nil, "raddr"),
 			Valu("baddr", OpAMD64LEAQ, typ.UInt8.PtrTo(), 0, deferBits, "sp"),
 			Valu("zero", OpAMD64MOVLconst, typ.UInt8, 0, nil),
 			Valu("bstore", OpAMD64MOVBstore, types.TypeMem, 0, nil, "baddr", "zero", "start"),
@@ -193,7 +198,9 @@ func TestScheduleResultAddrAfterVarDef(t *testing.T) {
 			Goto("exit")),
 		Bloc("exit",
 			Exit("s3")))
+	CheckFunc(fun.f)
 	schedule(fun.f)
+	CheckFunc(fun.f)
 	pos := map[string]int{}
 	for i, v := range fun.f.Entry.Values {
 		pos[v.String()] = i
@@ -203,5 +210,106 @@ func TestScheduleResultAddrAfterVarDef(t *testing.T) {
 		if p := pos[fun.values[name].String()]; p < rdef {
 			t.Errorf("%s scheduled at %d, before VarDef of the result at %d", name, p, rdef)
 		}
+	}
+}
+
+// TestX12ReviewInitializedResultCycle schedules a result whose address is
+// taken and whose memory is initialized by a store before its VarDef. The
+// store is the first kill of the result, and it is on the VarDef's memory
+// chain ahead of it, so an edge from the VarDef to the address would have to
+// be satisfied at the same time as the load-before-store edge that puts the
+// VarDef after the load through that address: the block would have no
+// schedule at all.
+//
+// This is the counterexample from the review of goppc-xprg.12, kept in
+// out/ppc-mac/x12-evidence/review-counterexample as ssa_x12_review_test.go.
+func TestX12ReviewInitializedResultCycle(t *testing.T) {
+	c := testConfig(t)
+	typ := c.config.Types
+	result := c.Temp(typ.BytePtr)
+	result.Class = ir.PPARAMOUT
+	fun := c.Fun("entry",
+		Bloc("entry",
+			Valu("start", OpInitMem, types.TypeMem, 0, nil),
+			Valu("sp", OpSP, typ.Uintptr, 0, nil),
+			Valu("zero", OpAMD64MOVQconst, typ.BytePtr, 0, nil),
+			Valu("init", OpAMD64MOVQstore, types.TypeMem, 0, result, "sp", "zero", "start"),
+			Valu("raddr", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 0, result, "sp"),
+			Valu("read", OpAMD64MOVQload, typ.BytePtr, 0, nil, "raddr", "init"),
+			Valu("rdef", OpVarDef, types.TypeMem, 0, result, "init"),
+			Valu("write", OpAMD64MOVQstore, types.TypeMem, 0, result, "sp", "read", "rdef"),
+			Goto("exit")),
+		Bloc("exit",
+			Exit("write")))
+	CheckFunc(fun.f)
+	schedule(fun.f)
+	CheckFunc(fun.f)
+}
+
+// TestX12ReviewSecondVarDef schedules a second VarDef of the same result. Only
+// the first kill of the result constrains the addresses computed for it: a
+// second VarDef redefines a result that is already live, so ordering the
+// address after it would cycle with the store that the first VarDef is
+// chained behind.
+//
+// Also from out/ppc-mac/x12-evidence/review-counterexample.
+func TestX12ReviewSecondVarDef(t *testing.T) {
+	c := testConfig(t)
+	typ := c.config.Types
+	result := c.Temp(typ.BytePtr)
+	result.Class = ir.PPARAMOUT
+	fun := c.Fun("entry",
+		Bloc("entry",
+			Valu("start", OpInitMem, types.TypeMem, 0, nil),
+			Valu("sp", OpSP, typ.Uintptr, 0, nil),
+			Valu("zero", OpAMD64MOVQconst, typ.BytePtr, 0, nil),
+			Valu("raddr", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 0, result, "sp"),
+			Valu("rdef0", OpVarDef, types.TypeMem, 0, result, "start"),
+			Valu("write0", OpAMD64MOVQstore, types.TypeMem, 0, nil, "raddr", "zero", "rdef0"),
+			Valu("rdef1", OpVarDef, types.TypeMem, 0, result, "write0"),
+			Valu("write1", OpAMD64MOVQstore, types.TypeMem, 0, nil, "raddr", "zero", "rdef1"),
+			Goto("exit")),
+		Bloc("exit",
+			Exit("write1")))
+	CheckFunc(fun.f)
+	schedule(fun.f)
+	CheckFunc(fun.f)
+}
+
+// TestScheduleResultAddrAfterFirstKill checks the invariant the entry-block
+// constraint is there to establish: no address of a result is scheduled above
+// the value that kills the result, so liveness never sees the result as used
+// before it is defined on entry to the function. The store that initializes
+// this result comes before its VarDef, and the base scheduler does not order
+// the address after the store either -- it schedules the address first, which
+// liveness then rejects with "bad live variable at entry".
+func TestScheduleResultAddrAfterFirstKill(t *testing.T) {
+	c := testConfig(t)
+	typ := c.config.Types
+	result := c.Temp(typ.BytePtr)
+	result.Class = ir.PPARAMOUT
+	fun := c.Fun("entry",
+		Bloc("entry",
+			Valu("start", OpInitMem, types.TypeMem, 0, nil),
+			Valu("sp", OpSP, typ.Uintptr, 0, nil),
+			Valu("zero", OpAMD64MOVQconst, typ.BytePtr, 0, nil),
+			Valu("init", OpAMD64MOVQstore, types.TypeMem, 0, result, "sp", "zero", "start"),
+			Valu("raddr", OpAMD64LEAQ, typ.BytePtr.PtrTo(), 0, result, "sp"),
+			Valu("read", OpAMD64MOVQload, typ.BytePtr, 0, nil, "raddr", "init"),
+			Valu("rdef", OpVarDef, types.TypeMem, 0, result, "init"),
+			Valu("write", OpAMD64MOVQstore, types.TypeMem, 0, result, "sp", "read", "rdef"),
+			Goto("exit")),
+		Bloc("exit",
+			Exit("write")))
+	CheckFunc(fun.f)
+	schedule(fun.f)
+	CheckFunc(fun.f)
+	pos := map[string]int{}
+	for i, v := range fun.f.Entry.Values {
+		pos[v.String()] = i
+	}
+	kill := pos[fun.values["init"].String()]
+	if p := pos[fun.values["raddr"].String()]; p < kill {
+		t.Errorf("raddr scheduled at %d, before the kill of the result at %d", p, kill)
 	}
 }
