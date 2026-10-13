@@ -309,7 +309,8 @@ func frameSizeMaterialized(progs []*obj.Prog, at int) (val int64, next int, ok b
 	return 0, 0, false
 }
 
-func dumpProgs(text *obj.Prog) string {	var b strings.Builder
+func dumpProgs(text *obj.Prog) string {
+	var b strings.Builder
 	for p := text; p != nil; p = p.Link {
 		fmt.Fprintf(&b, "\t%v\tSpadj=%d\n", p.As, p.Spadj)
 	}
