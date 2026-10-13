@@ -8,10 +8,12 @@ import (
 	"cmd/internal/obj"
 	"cmd/internal/objabi"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -323,16 +325,33 @@ func TestEncodeCompareProgs(t *testing.T) {
 // invert (BO=20 "always" -> 28 skips the inserted long branch, never reaching
 // the target; a CTR-decrement form must not be re-sensed). The compiler/runtime
 // emit only BO=4/12, so this path is reachable only from assembly.
+//
+// Every outcome is an assertion, including a panic. Recovering a panic from one
+// of the legal forms is not acceptance: a production change that panicked on
+// every far BC $4 used to leave this whole package green. For the illegal forms
+// the guard's contract is a diagnostic, so a crash is a failure there too.
 func TestRelaxConditionalBranchRejectsUninvertibleBO(t *testing.T) {
+	// What the assembler did with one input: whether it panicked, the
+	// diagnostics it issued, the words it emitted, and the two progs the oracle
+	// inspects (the branch that was relaxed and its original far target).
+	type relaxResult struct {
+		panicValue any
+		diags      []string
+		words      []byte
+		branch     *obj.Prog
+		target     *obj.Prog
+	}
 	// build a long-branch scenario: cmp; BC $bo -> target; 9000 nops; target.
-	runAssemble := func(bo int32) (diagnosed, panicked bool) {
+	runAssemble := func(bo int32) (res relaxResult) {
 		defer func() {
 			if r := recover(); r != nil {
-				panicked = true
+				res.panicValue = r
 			}
 		}()
 		ctxt := obj.Linknew(&Linkppc)
-		ctxt.DiagFunc = func(string, ...interface{}) { diagnosed = true }
+		ctxt.DiagFunc = func(format string, args ...interface{}) {
+			res.diags = append(res.diags, fmt.Sprintf(format, args...))
+		}
 		text := &obj.Prog{As: obj.ATEXT}
 		cmp := &obj.Prog{As: ACMPWI, From: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}, To: obj.Addr{Type: obj.TYPE_CONST}}
 		branch := &obj.Prog{As: ABC, From: obj.Addr{Type: obj.TYPE_CONST, Offset: int64(bo)}, Reg: 2, To: obj.Addr{Type: obj.TYPE_BRANCH}}
@@ -346,24 +365,80 @@ func TestRelaxConditionalBranchRejectsUninvertibleBO(t *testing.T) {
 		target := &obj.Prog{As: AADDI, From: obj.Addr{Type: obj.TYPE_CONST}, Reg: REG_R0, To: obj.Addr{Type: obj.TYPE_REG, Reg: REG_R3}}
 		prev.Link = target
 		branch.To.SetTarget(target)
+		res.branch, res.target = branch, target
 		s := ctxt.Lookup("relax-bo")
 		s.NewFuncInfo().Text = text
 		assemble(ctxt, s, nil)
+		res.words = s.P
 		return
 	}
 
-	// Must be rejected: BO=20 (1z1zz always) and BO=16 (1z00y CTR!=0).
-	for _, bo := range []int32{20, 16} {
-		diagnosed, panicked := runAssemble(bo)
-		if !diagnosed && !panicked {
-			t.Errorf("BC $%d out-of-range was silently mis-relaxed; expected a diagnostic", bo)
+	// Must relax, quietly and correctly: the CR-test forms 4 and 12. The branch
+	// word is the sense-inverted form (BO 4<->12, BI=2) displaced +8, landing on
+	// the ori r0,r0,0 that the relaxation inserted after the long branch, and the
+	// long branch still carries the displacement to the far target.
+	for _, tc := range []struct {
+		bo         int32
+		branchWord uint32
+	}{
+		// Relaxed BO=4 -> BO=12: 16<<26 | 12<<21 | 2<<16 | 8.
+		{4, 0x41820008},
+		// Relaxed BO=12 -> BO=4.
+		{12, 0x40820008},
+	} {
+		res := runAssemble(tc.bo)
+		if res.panicValue != nil {
+			t.Fatalf("BC $%d is an invertible CR-test form but relaxation panicked: %v (a legal input must relax, not crash)", tc.bo, res.panicValue)
+		}
+		if len(res.diags) != 0 {
+			t.Fatalf("BC $%d is an invertible CR-test form but was diagnosed: %q", tc.bo, res.diags)
+		}
+		pc := int(res.branch.Pc) // 4: the cmpi word precedes the branch
+		if len(res.words) < pc+16 {
+			t.Fatalf("BC $%d emitted %d bytes, want at least the branch, the long branch and the skip word", tc.bo, len(res.words))
+		}
+		if got := binary.BigEndian.Uint32(res.words[pc : pc+4]); got != tc.branchWord {
+			t.Errorf("BC $%d relaxed to %08x, want %08x (sense inverted at +8 to the skip word)", tc.bo, got, tc.branchWord)
+		}
+		skip := res.branch.To.Target()
+		if skip == res.target {
+			t.Errorf("BC $%d still points at the far target; the inverted branch would skip the long branch", tc.bo)
+		} else if skip == nil || skip.Pc != res.branch.Pc+8 {
+			t.Errorf("BC $%d targets %v, want the skip word at pc %d", tc.bo, skip, res.branch.Pc+8)
+		}
+		longPc := pc + 4
+		if got := binary.BigEndian.Uint32(res.words[longPc : longPc+4]); got != 0x48000000|uint32(res.target.Pc-int64(longPc)) {
+			t.Errorf("long branch for BC $%d = %08x, want a b to the far target at pc %d", tc.bo, got, res.target.Pc)
+		}
+		if got := binary.BigEndian.Uint32(res.words[longPc+4 : longPc+8]); got != 0x60000000 {
+			t.Errorf("word after the long branch = %08x, want the ori r0,r0,0 the inverted branch targets", got)
 		}
 	}
-	// Must succeed (no diagnosis): the CR-test forms 4 and 12.
-	for _, bo := range []int32{4, 12} {
-		if diagnosed, _ := runAssemble(bo); diagnosed {
-			t.Errorf("BC $%d is an invertible CR-test form but was diagnosed", bo)
+
+	// Must be rejected: BO=20 (1z1zz always) and BO=16 (1z00y CTR!=0). The
+	// guard's contract is the diagnostic below, and not a panic: an assembler
+	// that crashes on assembly input is not an assembler that refused it. The
+	// message names the BO, so an unrelated diagnostic cannot stand in for it.
+	for _, bo := range []int32{20, 16} {
+		res := runAssemble(bo)
+		if res.panicValue != nil {
+			t.Fatalf("BC $%d must be refused with a diagnostic, but relaxation panicked: %v", bo, res.panicValue)
 		}
+		want := fmt.Sprintf("cannot relax out-of-range conditional branch BO=%d", bo)
+		found := false
+		for _, d := range res.diags {
+			if strings.Contains(d, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("BC $%d out-of-range: want the relaxation guard's diagnostic %q, got %q", bo, want, res.diags)
+		}
+		// NOTE: the guard diagnoses and then still flips the sense, so the words
+		// this input leaves behind are the mis-relaxed ones documented above. The
+		// oracle is therefore the diagnostic, not the word; refusing to flip as
+		// well would be a production change, not a test repair (see the report's
+		// residual risk R1).
 	}
 }
 
