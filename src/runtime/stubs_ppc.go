@@ -8,9 +8,6 @@ package runtime
 
 import "unsafe"
 
-// stackcheck is the private pre-prologue guard helper emitted by the PPC32 backend.
-func stackcheck()
-
 //go:noescape
 func asmcgocall_no_g(fn, arg unsafe.Pointer)
 

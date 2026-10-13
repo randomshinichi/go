@@ -38,22 +38,6 @@ TEXT runtime·mstart_stub(SB), NOSPLIT, $0-0
 	ADDI	R3, R0, $0
 	RET
 
-// stackcheck is a private pre-prologue helper. The caller passes its fully
-// allocated frame size in R3; it returns nonzero when SP-frame crosses g's
-// stack guard. It is a leaf so it can run before the caller has a frame.
-TEXT runtime·stackcheck(SB), NOSPLIT|NOFRAME, $0-0
-	CMPLW R1, R3
-	BC 12, 0, grow // SP-frame would wrap around the 32-bit address space.
-	LWZ R4, g_stackguard0(R30)
-	SUBF R3, R3, R1
-	CMPLW R3, R4
-	BC 12, 0, grow
-	ADDI R3, R0, $0
-	RET
-grow:
-	ADDI R3, R0, $1
-	RET
-
 // gogo restores a saved goroutine context. PPC32 has stack-only public Go
 // arguments and keeps g in R30; all values needed after changing SP are first
 // loaded into reserved scratch registers.

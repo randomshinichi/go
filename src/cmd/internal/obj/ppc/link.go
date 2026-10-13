@@ -64,8 +64,10 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			leaf = false
 		}
 	}
-	// A split-capable function with locals calls the stack guard helper before
-	// allocating its frame, so its incoming link register must be saved too.
+	// A split-capable function with locals gets the inline guard prologue, whose
+	// grow path branch-and-links into runtime.morestack before the frame is
+	// allocated (the ABL to runtime.morestack_noctxt below), so the incoming link
+	// register must be saved too -- the function is not a leaf.
 	if locals != 0 && !s.NoSplit() {
 		leaf = false
 	}
@@ -265,8 +267,9 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// #35470. Both of those upstream choices are copied here.
 		//
 		// g is reached through R30 (REGG, obj/ppc/regs.go:101), which is the same
-		// register the removed helper dereferenced: src/runtime/asm_ppc.s:47
-		// `LWZ R4, g_stackguard0(R30)`, whose linked address is 8(R30) as measured
+		// register the removed helper dereferenced (`LWZ R4, g_stackguard0(R30)`,
+		// deleted with the helper by goppc-j7xz). The guard load below reads the
+		// same field through R30, at the linked address 8(R30) as measured
 		// above. So this adds no ABI requirement -- every function that reaches this
 		// block already had to arrive with R30 = g, including the assembly ones.
 		//
@@ -335,7 +338,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Grow path: it is reached only by falling through the compare above or by
 		// one of the two branches, and the first instruction re-reads the caller's
 		// linkage slot because runtime.morestack wants the interrupted function's
-		// saved LR in R5 (src/runtime/asm_ppc.s:76-81).
+		// saved LR in R5 (src/runtime/asm_ppc.s:61-65).
 		grow := appendOp(enough, ALWZ, mem(8), reg(REG_R5))
 		morestack := "runtime.morestack_noctxt"
 		if s.NeedCtxt() {
