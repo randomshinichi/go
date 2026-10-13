@@ -5,6 +5,7 @@
 package atomic_test
 
 import (
+	internalatomic "internal/runtime/atomic"
 	. "sync/atomic"
 	"testing"
 	"time"
@@ -23,10 +24,17 @@ import (
 // operation is the assertion: it is reached only if the nil call released the
 // lock. A watchdog turns a resulting deadlock into a test failure instead of a
 // whole-suite timeout.
+//
+// All seven lock-based primitives appear below. And64 and Or64 have no public
+// sync/atomic wrapper, so they are called through internal/runtime/atomic
+// directly; the first ten cases reach the other five through the public API.
+// Five executed and seven inspected was the state this test was written in
+// (goppc-xprg.9 review): a post-lock nil check in And64 or Or64 alone left the
+// suite green.
 func TestNil64DoesNotPoisonLock(t *testing.T) {
 	primitives := []struct {
-		name string
-		nil  func() // a call that must panic on the nil operand
+		name  string
+		nil   func() // a call that must panic on the nil operand
 		valid func() // a call on a real, 8-aligned operand
 	}{
 		{"SwapInt64", func() { SwapInt64(nil, 1) }, func() { var x int64; SwapInt64(&x, 1) }},
@@ -39,6 +47,11 @@ func TestNil64DoesNotPoisonLock(t *testing.T) {
 		{"LoadUint64", func() { LoadUint64(nil) }, func() { var x uint64; LoadUint64(&x) }},
 		{"StoreUint64", func() { StoreUint64(nil, 1) }, func() { var x uint64; StoreUint64(&x, 1) }},
 		{"CompareAndSwapUint64", func() { CompareAndSwapUint64(nil, 0, 1) }, func() { var x uint64; CompareAndSwapUint64(&x, 0, 1) }},
+		// The operand is a fresh heap word: a raw 64-bit local is only
+		// 4-aligned on ppc32 and would fault for an alignment reason instead of
+		// the nil one under test.
+		{"And64", func() { internalatomic.And64(nil, 1) }, func() { internalatomic.And64(new(uint64), 1) }},
+		{"Or64", func() { internalatomic.Or64(nil, 1) }, func() { internalatomic.Or64(new(uint64), 1) }},
 	}
 
 	for _, p := range primitives {
