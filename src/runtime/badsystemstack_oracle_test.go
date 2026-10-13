@@ -187,6 +187,30 @@ var badssDefaultBudget = badssBudget{
 	wall:    120 * time.Second,
 }
 
+// badssBudgetScaleEnv, when set to a positive number, multiplies the startup and
+// wall budgets of the witnesses. It exists to drill the starvation verdict on a
+// real wedging runtime: a scale of 0.05 gives the wedge about six seconds of wall,
+// which on a one-CPU target is less CPU than the budget, which is exactly what a
+// CPU-starved child looks like, and the witness must then report
+// INFRASTRUCTURE-INCONCLUSIVE and not the regression. Unset in every normal run.
+const badssBudgetScaleEnv = "BADSS_BUDGET_SCALE"
+
+// badssWitnessBudget is the budget the witnesses run their children with.
+func badssWitnessBudget(t *testing.T) badssBudget {
+	t.Helper()
+	b := badssDefaultBudget
+	if v := os.Getenv(badssBudgetScaleEnv); v != "" {
+		scale, err := strconv.ParseFloat(v, 64)
+		if err != nil || scale <= 0 {
+			t.Fatalf("%s=%q is not a positive number", badssBudgetScaleEnv, v)
+		}
+		b.startup = time.Duration(float64(b.startup) * scale)
+		b.wall = time.Duration(float64(b.wall) * scale)
+		t.Logf("DRILL: %s=%s: startup budget %v, wall budget %v", badssBudgetScaleEnv, v, b.startup, b.wall)
+	}
+	return b
+}
+
 // badssSink collects a child's stderr and notices the ready line.
 type badssSink struct {
 	mu    sync.Mutex
