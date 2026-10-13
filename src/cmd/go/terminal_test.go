@@ -2,6 +2,31 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !(darwin && (ppc || ppc64))
+
+// DISABLED ON PPC DARWIN, RECORDED HERE ON PURPOSE (darwin/ppc32 and darwin/ppc64 port).
+//
+// This test imports golang.org/x/term, which imports golang.org/x/sys/unix, and the
+// vendored cmd/vendor/golang.org/x/sys/unix carries its type and syscall tables
+// (ztypes/zsyscall/zerrors/zsysnum) only for darwin/amd64 and darwin/arm64. Untagged,
+// this file made `go test -c cmd/go` unbuildable for BOTH PowerPC Darwin targets:
+//
+//	# cmd/vendor/golang.org/x/sys/unix
+//	sockcmsg_unix.go:33:9: undefined: Cmsghdr
+//	... undefined: RawSockaddrDatalink, RawSockaddrCtl
+//
+// cmd/pprof/readlineui.go reaches this same dependency and was handled by
+// 9357ffde58 ("adjudicate the 12 files whose !ppc64 tag silently included ppc32");
+// the test file was missed. Same treatment, same reason. See bead goppc-xprg.11.
+//
+// The tag is `!(darwin && (ppc || ppc64))` and NOT a bare `!ppc64` on purpose: linux/ppc64
+// is a supported target with tables to match, and a bare `!ppc64` is exactly the silent
+// over-exclusion 9357ffde58 was written to undo.
+//
+// This does NOT need an x/sys table set, and nothing else in the cmd module is blocked:
+// the whole module builds for darwin/ppc (`go build ./...` rc=0). Consequence, stated
+// plainly: cmd/go's terminal tests are not built for these two targets. Do not read this
+// as full support for cmd/go's test suite there.
 package main_test
 
 import (
