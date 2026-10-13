@@ -327,6 +327,14 @@ func unlock2(l *mutex) {
 // mutexSampleContention returns whether the current mutex operation should
 // report any contention it discovers.
 func mutexSampleContention() bool {
+	if !mutexProfilingOn() {
+		// Mutex contention profiling is off, and that is the default. Ask before
+		// reading the rate: on ppc32 that read takes lock64, and this function
+		// runs on every unlock, including the unlock of debuglock at the end of
+		// every print(). A fatal report or a panic printed on a thread that
+		// holds lock64 would then spin on the lock forever (goppc-7tqu).
+		return false
+	}
 	if rate := int64(atomic.Load64(&mutexprofilerate)); rate <= 0 {
 		return false
 	} else {
