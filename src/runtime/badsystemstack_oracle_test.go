@@ -268,20 +268,31 @@ type badssRun struct {
 // runBadssChild re-execs this test binary in one of the child modes.
 func runBadssChild(t *testing.T, arg string, budget badssBudget) badssRun {
 	t.Helper()
-	cmd := exec.Command(testenv.Executable(t), arg)
+	return runBadssCommand(t, arg, budget, testenv.Executable(t), arg)
+}
+
+// runBadssCommand runs name with args under the same two-phase timer as the child
+// modes. what labels the run in reports. The command must either be a child mode
+// or, like gdb, run one and pass its stderr through.
+func runBadssCommand(t *testing.T, what string, budget badssBudget, name string, args ...string) badssRun {
+	t.Helper()
+	cmd := exec.Command(name, args...)
 	cmd = testenv.CleanCmdEnv(cmd)
 	cmd.Env = append(cmd.Env, badssCPUEnv+"="+strconv.Itoa(int(budget.cpu/time.Second)))
-	// Only stderr: the fatal path and every marker here write to fd 2.
+	// The fatal path and every marker here write to fd 2. A debugger prints its own
+	// messages on fd 1 and the child's output interleaves with them, so both go to
+	// one sink (exec shares one copier when the writers are identical).
 	sink := newBadssSink()
 	cmd.Stderr = sink
+	cmd.Stdout = sink
 	created := time.Now()
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", arg, err)
+		t.Fatalf("starting %s: %v", what, err)
 	}
 	done := make(chan struct{})
 	go func() { cmd.Wait(); close(done) }()
 
-	r := badssRun{arg: arg, budget: budget}
+	r := badssRun{arg: what, budget: budget}
 	killSent := false
 	kill := func() {
 		killSent = cmd.Process.Kill() == nil
@@ -337,7 +348,8 @@ func runBadssChild(t *testing.T, arg string, budget badssBudget) badssRun {
 
 // badssExpect is what a child that terminated by itself must have looked like.
 type badssExpect struct {
-	// exitCode is the exit status the child must have ended with.
+	// exitCode is the exit status the child must have ended with; negative means
+	// the status is not graded.
 	exitCode int
 	// markers must all appear in out, in this order.
 	markers []string
@@ -435,10 +447,13 @@ func judgeBadss(r badssRun, e badssExpect) badssVerdict {
 			reject("forbidden-text", "found %q", f)
 		}
 	}
-	if r.state.Success() && e.exitCode != 0 {
+	if r.state.Success() && e.exitCode > 0 {
 		reject("exit0", "the child exited 0")
 	}
-	if code := r.state.ExitCode(); code == badssPrologueFailedExit {
+	if e.exitCode < 0 {
+		// Exit status not graded: the command is a debugger, whose own status
+		// says nothing about the program it ran. Its markers still are.
+	} else if code := r.state.ExitCode(); code == badssPrologueFailedExit {
 		reject("prologue", "the child could not install its CPU limit")
 	} else if code != e.exitCode {
 		reject("exit-code", "exit %d, want %d", code, e.exitCode)
