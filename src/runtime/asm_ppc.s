@@ -446,7 +446,22 @@ TEXT runtime·switchToCrashStack0(SB), NOSPLIT, $0-4
 	BL runtime·abort(SB)
 
 // sigfwd calls a signal handler with the Darwin C ABI argument registers.
-TEXT runtime·sigfwd(SB), NOSPLIT, $0-16
+//
+// The callee is C, so it may home its register arguments for the whole call:
+// ARG(n) = 24 + 4*(n-1) counts from the SP of the frame that made the call
+// (reference/xnu/EXTERNAL_HEADERS/architecture/ppc/asm_help.h:116-125), so a
+// homing callee writes SP+24..SP+55 of THIS frame, and BUILD_FRAME floors that
+// parameter area at 32 bytes (:161-172). Declare $32 of locals: obj/ppc/link.go
+// then allocates 64 bytes, 24 of linkage plus the full 32-byte parameter area,
+// and the handler's home area lies inside the frame instead of running over the
+// frame's top. A $0 declaration allocates 32 bytes, leaving only SP+24..SP+31
+// inside the frame: the handler's third word then lands on this frame's caller's
+// backchain slot, and its fifth (r7's home slot, SP+40) on the saved LR this
+// function's own prologue wrote at entry_SP+8, so the RET below returns to the
+// handler's r7 argument. Every C-calling trampoline in sys_darwin_ppc.s has the
+// same shape for the same reason (goppc-xprg.22); this one lives here and was
+// missed by that census (goppc-3zqt).
+TEXT runtime·sigfwd(SB), NOSPLIT, $32-16
 	LWZ R12, fn+0(FP)
 	LWZ R3, sig+4(FP)
 	LWZ R4, info+8(FP)
