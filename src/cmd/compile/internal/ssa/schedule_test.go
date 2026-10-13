@@ -213,20 +213,13 @@ func TestScheduleResultAddrAfterVarDef(t *testing.T) {
 	}
 }
 
-// TestX12ReviewInitializedResultCycle schedules a result whose address is
-// taken and whose memory is initialized by a store before its VarDef. The
-// store is the first kill of the result, and it is on the VarDef's memory
-// chain ahead of it, so an edge from the VarDef to the address would have to
-// be satisfied at the same time as the load-before-store edge that puts the
-// VarDef after the load through that address: the block would have no
-// schedule at all.
-//
-// This is the counterexample from the review of goppc-xprg.12, kept in
-// out/ppc-mac/x12-evidence/review-counterexample as ssa_x12_review_test.go.
-func TestX12ReviewInitializedResultCycle(t *testing.T) {
-	c := testConfig(t)
+// initializedResultCycle schedules the graph of
+// TestX12ReviewInitializedResultCycle with a result of type res: a store
+// initializes the result before its VarDef, the address of the result is
+// taken, and the result is read back through that address.
+func initializedResultCycle(c *Conf, res *types.Type) {
 	typ := c.config.Types
-	result := c.Temp(typ.BytePtr)
+	result := c.Temp(res)
 	result.Class = ir.PPARAMOUT
 	fun := c.Fun("entry",
 		Bloc("entry",
@@ -244,6 +237,51 @@ func TestX12ReviewInitializedResultCycle(t *testing.T) {
 	CheckFunc(fun.f)
 	schedule(fun.f)
 	CheckFunc(fun.f)
+}
+
+// TestX12ReviewInitializedResultCycle schedules a result whose address is
+// taken and whose memory is initialized by a store before its VarDef. The
+// store is the first kill of the result, and it is on the VarDef's memory
+// chain ahead of it, so an edge from the VarDef to the address would have to
+// be satisfied at the same time as the load-before-store edge that puts the
+// VarDef after the load through that address: the block would have no
+// schedule at all.
+//
+// This is the counterexample from the review of goppc-xprg.12, kept in
+// out/ppc-mac/x12-evidence/review-counterexample as ssa_x12_review_test.go.
+func TestX12ReviewInitializedResultCycle(t *testing.T) {
+	c := testConfig(t)
+	initializedResultCycle(c, c.config.Types.BytePtr)
+}
+
+// TestX12ReviewInitializedResultCycleAggregateResult is the review of
+// goppc-10mz's counterexample: the same graph with a result type that
+// liveness counts a single store to as a kill although the type is not a
+// scalar. liveness.isfat (liveness/plive.go:1524) recurses through a
+// one-element array or a one-field struct, so for [1]*T and struct{p *T} a
+// store to the result IS the first kill of it, and the scheduler's
+// fullWrite has to say so or the edge it adds comes from the VarDef -- the
+// edge this graph cannot satisfy.
+//
+// [2]*T is deliberately absent: isfat([2]*T) is true, so liveness agrees with
+// fullWrite that one store does not cover the result, and this graph is then
+// genuinely unschedulable for both compilers.
+func TestX12ReviewInitializedResultCycleAggregateResult(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  func(*Types) *types.Type
+	}{
+		{"pointer", func(t *Types) *types.Type { return t.BytePtr }},
+		{"array1", func(t *Types) *types.Type { return types.NewArray(t.BytePtr, 1) }},
+		{"struct1pointer", func(t *Types) *types.Type {
+			return types.NewStruct([]*types.Field{{Type: t.BytePtr}})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := testConfig(t)
+			initializedResultCycle(c, tc.res(&c.config.Types))
+		})
+	}
 }
 
 // TestX12ReviewSecondVarDef schedules a second VarDef of the same result. Only
