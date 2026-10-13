@@ -175,10 +175,19 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 		t.Skip("INCONCLUSIVE: clang unavailable")
 	}
 	var asm strings.Builder
-	asm.WriteString("fragment_start:\nclrrwi 1,1,4\naddi 1,1,-8192\nmr 2,1\nli 0,0\n")
+	// R2 is not allocatable and carries the SP canary. R30 is the port's g
+	// register (cmd/internal/obj/ppc/regs.go: REGG), and the linker-inserted
+	// prologue guard reads g->stackguard0 inline through it (bead goppc-h890), so
+	// a fixture that executes compiler-emitted bodies has to supply a
+	// dereferenceable fake g. It sits in the reserved caller block at SP+4096 --
+	// clear of the argument slots at 24/28, of the widest body's own scratch
+	// (SP+2364 in TestFloatPressureQEMU) and of both canaries at 4092 and -4096 --
+	// and its guard word is 0, the smallest possible bound, so the guard never
+	// asks to grow and fn_morestack_noctxt stays unreachable.
+	asm.WriteString("fragment_start:\nclrrwi 1,1,4\naddi 1,1,-8192\nmr 2,1\naddi 30,2,4096\nli 0,0\nstw 0,8(30)\n")
 	asm.WriteString(setWord(4092, 0x13579bdf) + setWord(-4096, 0x13579bdf))
 	asm.WriteString(body)
-	asm.WriteString("cmpw 1,2\nbne stack_bad\n")
+	asm.WriteString("cmpw 1,2\nbne stack_bad\naddi 4,2,4096\ncmpw 30,4\nbne stack_bad\n")
 	asm.WriteString(checkWord(4092, 0x13579bdf) + checkWord(-4096, 0x13579bdf))
 	asm.WriteString("li 3,0\nli 0,1\nsc\nresult_bad:\nli 3,1\nli 0,1\nsc\nstack_bad:\nli 3,2\nli 0,1\nsc\nfn_smash:\nstwu 1,-48(1)\n")
 	// A distinct known finite pattern, not x-x (which can retain NaN bits).
@@ -203,13 +212,21 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 			}
 		}
 		calls := fixtureFunctionRelocs(t, dump, pkg+"."+fn)
+		growReloc := false
 		for i, w := range words {
 			if rel, ok := calls[i*4]; ok {
 				if rel.kind != "R_CALLPOWER" || w != 0x48000001 {
 					t.Fatalf("non-call relocation: %s %08x", rel.kind, w)
 				}
 				target := strings.TrimPrefix(rel.target, pkg+".")
-				found := target == "smash" || target == "runtime.stackcheck" || target == "runtime.morestack" || target == "stackcheck" || target == "morestack"
+				// runtime.morestack_noctxt is the grow-path target of the inline
+				// prologue guard, which no longer reaches the stack check through a
+				// `BL runtime.stackcheck` helper (bead goppc-h890). It is still a
+				// real call of a real runtime entry point: the adapter names it and
+				// stubs it below, and asserts further down that the function
+				// carrying the relocation really contains the guard that emits it.
+				morestackNoctxt := target == "runtime.morestack_noctxt" || target == "morestack_noctxt"
+				found := morestackNoctxt || target == "smash" || target == "runtime.stackcheck" || target == "runtime.morestack" || target == "stackcheck" || target == "morestack"
 				for _, local := range functions {
 					found = found || target == local
 				}
@@ -221,6 +238,15 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 					asm.WriteString("bl fn_stackcheck\n")
 				case "runtime.morestack", "morestack":
 					asm.WriteString("bl fn_morestack\n")
+				case "runtime.morestack_noctxt", "morestack_noctxt":
+					// The stub must not return. runtime.morestack_noctxt either
+					// grows the stack and re-enters the function or throws; it never
+					// resumes at the instruction after the BL. A `blr` stub would
+					// simply loop the guard's unconditional back edge. exit=99 says
+					// "the guard asked to grow", which this fixture's zero guard
+					// word rules out.
+					asm.WriteString("bl fn_morestack_noctxt\n")
+					growReloc = true
 				default:
 					fmt.Fprintf(&asm, "bl fn_%s\n", target)
 				}
@@ -235,8 +261,22 @@ func runFloatELF(t *testing.T, dir, dump string, functions []string, body string
 				fmt.Fprintf(&asm, ".long 0x%08x\n", w)
 			}
 		}
+		if growReloc {
+			// Accepting the relocation is not the whole claim: the guard that
+			// emits it must be in these words. LWZ R4, g_stackguard0(R30) is the
+			// inline guard load and LWZ R5, 8(SP) re-reads the caller's linkage
+			// slot for the morestack call (src/cmd/internal/obj/ppc/link.go).
+			var guardLoad, linkageLoad bool
+			for _, w := range words {
+				guardLoad = guardLoad || w == 0x809e0008
+				linkageLoad = linkageLoad || w == 0x80a10008
+			}
+			if !guardLoad || !linkageLoad {
+				t.Fatalf("%s calls runtime.morestack_noctxt but has no inline guard: guardLoad=%v linkageLoad=%v", fn, guardLoad, linkageLoad)
+			}
+		}
 	}
-	asm.WriteString("fn_stackcheck:\nli 3,0\nblr\nfn_morestack:\nli 3,99\nli 0,1\nsc\n")
+	asm.WriteString("fn_stackcheck:\nli 3,0\nblr\nfn_morestack:\nli 3,99\nli 0,1\nsc\nfn_morestack_noctxt:\nli 3,99\nli 0,1\nsc\n")
 	if mutate != nil && changes == 0 {
 		t.Fatal("negative control changed no instruction")
 	}
