@@ -5776,6 +5776,18 @@ func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 		}
 	}
 
+	// On ppc (32-bit), 64-bit atomics are emulated with one spinlock too, and
+	// the guard above cannot be used: those operations are ordinary Go functions
+	// that may be inlined, so the interrupted PC need not be in internal/runtime/atomic
+	// while the lock is held. Ask the lock itself. If it is held, the interrupted
+	// thread may be the holder, and cpuprof.add would spin on a lock whose owner
+	// is the code this handler interrupted (goppc-452y). Count the sample as lost,
+	// as the guard above does; it is reported as _LostSIGPROFDuringAtomic64.
+	if lock64Held() {
+		cpuprof.lostAtomic++
+		return
+	}
+
 	// Profiling runs concurrently with GC, so it must not allocate.
 	// Set a trap in case the code does allocate.
 	// Note that on windows, one thread takes profiles of all the
