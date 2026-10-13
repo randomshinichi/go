@@ -8,7 +8,18 @@ import (
 	"runtime"
 	"syscall"
 	"testing"
+	"time"
 )
+
+func TestDarwinPPCTimerNetpoll(t *testing.T) {
+	// The first timer initializes netpoll. Leopard has no EVFILT_USER, so this
+	// also guards that darwin/ppc selects the pipe-based wakeup implementation.
+	start := time.Now()
+	time.Sleep(time.Millisecond)
+	if elapsed := time.Since(start); elapsed < time.Millisecond {
+		t.Fatalf("time.Sleep returned early: %v", elapsed)
+	}
+}
 
 func TestKeventErrnoDarwinPPC(t *testing.T) {
 	// libc returns -1 for this invalid descriptor. Runtime callers need
