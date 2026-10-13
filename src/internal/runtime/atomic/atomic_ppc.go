@@ -182,6 +182,19 @@ func byteLane(ptr *uint8) (*uint32, uint) {
 // The 32-bit target has no native 64-bit reservation instruction. All 64-bit
 // operations serialize through lock64 and use ordinary 32-bit-pair accesses.
 //
+// lock64 is a plain spinlock and is NOT reentrant: a signal handler that runs
+// on the thread that holds it, and then does a 64-bit atomic of its own,
+// spins forever (goppc-452y). The SIGPROF handler does exactly that through
+// profBuf.write, so sigprof asks Lock64Held first and drops the sample when
+// the answer is yes. Every other 64-bit atomic reachable from a signal handler
+// has the same hazard and needs the same care.
+//
+// lock64Acquire and lock64Release are linknamed (push) only so the runtime's
+// test can hold the lock across a self-directed SIGPROF; see
+// runtime/proflock64_ppc_test.go.
+//
+//go:linkname lock64Acquire
+//go:linkname lock64Release
 //go:nosplit
 func lock64Acquire() {
 	for !casRaw(&lock64, 0, 1) {
@@ -190,6 +203,18 @@ func lock64Acquire() {
 
 //go:nosplit
 func lock64Release() { storeRaw(&lock64, 0) }
+
+// Lock64Held reports whether some thread currently holds lock64. A signal
+// handler that is about to do a 64-bit atomic calls it first: if the answer is
+// yes, the holder may be the very thread the signal interrupted, and waiting
+// for the lock would wait for the handler's own caller. The test is exact in
+// that direction: if the interrupted thread holds lock64, the word stays 1 for
+// the whole handler, so a handler that sees 0 cannot be the lock's blocked
+// owner. It can say yes when another thread holds the lock; the caller then
+// drops work it could have done, which is a lost sample, not a hang.
+//
+//go:nosplit
+func Lock64Held() bool { return loadRaw(&lock64) != 0 }
 
 //go:nosplit
 func check64(ptr *uint64) {
