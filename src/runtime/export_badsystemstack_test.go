@@ -80,3 +80,16 @@ func badSystemstackNoop() {}
 func AbortForTesting() {
 	abort()
 }
+
+// ReadOnSystemstack reads one word at addr while running on the system stack, so a
+// fault there is a hardware fault on g0. The runtime does not recover those: the
+// signal handler reports the signal and exits. It is the ordinary fatal-fault
+// control for the fault-signal unblocking in sighandler (goppc-0v7x): a
+// legitimate fatal signal that is NOT a nested one.
+//
+//go:noinline
+func ReadOnSystemstack(addr uintptr) uintptr {
+	var v uintptr
+	systemstack(func() { v = *(*uintptr)(unsafe.Pointer(addr)) })
+	return v
+}
