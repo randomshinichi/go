@@ -193,11 +193,22 @@ func TestDebuggerTrapControls(t *testing.T) {
 			},
 		},
 		{
-			// A trap queued exactly in the window between unblockFaultSignals and
-			// startpanic_m, with the real fault (abort's SIGBUS) already inside
-			// Go's handler. The outcome that must hold is that the program ends
-			// by itself with exit 2 and ONE fatal report. WHICH signal that report
-			// names is logged, not graded: see the note in the test body.
+			// A SIGTRAP raised exactly in the window between unblockFaultSignals
+			// and startpanic_m, while the real fault (abort's SIGBUS) is already
+			// inside Go's handler. gdb makes the kill() call from that stopped
+			// thread; the kernel then delivers the process-directed trap to the
+			// thread that can take it, which is this one only if SIGTRAP is
+			// unblocked. Measured on the iBook, 4 runs each:
+			//   with the unblock:    exit 2, one report, naming SIGTRAP; the
+			//                        SIGBUS is never reported (4/4);
+			//   without the unblock: another M takes the trap and the two
+			//                        reports collide on paniclk: "fatal error:
+			//                        semasleep on Darwin signal stack", "panic
+			//                        during panic", exit 4 (3/4), or SIGTRAP exit 2.
+			// So the unblock turns a collision into one coherent report, but in
+			// neither build is the ORIGINAL fault attributed. The control grades
+			// that the program ends by itself with exit 2 and ONE report, and logs
+			// which signal that report names.
 			name: "trap-queued-before-the-ladder-is-armed",
 			mode: badssAbortArg,
 			script: "handle SIGTRAP nostop noprint pass\n" +
