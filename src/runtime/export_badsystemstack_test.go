@@ -1,0 +1,70 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+// Test hooks that make systemstack's fatal "bad g" branch reachable. They live
+// in package runtime so they can call getg, setg and systemstack directly; see
+// TestSystemstackBadBranchTaken for how they are driven.
+
+//go:build ppc
+
+package runtime
+
+// gBadSystemstack is the g the witness hands to setg. Only its ADDRESS matters:
+// systemstack branches to systemstack_bad when the current g is neither
+// m.gsignal, m.g0 nor m.curg, so any g that is none of those three reaches the
+// branch. Its content is replaced by a copy of the real g before it is used.
+var gBadSystemstack g
+
+// BadSystemstackBranchTaken makes systemstack's fatal "bad g" branch execute and
+// never returns. badsystemstack writes
+//
+//	fatal: systemstack called from unexpected goroutine
+//
+// through writeErrStr, and systemstack_bad then calls abort, which faults on
+// purpose.
+//
+// The g is a byte-for-byte copy of the current one, so every field that the
+// fatal path touches afterwards - m, the stack bounds, the stack guards - is the
+// real value. Only the identity differs, which is exactly the invariant
+// systemstack is checking.
+//
+//go:noinline
+func BadSystemstackBranchTaken() {
+	real := getg()
+	fake := &gBadSystemstack
+	*fake = *real
+	// A pending preemption is a sentinel placed in stackguard0. morestack on a g
+	// that is not in allgs is not survivable, so do not inherit it.
+	if fake.stackguard0 == stackPreempt {
+		fake.stackguard0 = fake.stack.lo + stackGuard
+	}
+	setg(fake)
+	systemstack(badSystemstackNoop)
+	// Only reachable if the fatal branch was not taken; the test treats that as
+	// a failure. Put g back first so the caller can report it.
+	setg(real)
+}
+
+// SystemstackOnRealG is the not-taken control for BadSystemstackBranchTaken: the
+// same systemstack call with the unmodified g. The current g is m.curg here, so
+// systemstack takes its ordinary switch path and returns.
+//
+//go:noinline
+func SystemstackOnRealG() {
+	systemstack(badSystemstackNoop)
+}
+
+//go:noinline
+func badSystemstackNoop() {}
+
+// AbortForTesting is the control for the fatal epilogue. It calls from the
+// ordinary g the same runtime.abort() that systemstack_bad calls, and reaches it
+// without going anywhere near systemstack, badsystemstack or a replaced g. What
+// the process does after the fault is therefore a property of abort() alone.
+// It never returns.
+//
+//go:noinline
+func AbortForTesting() {
+	abort()
+}
