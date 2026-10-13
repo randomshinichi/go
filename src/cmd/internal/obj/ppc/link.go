@@ -128,17 +128,6 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		q.As, q.From, q.To = as, from, to
 		return q
 	}
-	// appendUnsafePoint emits a PCDATA_UnsafePoint pseudo-instruction after p, setting
-	// the unsafe-point value in effect from the next real instruction onward. PCDATA
-	// progs carry no bytes (linkpcln skips any prog whose successor shares its PC, and
-	// the assembler does likewise), so markers never change code layout.
-	appendUnsafePoint := func(p *obj.Prog, value int64) *obj.Prog {
-		q := obj.Appendp(p, newprog)
-		q.As = obj.APCDATA
-		q.From = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.PCDATA_UnsafePoint}
-		q.To = obj.Addr{Type: obj.TYPE_CONST, Offset: value}
-		return q
-	}
 	// unsafePointAtEntry returns the PCDATA_UnsafePoint value the compiler itself
 	// established for this function's entry, by scanning the no-width pseudo-progs
 	// that sit between TEXT and the first real instruction.
@@ -177,6 +166,32 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	// splicing done before this call would have made the scan see our own markers.
 	restore := unsafePointAtEntry(text)
 
+	// zerorange (cmd/compile/internal/ppc/ggen.go) materializes the value zero in R0
+	// and then stores it into every word of an ambiguously-live stack range. R0 is
+	// NOT preserved across an asynchronous preemption -- runtime.asyncPreempt's
+	// generated ppc32 prologue saves R3..R29, R31, CR, CTR, XER and the FPRs, but not
+	// R0 (genPPC32 in runtime/mkpreempt.go) -- so a preemption landing on the second
+	// or a later store resumes with the preemption's own scratch in R0 and writes
+	// THAT into a GC-scanned slot. Bead goppc-2s7q.
+	//
+	// The register cannot be changed. R31 is this assembler's out-of-range
+	// displacement temporary (encodeProg's store case below materializes the address
+	// in R31 and then stores the source register through it), so a store *from* R31
+	// would store the address instead of zero -- a deterministic corruption traded
+	// for a racy one -- and every other GPR is allocatable, so it can hold a live SSA
+	// value. Mark the run instead, the way the MFLR/STW pair above is marked:
+	// PCDATA_UnsafePoint = UnsafePointUnsafe over `li r0,0` and its stores makes
+	// isAsyncSafePoint refuse a preemption anywhere inside it.
+	//
+	// This is an async-preemption-only claim, and correctly so: SIGPROF does not read
+	// PCDATA_UnsafePoint and does not clobber a register, so the profiler cannot
+	// reach this hazard. Nor is it a restart window like the MFLR/STW pair: a
+	// zero range has no size bound, and a restart run may not exceed 20 bytes
+	// (runtime/preempt.go throws "bad restart PC" beyond that). A straight-line run
+	// of stores with no call and no branch has nothing else to be preemptible for,
+	// so deferring the request over it costs bounded latency.
+	markZeroRangeUnsafe(text, restore, newprog)
+
 	p := text
 	if !leaf && !s.NoFrame() {
 		// The return address lives in R0 for exactly two instructions: the MFLR that
@@ -208,11 +223,11 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// Assembly functions also receive this prologue but are never preempted
 		// (isAsyncSafePoint returns false for FuncFlagAsm before it ever reads the
 		// restart case), so the markers there are inert, not harmful.
-		p = appendUnsafePoint(p, abi.UnsafePointRestart1)
+		p = appendUnsafePoint(p, abi.UnsafePointRestart1, newprog)
 		p = appendOp(p, AMFLR, obj.Addr{}, reg(REG_R0))
 		// Save in the caller's linkage area BEFORE moving SP, as measured.
 		p = appendOp(p, ASTW, reg(REG_R0), mem(8))
-		p = appendUnsafePoint(p, restore)
+		p = appendUnsafePoint(p, restore, newprog)
 		// Go treats R0 as zero for stores (not merely the RA=0 address rule).
 		p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST}, reg(REG_R0))
 		p.Reg = REG_R0
@@ -281,7 +296,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// covering this region costs nothing in bytes and nothing in restart-PC
 		// arithmetic; it costs preemptibility over 11 instructions, which is a
 		// bounded, one-pass section of a prologue, not a loop.
-		p = appendUnsafePoint(p, abi.UnsafePointUnsafe)
+		p = appendUnsafePoint(p, abi.UnsafePointUnsafe, newprog)
 		if frame <= 32752 {
 			p = appendOp(p, AADDI, obj.Addr{Type: obj.TYPE_CONST, Offset: frame}, reg(REG_R3))
 			p.Reg = REG_R0
@@ -347,7 +362,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		// TestPrologueLRIsCallersAtEveryFramelessPC asserts exactly that, and
 		// TestPrologueGateRejectsCounterfeits shows it is the state, not the marker,
 		// that decides.
-		p = appendUnsafePoint(p, restore)
+		p = appendUnsafePoint(p, restore, newprog)
 		done := appendOp(p, obj.ANOP, obj.Addr{}, obj.Addr{})
 		enough.To.SetTarget(done)
 		wrap.To.SetTarget(grow)
@@ -459,6 +474,67 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		p = appendOp(p, retAs, obj.Addr{}, target)
 		// Balance the linear PC/SP table after the return (ppc64 does likewise).
 		p.Spadj = int32(frame)
+	}
+}
+
+// appendUnsafePoint emits a PCDATA_UnsafePoint pseudo-instruction after p, setting
+// the unsafe-point value in effect from the next real instruction onward. PCDATA
+// progs carry no bytes (linkpcln skips any prog whose successor shares its PC, and
+// the assembler does likewise), so markers never change code layout.
+func appendUnsafePoint(p *obj.Prog, value int64, newprog obj.ProgAlloc) *obj.Prog {
+	q := obj.Appendp(p, newprog)
+	q.As = obj.APCDATA
+	q.From = obj.Addr{Type: obj.TYPE_CONST, Offset: abi.PCDATA_UnsafePoint}
+	q.To = obj.Addr{Type: obj.TYPE_CONST, Offset: value}
+	return q
+}
+
+// isZeroRangeStart reports whether p is the `li r0,0` that zerorange emits: ADDI
+// with the literal zero in the RA position (R0 there is the hardware's zero, not
+// R0's contents) and R0 as the destination, which is the register the following
+// stores read.
+func isZeroRangeStart(p *obj.Prog) bool {
+	return p.As == AADDI && p.From.Type == obj.TYPE_CONST && p.From.Offset == 0 &&
+		p.To.Type == obj.TYPE_REG && p.To.Reg == REG_R0
+}
+
+// isZeroRangeStore reports whether p is one of the stores that consume that R0:
+// an integer word store whose source register is R0 and whose base is SP.
+func isZeroRangeStore(p *obj.Prog) bool {
+	return p.As == ASTW && p.From.Type == obj.TYPE_REG && p.From.Reg == REG_R0 &&
+		p.To.Type == obj.TYPE_MEM && p.To.Reg == REGSP
+}
+
+// markZeroRangeUnsafe brackets every `li r0,0 ; N × stw r0,off(SP)` run with
+// PCDATA_UnsafePoint = Unsafe, restoring the value in effect at the end of each
+// run. entry is the unsafe-point value the compiler established for the function's
+// entry (unsafePointAtEntry), which is the value in effect before the first run and
+// the one to restore to; any marker the compiler emitted ahead of a later run is
+// tracked as the walk passes it.
+func markZeroRangeUnsafe(text *obj.Prog, entry int64, newprog obj.ProgAlloc) {
+	cur := entry
+	for prev := text; prev.Link != nil; {
+		p := prev.Link
+		if isUnsafePointPCDATA(p) {
+			cur = p.To.Offset
+			prev = p
+			continue
+		}
+		if !isZeroRangeStart(p) {
+			prev = p
+			continue
+		}
+		last := p
+		for last.Link != nil && isZeroRangeStore(last.Link) {
+			last = last.Link
+		}
+		if last == p {
+			// `li r0,0` with nothing storing it: no value of R0 is live.
+			prev = p
+			continue
+		}
+		appendUnsafePoint(prev, abi.UnsafePointUnsafe, newprog)
+		prev = appendUnsafePoint(last, cur, newprog)
 	}
 }
 
