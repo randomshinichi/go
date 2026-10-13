@@ -38,6 +38,7 @@ import (
 	"cmd/link/internal/sym"
 	"internal/buildcfg"
 	"log"
+	"math"
 	"runtime"
 )
 
@@ -68,6 +69,16 @@ func linknew(arch *sys.Arch) *Link {
 	return ctxt
 }
 
+// tlsoffsetNoTLS is the Tlsoffset of a target whose TLS mechanism the linker
+// does not implement (today only darwin/ppc). It holds an "invalid state" that
+// no real TLS offset can be confused with -- real ones are small, -PtrSize on
+// ELF and 0x30 on darwin/amd64 -- and math.MinInt is the most negative int on
+// every platform, -1<<31 where int is 32 bits and -1<<63 where it is 64.
+// (The earlier spelling, -1<<63, only compiled where int is 64 bits, which
+// broke this package on linux/386, linux/arm and linux/mips.) The value is in
+// any case unreachable: relocsym rejects darwin/ppc TLS relocations outright.
+const tlsoffsetNoTLS = math.MinInt
+
 // computeTLSOffset records the thread-local storage offset.
 // Not used for Android where the TLS offset is determined at runtime.
 func (ctxt *Link) computeTLSOffset() {
@@ -94,8 +105,9 @@ func (ctxt *Link) computeTLSOffset() {
 	case objabi.Hdarwin:
 		if ctxt.Arch.Family == sys.PPC {
 			// The Darwin ppc32 TLS mechanism is unmeasured. Keep an explicit
-			// invalid state; TLS relocations are rejected in relocsym below.
-			ctxt.Tlsoffset = -1 << 63
+			// invalid state; the TLS relocations that would consume it are
+			// rejected in relocsym (data.go).
+			ctxt.Tlsoffset = tlsoffsetNoTLS
 			break
 		}
 		/*
