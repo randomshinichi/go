@@ -7,11 +7,17 @@
 package runtime_test
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
+
+	"internal/testenv"
 )
 
 // Controls for the fault-signal unblocking in sighandler (goppc-0v7x). sighandler
@@ -129,4 +135,108 @@ func TestSigtrapWithoutDebuggerIsReportedAsSigtrap(t *testing.T) {
 		forbidden: []string{badssTrapDoneLine, "panic during panic", "SIGBUS", "SIGSEGV"},
 		once:      []string{"SIGTRAP: trace trap"},
 	}))
+}
+
+// The debugger controls. A debugger sits in front of the program's signals: it
+// sees each one first and either CONSUMES it (gdb "nopass": the program never
+// learns of it) or PASSES it on (gdb "pass": Go's handler runs). sighandler now
+// unblocks SIGTRAP before it arms the m.dying ladder, so these children pin down
+// what each case must look like, run under the real gdb 6.3 of Leopard. The
+// no-unblock build (the state before the fix) is the comparison; see the bead.
+//
+// The debugger's own exit status is not graded - gdb -batch exits 0 or 1 for
+// reasons unrelated to the program - the program's fate is read from gdb's
+// "Program exited" line and from the report the program itself wrote.
+func TestDebuggerTrapControls(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the debugger controls are for the darwin fault-signal path")
+	}
+	gdb, err := exec.LookPath("gdb")
+	if err != nil {
+		t.Skip("gdb not found; consumed/passed trap controls need it")
+	}
+	exe := testenv.Executable(t)
+	gdbStop := "Program received signal SIGTRAP"
+
+	cases := []struct {
+		name, mode, script string
+		expect             badssExpect
+		// after is an extra check on the output, for outcomes a marker list
+		// cannot state.
+		after func(t *testing.T, out string)
+	}{
+		{
+			// gdb takes the trap and does not pass it: the program must carry on.
+			name: "consumed",
+			mode: badssTrapArg,
+			script: "handle SIGTRAP stop print nopass\n" +
+				"run\ncontinue\n",
+			expect: badssExpect{
+				exitCode:  -1,
+				markers:   []string{gdbStop, badssTrapDoneLine, "Program exited normally."},
+				forbidden: []string{"SIGTRAP: trace trap", "panic during panic", "goroutine ", "SIGBUS", "SIGSEGV"},
+				once:      []string{gdbStop},
+			},
+		},
+		{
+			// gdb passes the trap on: Go's fatal handler runs, and the report must
+			// name SIGTRAP, once, as the fault - it is the original fault here.
+			name: "passed",
+			mode: badssTrapArg,
+			script: "handle SIGTRAP stop print pass\n" +
+				"run\ncontinue\n",
+			expect: badssExpect{
+				exitCode:  -1,
+				markers:   []string{gdbStop, "SIGTRAP: trace trap", "goroutine ", "link 0x", "Program exited with code 02."},
+				forbidden: []string{badssTrapDoneLine, "panic during panic", "SIGBUS", "SIGSEGV"},
+				once:      []string{gdbStop, "SIGTRAP: trace trap"},
+			},
+		},
+		{
+			// A trap queued exactly in the window between unblockFaultSignals and
+			// startpanic_m, with the real fault (abort's SIGBUS) already inside
+			// Go's handler. The outcome that must hold is that the program ends
+			// by itself with exit 2 and ONE fatal report. WHICH signal that report
+			// names is logged, not graded: see the note in the test body.
+			name: "trap-queued-before-the-ladder-is-armed",
+			mode: badssAbortArg,
+			script: "handle SIGTRAP nostop noprint pass\n" +
+				"handle EXC_BAD_ACCESS nostop noprint pass\n" +
+				"break *" + fmt.Sprintf("%#x", runtime.StartpanicMPC()) + "\n" +
+				"run\n" +
+				"echo \\n=== INSIDE-HANDLER: stopped at startpanic_m\\n\n" +
+				"delete breakpoints\n" +
+				"call (int)kill((int)getpid(), 5)\n" +
+				"continue\n",
+			expect: badssExpect{
+				exitCode:  -1,
+				markers:   []string{"=== INSIDE-HANDLER", "goroutine ", "Program exited with code 02."},
+				forbidden: []string{badssReturnedLine, "panic during panic", "stack trace unavailable"},
+			},
+			after: func(t *testing.T, out string) {
+				bus := strings.Count(out, "SIGBUS: bus error")
+				trap := strings.Count(out, "SIGTRAP: trace trap")
+				if bus+trap != 1 {
+					t.Errorf("want exactly one fatal report header, got SIGBUS x%d and SIGTRAP x%d", bus, trap)
+				}
+				t.Logf("ATTRIBUTION: the report names SIGBUS x%d, SIGTRAP x%d. The real fault here was "+
+					"abort's SIGBUS; a report that names SIGTRAP means the queued trap took over before "+
+					"the m.dying ladder was armed.", bus, trap)
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			script := filepath.Join(t.TempDir(), c.name+".gdb")
+			text := "set confirm off\nset height 0\n" + c.script
+			if err := os.WriteFile(script, []byte(text), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r := runBadssCommand(t, "gdb "+c.name, badssWitnessBudget(t), gdb, "-batch", "-x", script, "--args", exe, c.mode)
+			badssApply(t, "debugger control "+c.name, r, judgeBadss(r, c.expect))
+			if c.after != nil {
+				c.after(t, r.out)
+			}
+		})
+	}
 }

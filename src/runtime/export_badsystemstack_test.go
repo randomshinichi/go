@@ -10,7 +10,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/abi"
+	"unsafe"
+)
 
 // gBadSystemstack is the g the witness hands to setg. Only its ADDRESS matters:
 // systemstack branches to systemstack_bad when the current g is neither
@@ -92,4 +95,11 @@ func ReadOnSystemstack(addr uintptr) uintptr {
 	var v uintptr
 	systemstack(func() { v = *(*uintptr)(unsafe.Pointer(addr)) })
 	return v
+}
+
+// StartpanicMPC is the entry address of startpanic_m. A debugger breakpoint there
+// stops the program inside sighandler after unblockFaultSignals and before the
+// m.dying ladder is armed, which is the window the debugger controls probe.
+func StartpanicMPC() uintptr {
+	return abi.FuncPCABIInternal(startpanic_m)
 }
