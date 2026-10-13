@@ -23,12 +23,9 @@ TEXT _rt0_ppc_darwin(SB), NOSPLIT|NOFRAME, $0-0
 	// m0/g0 frame inherit that misalignment, breaking the measured 16-byte frame
 	// rule (ABI:251) and 8-byte alignment of float scratch (an lfd/stfd could hit
 	// a 4-mod-8 address). Align R1 DOWN to a 16-byte boundary before building the
-	// frame. R4 is an absolute pointer into the untouched kernel block, so it
-	// frame. R4 is an absolute pointer into the untouched kernel block, so it
-	// stays valid. Mirrors rt0_darwin_ppc64.s's RLDCR mask (this backend has no
-	// stays valid, but the entry R1 is aligned down to a 16-byte boundary before
-	// the frame is built. This backend rejects a 5-operand rlwinm in hand asm and
-	// mis-tokenizes the trailing dot on "ANDI.", so align with ADDI+AND:
+	// frame. R4 is an absolute pointer into the untouched kernel block, so it stays
+	// valid. This backend rejects a 5-operand rlwinm in hand asm and mis-tokenizes
+	// the trailing dot on "ANDI.", so align with ADDI+AND:
 	//   ADDI R6, R0, $-16   -> R6 = 0xFFFFFFF0 = ~15 (addi destination is the 1st
 	//                          operand; R0 holds 0, and rA=0 means the literal 0)
 	//   AND  R1, R1, R6     -> R1 = R1 & ~15, i.e. round R1 DOWN to a multiple of 16
