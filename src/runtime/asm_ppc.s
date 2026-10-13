@@ -41,6 +41,15 @@ TEXT runtime·mstart_stub(SB), NOSPLIT, $0-0
 // stackcheck is a private pre-prologue helper. The caller passes its fully
 // allocated frame size in R3; it returns nonzero when SP-frame crosses g's
 // stack guard. It is a leaf so it can run before the caller has a frame.
+//
+// The caller has done MFLR R0; STW R0, 8(R1) and then BL stackcheck, so on
+// entry LR is the address of the caller's own next instruction. A plain RET
+// (BLR) would return there with LR still equal to that same address, and a
+// SIGPROF landing there would see pc == lr and trip the "traceback stuck"
+// throw. Instead return through CTR with LR reloaded from the caller's
+// 8(R1) save slot, the same value morestack takes as the resumption LR.
+// R4 and R5 are volatile; CTR is safe because this function is NOSPLIT (no
+// async preemption point inside it) and assembly.
 TEXT runtime·stackcheck(SB), NOSPLIT|NOFRAME, $0-0
 	CMPLW R1, R3
 	BC 12, 0, grow // SP-frame would wrap around the 32-bit address space.
@@ -49,10 +58,18 @@ TEXT runtime·stackcheck(SB), NOSPLIT|NOFRAME, $0-0
 	CMPLW R3, R4
 	BC 12, 0, grow
 	ADDI R3, R0, $0
-	RET
+	MFLR R4
+	LWZ R5, 8(R1)
+	MTLR R5
+	MTCTR R4
+	JMP (CTR)
 grow:
 	ADDI R3, R0, $1
-	RET
+	MFLR R4
+	LWZ R5, 8(R1)
+	MTLR R5
+	MTCTR R4
+	JMP (CTR)
 
 // gogo restores a saved goroutine context. PPC32 has stack-only public Go
 // arguments and keeps g in R30; all values needed after changing SP are first
