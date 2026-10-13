@@ -36,12 +36,18 @@ import (
 //   - a counterfeit: the child prints the first line of the report and then
 //     exits some other way. It is dead, and it did not finish the report.
 //
-// Wall-clock expiry alone cannot tell the first two apart, so the child bounds
-// itself in CPU time (RLIMIT_CPU, set in the child before it does anything
-// interesting) and the parent reads back the CPU the child actually consumed.
-// Only a child that has spent its whole CPU budget without exiting is a wedge.
-// A child that was still alive when the wall budget ran out with its CPU budget
-// unspent says nothing about the runtime, and the test says so and skips.
+// Wall-clock expiry alone cannot tell the first two apart, so the parent reads
+// back the CPU the child actually consumed (user plus system, from the wait
+// status). Only a child that has spent its whole CPU budget without exiting is a
+// wedge. A child that was still alive when the wall budget ran out with its CPU
+// budget unspent says nothing about the runtime, and the test says so and skips.
+//
+// The child also sets RLIMIT_CPU on itself, as a backstop that ends a wedge
+// early. That backstop is NOT relied on: Linux enforces it (the host run of the
+// spinner counterfeit dies of it after the hard limit), but xnu-1228 on the iBook
+// was observed not to - a child that had consumed 52 CPU-seconds against a 10 s
+// limit was still running when the parent's wall timer killed it. So on Leopard
+// the wall budget is what ends a wedge, and the CPU figure is what names it.
 
 // Checked by the witnesses in badsystemstack_test.go and by the oracle self-test.
 const (
@@ -142,12 +148,11 @@ const badssNestedReport = badssFatalLine +
 	badssFaultLine + "\nPC=0x2 m=0 sigcode=1 addr=0x28\n\n" +
 	"stack trace unavailable\n"
 
-// badssChildReady is the child's prologue: bound this process in CPU time, then
+// badssChildReady is the child's prologue: set a CPU limit on this process, then
 // announce readiness. The soft limit is the budget; the hard limit is two seconds
-// later, because a Go process only ignores the SIGXCPU sent at the soft limit and
-// the kernel's SIGKILL at the hard limit is what actually ends a wedge. The limit
-// is process-wide and counts system time, which is where a faulting kernel
-// retry loop spends all of its time.
+// later, because a Go process ignores the SIGXCPU sent at the soft limit and the
+// kernel's SIGKILL at the hard limit is what ends a spinner where the kernel
+// enforces the limit at all (see the file comment: xnu-1228 does not).
 func badssChildReady() {
 	secs, err := strconv.Atoi(os.Getenv(badssCPUEnv))
 	if err != nil || secs <= 0 {
@@ -430,7 +435,7 @@ func badssApply(t *testing.T, what string, r badssRun, v badssVerdict) {
 // control must pass.
 func TestBadssOracleCounterfeits(t *testing.T) {
 	testenv.MustHaveExec(t)
-	quick := badssBudget{cpu: 2 * time.Second, startup: 60 * time.Second, wall: 60 * time.Second}
+	quick := badssBudget{cpu: 2 * time.Second, startup: 60 * time.Second, wall: 20 * time.Second}
 	starved := badssBudget{cpu: 10 * time.Second, startup: 60 * time.Second, wall: 3 * time.Second}
 	neverReady := badssBudget{cpu: 10 * time.Second, startup: 3 * time.Second, wall: 60 * time.Second}
 
