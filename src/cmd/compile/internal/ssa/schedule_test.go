@@ -260,11 +260,11 @@ func TestX12ReviewInitializedResultCycle(t *testing.T) {
 // scalar. liveness.isfat (liveness/plive.go:1524) recurses through a
 // one-element array or a one-field struct, so for [1]*T and struct{p *T} a
 // store to the result IS the first kill of it, and the scheduler's
-// fullWrite has to say so or the edge it adds comes from the VarDef -- the
+// FullWrite has to say so or the edge it adds comes from the VarDef -- the
 // edge this graph cannot satisfy.
 //
 // [2]*T is deliberately absent: isfat([2]*T) is true, so liveness agrees with
-// fullWrite that one store does not cover the result, and this graph is then
+// FullWrite that one store does not cover the result, and this graph is then
 // genuinely unschedulable for both compilers.
 func TestX12ReviewInitializedResultCycleAggregateResult(t *testing.T) {
 	for _, tc := range []struct {
