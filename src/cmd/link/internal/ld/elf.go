@@ -170,7 +170,7 @@ var buildinfo []byte
 func Elfinit(ctxt *Link) {
 	ctxt.IsELF = true
 
-	if ctxt.Arch.InFamily(sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X) {
+	if ctxt.Arch.InFamily(sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS64, sys.PPC, sys.PPC64, sys.RISCV64, sys.S390X) {
 		elfRelType = ".rela"
 	} else {
 		elfRelType = ".rel"
@@ -1725,6 +1725,8 @@ func asmbElf(ctxt *Link) {
 		eh.Machine = uint16(elf.EM_AARCH64)
 	case sys.I386:
 		eh.Machine = uint16(elf.EM_386)
+	case sys.PPC:
+		eh.Machine = uint16(elf.EM_PPC)
 	case sys.PPC64:
 		eh.Machine = uint16(elf.EM_PPC64)
 	case sys.RISCV64:

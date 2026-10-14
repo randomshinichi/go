@@ -19,19 +19,37 @@ func Init() (*sys.Arch, ld.Arch) {
 		Adddynrel: adddynrel, Archinit: archinit, Archreloc: archreloc,
 		Extreloc: extreloc, Gentext: gentext,
 		Machoreloc1: machoreloc1, MachorelocSize: 8,
+		ELF: ld.ELFArch{
+			Linuxdynld:     "/lib/ld.so.1",
+			LinuxdynldMusl: "/lib/ld-musl-powerpc.so.1",
+			Reloc1:         elfreloc1,
+			RelocSize:      12,
+			SetupPLT:       elfsetupplt,
+		},
 	}
 }
 
 func archinit(ctxt *ld.Link) {
-	if ctxt.HeadType != objabi.Hdarwin {
-		ld.Exitf("ppc32 linker supports only darwin/ppc Mach-O")
-	}
-	ld.HEADR = ld.INITIAL_MACHO_HEADR
-	if *ld.FlagRound == -1 {
-		*ld.FlagRound = 4096
-	}
-	if *ld.FlagTextAddr == -1 {
-		*ld.FlagTextAddr = ld.Rnd(0x1000000, *ld.FlagRound) + int64(ld.HEADR)
+	switch ctxt.HeadType {
+	case objabi.Hdarwin:
+		ld.HEADR = ld.INITIAL_MACHO_HEADR
+		if *ld.FlagRound == -1 {
+			*ld.FlagRound = 4096
+		}
+		if *ld.FlagTextAddr == -1 {
+			*ld.FlagTextAddr = ld.Rnd(0x1000000, *ld.FlagRound) + int64(ld.HEADR)
+		}
+	case objabi.Hlinux:
+		ld.Elfinit(ctxt)
+		ld.HEADR = ld.ELFRESERVE
+		if *ld.FlagRound == -1 {
+			*ld.FlagRound = 0x10000
+		}
+		if *ld.FlagTextAddr == -1 {
+			*ld.FlagTextAddr = ld.Rnd(0x10000, *ld.FlagRound) + int64(ld.HEADR)
+		}
+	default:
+		ld.Exitf("ppc32 linker supports only darwin/ppc Mach-O and linux/ppc ELF")
 	}
 }
 
