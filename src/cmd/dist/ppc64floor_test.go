@@ -320,6 +320,7 @@ func TestBuildcfgAgreement(t *testing.T) {
 		env          map[string]string
 	}
 	rows := []row{
+		{"darwin", "ppc", nil},
 		{"darwin", "ppc64", nil},
 		{"darwin", "ppc64", map[string]string{"GOPPC64": "power8"}},
 		{"darwin", "ppc64", map[string]string{"GOPPC64": "ppc970"}},
