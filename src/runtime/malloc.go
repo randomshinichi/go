@@ -1529,8 +1529,14 @@ func mallocgcSmallScanNoHeader(size uintptr, typ *_type) (unsafe.Pointer, uintpt
 		v, span, checkGCTrigger = c.nextFree(spc)
 	}
 	x := unsafe.Pointer(v)
+	if size == 84 {
+		println("QEMU-PPC ALLOC84 BEFORE", x, span.needzero, *(*uint32)(add(x, 8)))
+	}
 	if span.needzero != 0 {
 		memclrNoHeapPointers(x, size)
+	}
+	if size == 84 {
+		println("QEMU-PPC ALLOC84 AFTER", x, span.needzero, *(*uint32)(add(x, 8)))
 	}
 	if goarch.PtrSize == 8 && sizeclass == 1 {
 		// initHeapBits already set the pointer bits for the 8-byte sizeclass
