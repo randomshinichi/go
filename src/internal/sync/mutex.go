@@ -66,6 +66,7 @@ func (m *Mutex) Lock() {
 		}
 		return
 	}
+	println("QEMU-PPC MUTEX FASTFAIL", m, m.state, m.sema)
 	// Slow path (outlined so that the fast path can be inlined)
 	m.lockSlow()
 }
