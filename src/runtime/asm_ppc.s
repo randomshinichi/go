@@ -13,10 +13,18 @@ TEXT runtime·mstart(SB), NOSPLIT|TOPFRAME, $0-0
 	RET // not reached
 
 // goexit marks the end of a goroutine stack and never returns.
-TEXT runtime·goexit(SB), NOSPLIT|TOPFRAME, $0-0
-	BL	runtime·goexit1(SB)
-	BL	runtime·abort(SB)
-	RET
+//
+// goexit must not allocate a frame. newproc1 records gp.stktopsp as the SP at the
+// fabricated call to goexit, and finishInternal (traceback.go) requires the
+// unwound outermost frame's SP to equal it, so SP movement here fails every GC
+// stack walk of a goroutine that has already returned. The instruction at
+// goexit+0 is what makes the fabricated entry PC, goexit+PCQuantum (newproc1
+// and gostartcall), the goexit1 call, as on every other link-register
+// architecture.
+TEXT runtime·goexit(SB), NOSPLIT|NOFRAME|TOPFRAME, $0-0
+	ADDI	R0, R0, $0		// Writes 0 to R0; never executed. Keep goexit+PCQuantum on the call below.
+	BL	runtime·goexit1(SB)	// does not return
+	BL	runtime·abort(SB)	// not reached
 
 // getg returns the current goroutine from the reserved Go register R30.
 // R13 and R2 are not thread pointers on the measured Darwin ppc32 ABI; core
