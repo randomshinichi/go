@@ -33,6 +33,34 @@ func testConfigPPC32(tb testing.TB) *Conf {
 	}
 }
 
+// A float32 load is already rounded to float32 precision. Applying FRSP to it
+// is redundant and quiets signaling NaNs on ppc32.
+func TestPPCRoundFloat32Load(t *testing.T) {
+	c := testConfigPPC32(t)
+	float32Ptr := types.NewPtr(c.config.Types.Float32)
+	f := c.Fun("entry",
+		Bloc("entry",
+			Valu("mem", OpInitMem, types.TypeMem, 0, nil),
+			Valu("ptr", OpArg, float32Ptr, 0, nil),
+			Valu("out", OpArg, float32Ptr, 0, nil),
+			Valu("load", OpLoad, c.config.Types.Float32, 0, nil, "ptr", "mem"),
+			Valu("round", OpRound32F, c.config.Types.Float32, 0, nil, "load"),
+			Valu("store", OpStore, types.TypeMem, 0, c.config.Types.Float32, "out", "round", "mem"),
+			Ret("store")),
+	)
+	lower(f.f)
+	checkLower(f.f)
+
+	if store := f.values["store"]; store.Args[1] != f.values["load"] {
+		t.Fatalf("stored value = %s, want the float32 load without FRSP", store.Args[1].LongString())
+	}
+	for _, v := range f.blocks["entry"].Values {
+		if v.Op == OpPPCFRSP {
+			t.Fatalf("float32 load was rounded by %s", v.LongString())
+		}
+	}
+}
+
 // carryChainFunc builds, un-lowered:
 //
 //	addc = Add32carry a0 b0        ; the low word of a + b

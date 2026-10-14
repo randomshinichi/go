@@ -270,6 +270,8 @@ func rewriteValuePPC(v *Value) bool {
 		return rewriteValuePPC_OpPPCCMPWconst(v)
 	case OpPPCEqual:
 		return rewriteValuePPC_OpPPCEqual(v)
+	case OpPPCFRSP:
+		return rewriteValuePPC_OpPPCFRSP(v)
 	case OpPPCGreaterEqual:
 		return rewriteValuePPC_OpPPCGreaterEqual(v)
 	case OpPPCGreaterThan:
@@ -2873,6 +2875,20 @@ func rewriteValuePPC_OpPPCEqual(v *Value) bool {
 		x := v_0.Args[0]
 		v.reset(OpPPCEqual)
 		v.AddArg(x)
+		return true
+	}
+	return false
+}
+func rewriteValuePPC_OpPPCFRSP(v *Value) bool {
+	v_0 := v.Args[0]
+	// match: (FRSP x:(FMOVSload _ _))
+	// result: x
+	for {
+		x := v_0
+		if x.Op != OpPPCFMOVSload {
+			break
+		}
+		v.copyOf(x)
 		return true
 	}
 	return false

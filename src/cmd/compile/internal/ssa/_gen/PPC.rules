@@ -30,6 +30,10 @@
 (Round64F x) => (Copy x)
 (Round32F x) => (FRSP x)
 
+// lfs expands an already-rounded float32 value to binary64 in the FPR. Rounding
+// it back with frsp is redundant and would quiet a signaling NaN.
+(FRSP x:(FMOVSload _ _)) => x
+
 // Lowering arithmetic.
 (Add(Ptr|32|16|8) x y) => (ADD x y)
 (Add32carry x y) => (ADDC x y)
