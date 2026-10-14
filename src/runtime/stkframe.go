@@ -185,9 +185,14 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 	case goarch.ARM64:
 		minsize = sys.StackAlign
 	case goarch.PPC:
-		// The 24-byte linkage area occupies a 32-byte aligned frame,
-		// even in assembly functions with no local variables.
-		minsize = alignUp(sys.MinFrameSize, sys.StackAlign)
+		minsize = sys.MinFrameSize
+		if f.flag&abi.FuncFlagAsm != 0 {
+			// Assembly with no locals still has a 32-byte aligned frame
+			// for the 24-byte linkage area. Compiled Go functions can use
+			// the remaining 8 bytes for live pointer locals, so their maps
+			// must be read even when the whole frame is only 32 bytes.
+			minsize = alignUp(sys.MinFrameSize, sys.StackAlign)
+		}
 	default:
 		minsize = sys.MinFrameSize
 	}
