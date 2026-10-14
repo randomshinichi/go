@@ -919,9 +919,7 @@ func runInstall(pkg string, ch chan struct{}) {
 		// Define GOMIPS64_value from gomips64.
 		asmArgs = append(asmArgs, "-D", "GOMIPS64_"+gomips64)
 	}
-	if goarch == "ppc64" || goarch == "ppc64le" {
-		asmArgs = append(asmArgs, ppc64AsmDefines(ppc64Floor())...)
-	}
+	asmArgs = append(asmArgs, ppc64AsmDefinesForArch(goarch)...)
 	if goarch == "riscv64" {
 		// Define GORISCV64_value from goriscv64
 		asmArgs = append(asmArgs, "-D", "GORISCV64_"+goriscv64)

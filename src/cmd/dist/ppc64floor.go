@@ -178,3 +178,13 @@ func ppc64AsmDefines(floor string) []string {
 	}
 	return args
 }
+
+// ppc64AsmDefinesForArch returns the PPC64 ISA level switches for a build of
+// arch, and nothing for any other architecture: GOPPC64 is a ppc64-only
+// setting, and a ppc32 or amd64 assembler has no such level to be told.
+func ppc64AsmDefinesForArch(arch string) []string {
+	if arch != "ppc64" && arch != "ppc64le" {
+		return nil
+	}
+	return ppc64AsmDefines(ppc64Floor())
+}
