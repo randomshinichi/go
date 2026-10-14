@@ -6,10 +6,6 @@
 
 package bytealg
 
-// MakeNoZero is a safe fallback for ppc32. The runtime linkname allocator
-// used by other architectures is not selected because its package declaration
-// has no ppc32 assembly body; make still satisfies the API contract, though it
-// initializes the returned bytes.
-func MakeNoZero(n int) []byte {
-	return make([]byte, n)
-}
+// MakeNoZero is implemented by runtime.slice_nozero_ppc.go so ppc32 receives
+// the same allocator-rounded capacity as other architectures.
+func MakeNoZero(n int) []byte
