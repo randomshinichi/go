@@ -56,9 +56,12 @@ TEXT runtime·gogo(SB), NOSPLIT|NOFRAME, $0-4
 	LWZ R12, gobuf_pc(R5)
 	LWZ R30, gobuf_g(R5)
 	LWZ R11, gobuf_ctxt(R5)
-	STW R0, gobuf_sp(R5)
-	STW R0, gobuf_lr(R5)
-	STW R0, gobuf_ctxt(R5)
+	// R0 is not a zero register on PPC32. R6 is unused throughout gogo,
+	// so materialize zero there before clearing the saved context.
+	ADDI R6, R0, $0
+	STW R6, gobuf_sp(R5)
+	STW R6, gobuf_lr(R5)
+	STW R6, gobuf_ctxt(R5)
 	OR R1, R4, R4
 	MTLR R31
 	MTCTR R12
@@ -184,6 +187,7 @@ TEXT runtime·mcall(SB), NOSPLIT|NOFRAME, $0-4
 	STW R1, (g_sched+gobuf_sp)(R5)
 	MFLR R6
 	STW R6, (g_sched+gobuf_pc)(R5)
+	ADDI R0, R0, $0
 	STW R0, (g_sched+gobuf_lr)(R5)
 	LWZ R7, g_m(R5)
 	LWZ R8, m_g0(R7)
@@ -213,6 +217,7 @@ TEXT runtime·gosave_systemstack_switch(SB), NOSPLIT|NOFRAME, $0-0
 	ADDI R5, R5, $16 // Past the non-leaf prologue, as on PPC64.
 	STW R5, (g_sched+gobuf_pc)(R30)
 	STW R1, (g_sched+gobuf_sp)(R30)
+	ADDI R0, R0, $0
 	STW R0, (g_sched+gobuf_lr)(R30)
 	RET
 
@@ -252,6 +257,7 @@ systemstack_noswitch:
 	OR R30, R15, R15
 	// A stack copy may have moved the suspended goroutine's stack.
 	LWZ R1, (g_sched+gobuf_sp)(R30)
+	ADDI R0, R0, $0
 	STW R0, (g_sched+gobuf_sp)(R30)
 	RET
 systemstack_restore_noswitch:
