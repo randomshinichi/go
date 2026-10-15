@@ -6,12 +6,14 @@
 
 package syscall
 
+import "unsafe"
+
 const (
-	_SYS_setgroups   = SYS_SETGROUPS
-	_SYS_clone3      = 435
-	_SYS_faccessat2  = 439
-	_SYS_fchmodat2   = 452
-	SYS_NEWFSTATAT   = SYS_FSTATAT64
+	_SYS_setgroups  = SYS_SETGROUPS
+	_SYS_clone3     = 435
+	_SYS_faccessat2 = 439
+	_SYS_fchmodat2  = 452
+	SYS_NEWFSTATAT  = SYS_FSTATAT64
 )
 
 func setTimespec(sec, nsec int64) Timespec {
@@ -31,3 +33,74 @@ func (iov *Iovec) SetLen(length int) { iov.Len = uint32(length) }
 func (msghdr *Msghdr) SetControllen(length int) { msghdr.Controllen = uint32(length) }
 
 func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
+
+// These declarations are the ppc32 counterpart of syscall_linux_ppc64x.go.
+// Keep them here so mkall.sh applies the ppc32 ABI rules only to ppc32 output.
+//sys Dup2(oldfd int, newfd int) (err error)
+//sys EpollWait(epfd int, events []EpollEvent, msec int) (n int, err error)
+//sys Fchown(fd int, uid int, gid int) (err error)
+//sys Fstat(fd int, stat *Stat_t) (err error) = SYS_FSTAT64
+//sys fstatat(dirfd int, path string, stat *Stat_t, flags int) (err error) = SYS_NEWFSTATAT
+//sys Fstatfs(fd int, buf *Statfs_t) (err error)
+//sys Ftruncate(fd int, length int64) (err error)
+//sysnb Getegid() (egid int)
+//sysnb Geteuid() (euid int)
+//sysnb Getgid() (gid int)
+//sysnb Getuid() (uid int)
+//sys InotifyInit() (fd int, err error)
+//sys Ioperm(from int, num int, on int) (err error)
+//sys Iopl(level int) (err error)
+//sys Lchown(path string, uid int, gid int) (err error)
+//sys Listen(s int, n int) (err error)
+//sys Lstat(path string, stat *Stat_t) (err error) = SYS_LSTAT64
+//sys Pause() (err error)
+//sys pread(fd int, p []byte, offset int64) (n int, err error) = SYS_PREAD64
+//sys pwrite(fd int, p []byte, offset int64) (n int, err error) = SYS_PWRITE64
+//sys Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) (err error)
+//sys Select(nfd int, r *FdSet, w *FdSet, e *FdSet, timeout *Timeval) (n int, err error) = SYS__NEWSELECT
+//sys sendfile(outfd int, infd int, offset *int64, count int) (written int, err error)
+//sys Setfsgid(gid int) (err error)
+//sys Setfsuid(uid int) (err error)
+//sys Shutdown(s int, how int) (err error)
+//sys Splice(rfd int, roff *int64, wfd int, woff *int64, len int, flags int) (n int64, err error)
+//sys Stat(path string, stat *Stat_t) (err error) = SYS_STAT64
+//sys Statfs(path string, buf *Statfs_t) (err error)
+//sys Truncate(path string, length int64) (err error)
+//sys Ustat(dev int, ubuf *Ustat_t) (err error)
+//sys accept4(s int, rsa *RawSockaddrAny, addrlen *_Socklen, flags int) (fd int, err error)
+//sys bind(s int, addr unsafe.Pointer, addrlen _Socklen) (err error)
+//sys connect(s int, addr unsafe.Pointer, addrlen _Socklen) (err error)
+//sysnb getgroups(n int, list *_Gid_t) (nn int, err error)
+//sys getsockopt(s int, level int, name int, val unsafe.Pointer, vallen *_Socklen) (err error)
+//sys setsockopt(s int, level int, name int, val unsafe.Pointer, vallen uintptr) (err error)
+//sysnb socket(domain int, typ int, proto int) (fd int, err error)
+//sysnb socketpair(domain int, typ int, proto int, fd *[2]int32) (err error)
+//sysnb getpeername(fd int, rsa *RawSockaddrAny, addrlen *_Socklen) (err error)
+//sysnb getsockname(fd int, rsa *RawSockaddrAny, addrlen *_Socklen) (err error)
+//sys recvfrom(fd int, p []byte, flags int, from *RawSockaddrAny, fromlen *_Socklen) (n int, err error)
+//sys sendto(s int, buf []byte, flags int, to unsafe.Pointer, addrlen _Socklen) (err error)
+//sys recvmsg(s int, msg *Msghdr, flags int) (n int, err error)
+//sys sendmsg(s int, msg *Msghdr, flags int) (n int, err error)
+//sys mmap2(addr uintptr, length uintptr, prot int, flags int, fd int, pageOffset uintptr) (xaddr uintptr, err error)
+//sys futimesat(dirfd int, path string, times *[2]Timeval) (err error)
+//sysnb Gettimeofday(tv *Timeval) (err error)
+//sysnb Time(t *Time_t) (tt Time_t, err error)
+//sys Utime(path string, buf *Utimbuf) (err error)
+//sys utimes(path string, times *[2]Timeval) (err error)
+//sys syncFileRange2(fd int, flags int, off int64, n int64) (err error) = SYS_SYNC_FILE_RANGE2
+
+func mmap(addr uintptr, length uintptr, prot int, flags int, fd int, offset int64) (xaddr uintptr, err error) {
+	page := uintptr(offset / 4096)
+	if offset != int64(page)*4096 {
+		return 0, EINVAL
+	}
+	return mmap2(addr, length, prot, flags, fd, page)
+}
+
+func Seek(fd int, offset int64, whence int) (newoffset int64, err error) {
+	_, _, e := Syscall6(SYS__LLSEEK, uintptr(fd), uintptr(offset>>32), uintptr(offset), uintptr(unsafe.Pointer(&newoffset)), uintptr(whence), 0)
+	if e != 0 {
+		err = errnoErr(e)
+	}
+	return
+}
