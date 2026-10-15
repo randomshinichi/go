@@ -388,14 +388,16 @@ TEXT runtime·osyield(SB), NOSPLIT|NOFRAME, $0-0
 	SC
 	RET
 
+// The ppc assembler takes operands in PowerPC order, destination first
+// (SUBF rd, ra, rb computes rb - ra), unlike ppc64's Go order.
 TEXT runtime·usleep(SB), NOSPLIT, $8-4
 	LWZ R3, usec+0(FP)
 	ADDI R5, R0, $1000000
-	DIVWU R3, R5, R4
-	MULLW R4, R5, R6
-	SUBF R6, R3, R7
+	DIVWU R4, R3, R5 // tv_sec = usec / 1000000
+	MULLW R6, R4, R5
+	SUBF R7, R6, R3 // usec % 1000000
 	ADDI R8, R0, $1000
-	MULLW R7, R8, R8
+	MULLW R8, R7, R8 // tv_nsec
 	STW R4, 24(R1)
 	STW R8, 28(R1)
 	ADDI R3, R1, $24
