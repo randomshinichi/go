@@ -232,8 +232,10 @@ func init() {
 
 		// Moves. MOVWconst may need more than one instruction for constants the
 		// 16-bit immediate field cannot hold; that expansion is the assembler's
-		// business (obj/ppc), not the register allocator's.
-		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32", typ: "Int32"},
+		// business (obj/ppc), not the register allocator's. It writes only its
+		// output register (li, or lis+ori), so the allocator may re-emit it at a
+		// use instead of spilling the constant to a stack slot across calls.
+		{name: "MOVWconst", argLength: 0, reg: gp01, asm: "ADDI", aux: "Int32", typ: "Int32", rematerializeable: true},
 		{name: "MOVWreg", argLength: 1, reg: gp11, asm: "OR"}, // register-to-register move
 
 		// 32-bit compare. CMP/CMPU in the ppc64 table select 64-bit comparison
