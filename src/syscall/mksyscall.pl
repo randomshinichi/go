@@ -30,6 +30,7 @@ my $openbsd = 0;
 my $netbsd = 0;
 my $dragonfly = 0;
 my $arm = 0; # 64-bit value should use (even, odd)-pair
+my $ppc32 = 0; # Linux/ppc uses aligned big-endian register pairs for int64 arguments.
 my $libc = 0;
 my $tags = "";  # build tags
 my $newtags = ""; # new style build tags
@@ -41,6 +42,11 @@ if($ARGV[0] eq "-b32") {
 	shift;
 } elsif($ARGV[0] eq "-l32") {
 	$_32bit = "little-endian";
+	shift;
+}
+if($ARGV[0] eq "-ppc32") {
+	$_32bit = "big-endian";
+	$ppc32 = 1;
 	shift;
 }
 if($ARGV[0] eq "-plan9") {
@@ -79,7 +85,7 @@ if($ARGV[0] eq "-tags") {
 }
 
 if($ARGV[0] =~ /^-/) {
-	print STDERR "usage: mksyscall.pl [-b32 | -l32] [-tags x,y] [file ...]\n";
+	print STDERR "usage: mksyscall.pl [-b32 | -l32 | -ppc32] [-tags x,y] [file ...]\n";
 	exit 1;
 }
 
@@ -219,9 +225,9 @@ while(<>) {
 				push @args, "uintptr($name)";
 			}
 		} elsif($type eq "int64" && $_32bit ne "") {
-			if(@args % 2 && $arm) {
-				# arm abi specifies 64-bit argument uses
-				# (even, odd) pair
+			if(@args % 2 && ($arm || $ppc32)) {
+				# ARM and Linux/ppc32 ABIs require 64-bit arguments to start
+				# in an even-numbered register pair.
 				push @args, "0"
 			}
 			if($_32bit eq "big-endian") {
