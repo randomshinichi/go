@@ -11,6 +11,35 @@ import (
 	"unsafe"
 )
 
+// The vendored syscall dispatch has no PPC32 assembly implementation. Reuse
+// the standard library's Linux/PPC32 bridge rather than leaving generated
+// wrappers without a runtime entry point.
+func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno) {
+	return syscall.Syscall(trap, a1, a2, a3)
+}
+
+func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err syscall.Errno) {
+	return syscall.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+}
+
+func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno) {
+	return syscall.RawSyscall(trap, a1, a2, a3)
+}
+
+func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err syscall.Errno) {
+	return syscall.RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
+}
+
+func SyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
+	r1, r2, _ = syscall.Syscall(trap, a1, a2, a3)
+	return
+}
+
+func RawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
+	r1, r2, _ = syscall.RawSyscall(trap, a1, a2, a3)
+	return
+}
+
 //sys	EpollWait(epfd int, events []EpollEvent, msec int) (n int, err error)
 //sys	Fchown(fd int, uid int, gid int) (err error)
 //sys	Fstat(fd int, stat *Stat_t) (err error) = SYS_FSTAT64

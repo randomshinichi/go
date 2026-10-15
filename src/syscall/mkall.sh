@@ -257,7 +257,9 @@ linux_ppc)
 	GOOSARCH_in=syscall_linux_ppc.go
 	unistd_h=/usr/include/asm/unistd.h
 	mksyscall="./mksyscall.pl -ppc32"
-	mkerrors="$mkerrors -m32"
+	# -m32 establishes width, not architecture. Overlay the generated numeric
+	# constants with the independently PowerPC-generated vendored UAPI table.
+	mkerrors="$mkerrors -m32 | python3 ./mkerrors_linux_ppc.py ../cmd/vendor/golang.org/x/sys/unix/zerrors_linux_ppc.go"
 	mksysnum="./mksysnum_linux.pl $unistd_h"
 	mktypes="GOARCH=$GOARCH go tool cgo -godefs"
 	;;

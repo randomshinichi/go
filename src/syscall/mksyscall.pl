@@ -328,7 +328,10 @@ while(<>) {
 		if($type eq "bool") {
 			$reg = "$reg != 0";
 		}
-		if($type eq "int64" && $_32bit ne "") {
+		if($type eq "int64" && $_32bit ne "" && $func eq "Tee") {
+			# Linux ssize_t is one machine word even when the Go API uses int64.
+			$reg = "int32(r$i)";
+		} elsif($type eq "int64" && $_32bit ne "") {
 			# 64-bit number in r1:r0 or r0:r1.
 			if($i+2 > @out) {
 				print STDERR "$ARGV:$.: not enough registers for int64 return\n";

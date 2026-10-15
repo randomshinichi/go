@@ -41,8 +41,8 @@ func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
 //sys Fchown(fd int, uid int, gid int) (err error)
 //sys Fstat(fd int, stat *Stat_t) (err error) = SYS_FSTAT64
 //sys fstatat(dirfd int, path string, stat *Stat_t, flags int) (err error) = SYS_NEWFSTATAT
-//sys Fstatfs(fd int, buf *Statfs_t) (err error)
-//sys Ftruncate(fd int, length int64) (err error)
+//sys Ftruncate(fd int, length int64) (err error) = SYS_FTRUNCATE64
+
 //sysnb Getegid() (egid int)
 //sysnb Geteuid() (euid int)
 //sysnb Getgid() (gid int)
@@ -58,14 +58,13 @@ func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
 //sys pwrite(fd int, p []byte, offset int64) (n int, err error) = SYS_PWRITE64
 //sys Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) (err error)
 //sys Select(nfd int, r *FdSet, w *FdSet, e *FdSet, timeout *Timeval) (n int, err error) = SYS__NEWSELECT
-//sys sendfile(outfd int, infd int, offset *int64, count int) (written int, err error)
+//sys sendfile(outfd int, infd int, offset *int64, count int) (written int, err error) = SYS_SENDFILE64
 //sys Setfsgid(gid int) (err error)
 //sys Setfsuid(uid int) (err error)
 //sys Shutdown(s int, how int) (err error)
-//sys Splice(rfd int, roff *int64, wfd int, woff *int64, len int, flags int) (n int64, err error)
+//sys Splice(rfd int, roff *int64, wfd int, woff *int64, len int, flags int) (n int, err error)
 //sys Stat(path string, stat *Stat_t) (err error) = SYS_STAT64
-//sys Statfs(path string, buf *Statfs_t) (err error)
-//sys Truncate(path string, length int64) (err error)
+//sys Truncate(path string, length int64) (err error) = SYS_TRUNCATE64
 //sys Ustat(dev int, ubuf *Ustat_t) (err error)
 //sys accept4(s int, rsa *RawSockaddrAny, addrlen *_Socklen, flags int) (fd int, err error)
 //sys bind(s int, addr unsafe.Pointer, addrlen _Socklen) (err error)
@@ -88,6 +87,26 @@ func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
 //sys Utime(path string, buf *Utimbuf) (err error)
 //sys utimes(path string, times *[2]Timeval) (err error)
 //sys syncFileRange2(fd int, flags int, off int64, n int64) (err error) = SYS_SYNC_FILE_RANGE2
+
+func Fstatfs(fd int, buf *Statfs_t) (err error) {
+	_, _, e := Syscall(SYS_FSTATFS64, uintptr(fd), unsafe.Sizeof(*buf), uintptr(unsafe.Pointer(buf)))
+	if e != 0 {
+		err = e
+	}
+	return
+}
+
+func Statfs(path string, buf *Statfs_t) (err error) {
+	pathp, err := BytePtrFromString(path)
+	if err != nil {
+		return err
+	}
+	_, _, e := Syscall(SYS_STATFS64, uintptr(unsafe.Pointer(pathp)), unsafe.Sizeof(*buf), uintptr(unsafe.Pointer(buf)))
+	if e != 0 {
+		err = e
+	}
+	return
+}
 
 func mmap(addr uintptr, length uintptr, prot int, flags int, fd int, offset int64) (xaddr uintptr, err error) {
 	page := uintptr(offset / 4096)
