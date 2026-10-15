@@ -453,6 +453,11 @@ clone_marker_ok:
 	STW R7, g_m(R8)
 	OR R30, R8, R8
 clone_nog:
+	// stk is the exclusive upper bound of the child stack, not a caller
+	// frame. Go callees save LR at 8(entry SP), before allocating their
+	// own frame. Reserve a 16-byte-aligned linkage area so mstart cannot
+	// overwrite the allocation immediately above g0's stack.
+	STWU R1, -32(R1)
 	MTCTR R12
 	BCTRL
 	ADDI R3, R0, $111

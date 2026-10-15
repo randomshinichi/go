@@ -124,9 +124,7 @@ func (ht *HashTrieMap[K, V]) LoadOrStore(key K, value V) (result V, loaded bool)
 		}
 
 		// Grab the lock and double-check what we saw.
-		println("QEMU-PPC MAPLOCK BEFORE", i, i.mu.state, i.mu.sema)
 		i.mu.Lock()
-		println("QEMU-PPC MAPLOCK AFTER", i, i.mu.state, i.mu.sema)
 		n = slot.Load()
 		if (n == nil || n.isEntry) && !i.dead.Load() {
 			// What we saw is still true, so we can continue with the insert.
@@ -549,11 +547,7 @@ type indirect[K comparable, V any] struct {
 }
 
 func newIndirectNode[K comparable, V any](parent *indirect[K, V]) *indirect[K, V] {
-	i := &indirect[K, V]{node: node[K, V]{isEntry: false}, parent: parent}
-	if parent == nil {
-		println("QEMU-PPC NEWROOT", i, unsafe.Sizeof(*i), abi.TypeOf(*i).Size_, abi.TypeOf(*i).PtrBytes, i.dead.Load(), i.mu.state, i.mu.sema)
-	}
-	return i
+	return &indirect[K, V]{node: node[K, V]{isEntry: false}, parent: parent}
 }
 
 func (i *indirect[K, V]) empty() bool {
