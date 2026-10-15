@@ -19,6 +19,7 @@
 // makeFuncStub is the code half of the function returned by MakeFunc.
 TEXT ·makeFuncStub(SB),(NOSPLIT|WRAPPER),$48
 	NO_LOCAL_POINTERS
+	ADDI	R0, R0, $0	// R0 is not inherently zero on PPC32.
 	STW	R11, ARG_CTXT(R1)
 	ADDI	R3, R1, $argframe+0(FP)
 	STW	R3, ARG_FRAME(R1)
@@ -32,6 +33,7 @@ TEXT ·makeFuncStub(SB),(NOSPLIT|WRAPPER),$48
 // methodValueCall is the code half of the function returned by makeMethodValue.
 TEXT ·methodValueCall(SB),(NOSPLIT|WRAPPER),$48
 	NO_LOCAL_POINTERS
+	ADDI	R0, R0, $0	// R0 is not inherently zero on PPC32.
 	STW	R11, ARG_CTXT(R1)
 	ADDI	R3, R1, $argframe+0(FP)
 	STW	R3, ARG_FRAME(R1)
