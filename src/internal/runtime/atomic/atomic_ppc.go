@@ -104,16 +104,9 @@ func Xchg8(ptr *uint8, val uint8) (old uint8) {
 	}
 }
 
-//go:nosplit
-func Xadd(ptr *uint32, delta int32) (new uint32) {
-	for {
-		old := loadRaw(ptr)
-		new = old + uint32(delta)
-		if casRaw(ptr, old, new) {
-			return
-		}
-	}
-}
+//go:noescape
+// Xadd is implemented in assembly to keep the reservation loop frameless.
+func Xadd(ptr *uint32, delta int32) (new uint32)
 
 //go:nosplit
 func Xadduintptr(ptr *uintptr, delta uintptr) uintptr {

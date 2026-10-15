@@ -14,6 +14,21 @@ TEXT ·Casp1(SB),NOSPLIT,$0-13
 TEXT ·StorepNoWB(SB),NOSPLIT,$0-8
 	B ·storeRaw(SB)
 
+// Xadd is a leaf so coverage-instrumented code does not acquire a Go frame.
+TEXT ·Xadd(SB),NOSPLIT,$0-12
+	LWZ R3, ptr+0(FP)
+	LWZ R4, delta+4(FP)
+	ADDI R0, R0, $0
+	SYNC
+xadd_again:
+	LWARX R5, R3, R0
+	ADD R5, R5, R4
+	STWCX R5, R3, R0
+	BC 4, 2, xadd_again
+	SYNC
+	STW R5, ret+8(FP)
+	RET
+
 TEXT ·casRaw(SB),NOSPLIT,$0-13
 	LWZ R3, ptr+0(FP)
 	LWZ R4, old+4(FP)
