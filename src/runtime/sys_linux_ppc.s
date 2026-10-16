@@ -115,7 +115,7 @@ TEXT runtime·open(SB), NOSPLIT|NOFRAME, $0-16
 	ADDI R0, R0, $SYS_open
 	SC
 	BC 4, 3, open_ok
-	NEG R3, R3
+	ADDI R3, R0, $-1
 open_ok:
 	STW R3, ret+12(FP)
 	RET
