@@ -103,12 +103,13 @@ TEXT runtime·morestack_noctxt(SB), NOSPLIT|NOFRAME, $0-0
 	ADDI R11, R0, $0
 	B runtime·morestack(SB)
 
-// memmove handles overlapping ranges with byte copies. The target's baseline
-// has no PPC64 helper, and the generic runtime requires this symbol at link time.
+// memmove handles overlapping ranges with aligned word copies where possible.
+// Byte paths preserve support for unaligned pointers and exact range boundaries.
 TEXT runtime·memmove(SB), NOSPLIT|NOFRAME, $0-12
 	LWZ R3, to+0(FP)
 	LWZ R4, from+4(FP)
 	LWZ R5, n+8(FP)
+	ADDI R8, R0, $3
 	CMPWI R5, $0
 	BC 12, 2, memdone
 	CMPLW R3, R4
@@ -117,17 +118,96 @@ TEXT runtime·memmove(SB), NOSPLIT|NOFRAME, $0-12
 	CMPLW R3, R7
 	BC 12, 0, membackward
 memforward:
+	XOR R6, R3, R4
+	AND R6, R6, R8
+	CMPWI R6, $0
+	BC 4, 2, memforward_bytes
+	AND R6, R3, R8
+	CMPWI R6, $0
+	BC 12, 2, memforward_words
+memforward_head:
+	LBZ R7, 0(R4)
+	STB R7, 0(R3)
+	ADDI R3, R3, $1
+	ADDI R4, R4, $1
+	ADDI R5, R5, $-1
+	CMPWI R5, $0
+	BC 12, 2, memdone
+	AND R6, R3, R8
+	CMPWI R6, $0
+	BC 4, 2, memforward_head
+memforward_words:
+	CMPWI R5, $4
+	BC 12, 0, memforward_tail
+	LWZ R6, 0(R4)
+	STW R6, 0(R3)
+	ADDI R3, R3, $4
+	ADDI R4, R4, $4
+	ADDI R5, R5, $-4
+	B memforward_words
+memforward_tail:
+	CMPWI R5, $0
+	BC 12, 2, memdone
 	LBZ R6, 0(R4)
 	STB R6, 0(R3)
 	ADDI R3, R3, $1
 	ADDI R4, R4, $1
 	ADDI R5, R5, $-1
 	CMPWI R5, $0
-	BC 4, 2, memforward
+	BC 4, 2, memforward_tail
+	B memdone
+memforward_bytes:
+	LBZ R6, 0(R4)
+	STB R6, 0(R3)
+	ADDI R3, R3, $1
+	ADDI R4, R4, $1
+	ADDI R5, R5, $-1
+	CMPWI R5, $0
+	BC 4, 2, memforward_bytes
 	RET
 membackward:
 	ADD R3, R3, R5
 	ADD R4, R4, R5
+	XOR R6, R3, R4
+	AND R6, R6, R8
+	CMPWI R6, $0
+	BC 4, 2, memback_bytes
+	AND R6, R3, R8
+	CMPWI R6, $0
+	BC 12, 2, memback_words
+memback_tail:
+	ADDI R3, R3, $-1
+	ADDI R4, R4, $-1
+	LBZ R6, 0(R4)
+	STB R6, 0(R3)
+	ADDI R5, R5, $-1
+	CMPWI R5, $0
+	BC 12, 2, memdone
+	AND R6, R3, R8
+	CMPWI R6, $0
+	BC 4, 2, memback_tail
+memback_words:
+	CMPWI R5, $4
+	BC 12, 0, memback_head
+	ADDI R3, R3, $-4
+	ADDI R4, R4, $-4
+	LWZ R6, 0(R4)
+	STW R6, 0(R3)
+	ADDI R5, R5, $-4
+	B memback_words
+memback_head:
+	CMPWI R5, $0
+	BC 12, 2, memdone
+memback_head_loop:
+	ADDI R3, R3, $-1
+	ADDI R4, R4, $-1
+	LBZ R6, 0(R4)
+	STB R6, 0(R3)
+	ADDI R5, R5, $-1
+	CMPWI R5, $0
+	BC 4, 2, memback_head_loop
+	B memdone
+memback_bytes:
 membackloop:
 	ADDI R3, R3, $-1
 	ADDI R4, R4, $-1
