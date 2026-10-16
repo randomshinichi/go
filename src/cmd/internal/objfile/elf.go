@@ -108,6 +108,10 @@ func (f *elfFile) goarch() string {
 		return "arm64"
 	case elf.EM_LOONGARCH:
 		return "loong64"
+	case elf.EM_PPC:
+		// 32-bit PowerPC (linux/ppc). Same name macho.go and xcoff.go use;
+		// cmd/internal/disasm maps "ppc" to the big-endian PowerPC decoder.
+		return "ppc"
 	case elf.EM_PPC64:
 		if f.elf.ByteOrder == binary.LittleEndian {
 			return "ppc64le"
