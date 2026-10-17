@@ -419,6 +419,70 @@ func TestStripeHeldIsObservable(t *testing.T) {
 	}
 }
 
+// TestStripeEveryOpExcludesSameStripe: while the stripe of an operand is held,
+// every 64-bit operation on that operand, and on a different operand that
+// collides with it, must wait; once the stripe is released it must complete.
+// A mutant that gives one operation a different stripe from the others
+// completes immediately and fails, deterministically. The waiting side cannot
+// fail by mistake: a correct operation cannot complete while the stripe is held.
+func TestStripeEveryOpExcludesSameStripe(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
+	ops := []struct {
+		name string
+		f    func(p *uint64)
+	}{
+		{"Load64", func(p *uint64) { atomic.Load64(p) }},
+		{"LoadAcq64", func(p *uint64) { atomic.LoadAcq64(p) }},
+		{"Store64", func(p *uint64) { atomic.Store64(p, 1) }},
+		{"StoreRel64", func(p *uint64) { atomic.StoreRel64(p, 1) }},
+		{"Xchg64", func(p *uint64) { atomic.Xchg64(p, 1) }},
+		{"Xadd64", func(p *uint64) { atomic.Xadd64(p, 1) }},
+		{"Cas64", func(p *uint64) { atomic.Cas64(p, 0, 1) }},
+		{"And64", func(p *uint64) { atomic.And64(p, 1) }},
+		{"Or64", func(p *uint64) { atomic.Or64(p, 1) }},
+		{"Loadint64", func(p *uint64) { atomic.Loadint64((*int64)(unsafe.Pointer(p))) }},
+		{"Storeint64", func(p *uint64) { atomic.Storeint64((*int64)(unsafe.Pointer(p)), 1) }},
+		{"Xaddint64", func(p *uint64) { atomic.Xaddint64((*int64)(unsafe.Pointer(p)), 1) }},
+		{"Xchgint64", func(p *uint64) { atomic.Xchgint64((*int64)(unsafe.Pointer(p)), 1) }},
+		{"Casint64", func(p *uint64) { atomic.Casint64((*int64)(unsafe.Pointer(p)), 0, 1) }},
+	}
+	w := operandWords(t, 58)
+	held := &w[0]
+	for _, op := range ops {
+		for _, target := range []struct {
+			name string
+			p    *uint64
+		}{{"same operand", &w[0]}, {"colliding operand", &w[57]}} {
+			var started, finished uint32
+			atomic.StripeAcquire(held)
+			go func() {
+				atomic.Store(&started, 1)
+				op.f(target.p)
+				atomic.Store(&finished, 1)
+			}()
+			for i := 0; atomic.Load(&started) == 0; i++ {
+				if i > 5000 {
+					atomic.StripeRelease(held)
+					t.Fatalf("%s on %s: goroutine never started", op.name, target.name)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			time.Sleep(100 * time.Millisecond)
+			early := atomic.Load(&finished) != 0
+			atomic.StripeRelease(held)
+			if early {
+				t.Errorf("%s on %s completed while its stripe was held", op.name, target.name)
+			}
+			for i := 0; atomic.Load(&finished) == 0; i++ {
+				if i > 5000 {
+					t.Fatalf("%s on %s did not complete after the stripe was released", op.name, target.name)
+				}
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}
+}
+
 // stripeHoldChild holds the stripe of word 0 and then performs 64-bit atomics on
 // word 1, which hashes to a different stripe. With one global lock that
 // operation spins forever on this very thread, so the parent bounds the child
