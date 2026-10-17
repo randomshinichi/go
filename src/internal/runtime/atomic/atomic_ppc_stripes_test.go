@@ -489,7 +489,7 @@ func TestStripeNoEscape(t *testing.T) {
 		atomic.Cas64(p, 3, 4)
 		atomic.Or64(p, 8)
 		atomic.And64(p, 12)
-		if atomic.Load64(p) != 4 {
+		if atomic.Load64(p) != 12 {
 			panic("bad value")
 		}
 	})
