@@ -794,8 +794,8 @@ func TestCallersFromWrapper(t *testing.T) {
 }
 
 func TestTracebackSystemstack(t *testing.T) {
-	if GOARCH == "ppc64" || GOARCH == "ppc64le" {
-		t.Skip("systemstack tail call not implemented on ppc64x")
+	if GOARCH == "ppc64le" || (GOARCH == "ppc64" && !SystemstackTailcallSupported) {
+		t.Skip("systemstack tail call not implemented for this ppc64x build mode")
 	}
 
 	// Test that profiles correctly jump over systemstack,
