@@ -20,12 +20,14 @@ import (
 )
 
 // goppc-7tqu. ppc32 has no native 64-bit atomic: internal/runtime/atomic
-// implements every 64-bit operation through one global, non-reentrant spinlock,
-// lock64. runtime.unlock2 calls mutexSampleContention on every unlock, and that
+// implements every 64-bit operation through non-reentrant, address-hashed spinlock
+// stripes (this file holds ALL of them, which is what the one global lock, lock64,
+// used to be; so these children still prove that no 64-bit atomic runs on the
+// report path, not merely none that hashes to one stripe). runtime.unlock2 calls mutexSampleContention on every unlock, and that
 // function's first act was to Load64 mutexprofilerate. Every print() ends in
 // printunlock -> unlock(&debuglock), so a fatal report or a panic report printed
-// on a thread that already holds lock64 printed its first line and then spun in
-// lock64Acquire forever -- the owner is the code the report interrupted, and it
+// on a thread that already holds every atomic64 stripe printed its first line and then spun in
+// atomic64Lock forever -- the owner is the code the report interrupted, and it
 // cannot run again until the report returns.
 //
 // The four children below run in a subprocess, because the failure is a hang
@@ -38,7 +40,7 @@ import (
 // The named mutant for this test file is "M-no-flag-check": the tree with the
 // mutexProfilingOn() test removed from mutexSampleContention (the flag and its
 // maintenance in SetMutexProfileFraction left in place). Every child that runs a
-// fatal report while lock64 is held must wedge on it, every time.
+// fatal report while every atomic64 stripe is held must wedge on it, every time.
 const (
 	fatalSIGQUITLock64Arg = "fatalSIGQUITLock64"
 	fatalSIGQUITNoHoldArg = "fatalSIGQUITNoHold"
@@ -72,17 +74,17 @@ func init() {
 }
 
 // fatalSIGQUITLock64Child is the deterministic reproducer: this thread holds
-// lock64 when the kernel delivers SIGQUIT to it, so the fatal report runs on the
+// every atomic64 stripe when the kernel delivers SIGQUIT to it, so the fatal report runs on the
 // lock's holder. Before the fix the child printed "SIGQUIT: quit" and then spun.
 func fatalSIGQUITLock64Child() {
 	runtime.LockOSThread()
 	fmt.Println(fatalStartMarker, fatalSIGQUITLock64Arg)
-	runtime.HoldLock64AcrossSIGQUIT()
+	runtime.HoldAllAtomic64StripesAcrossSIGQUIT()
 	fmt.Println(fatalReturned)
 	os.Exit(4)
 }
 
-// fatalSIGQUITNoHoldChild is the leg-B control: SIGQUIT with lock64 free. It must
+// fatalSIGQUITNoHoldChild is the leg-B control: SIGQUIT with the stripes free. It must
 // print the same full report and exit 2 on the mutant as well as on the fix, so
 // that a change to the fatal path itself cannot pass for the fix.
 func fatalSIGQUITNoHoldChild() {
@@ -95,7 +97,7 @@ func fatalSIGQUITNoHoldChild() {
 
 // fatalLoad64NilChild reaches the same hazard with no signal, no profiler and no
 // recover(): an unrecovered 64-bit atomic on an invalid operand. Whether this one
-// wedges depends on the fault being taken before lock64Acquire, which
+// wedges depends on the fault being taken before atomic64Lock, which
 // atomic.check64 arranges (a1a6ce2918); it is kept here because it is the leg
 // that needs no signal to reproduce the class.
 func fatalLoad64NilChild() {
@@ -106,7 +108,7 @@ func fatalLoad64NilChild() {
 }
 
 // fatalLoadNilByteChild is the leg-A control: a faulting load of the same width
-// as address zero that is not a 64-bit atomic. Same report path, no lock64.
+// as address zero that is not a 64-bit atomic. Same report path, no stripe.
 func fatalLoadNilByteChild() {
 	fmt.Println(fatalStartMarker, fatalLoadNilByteArg)
 	_ = loadByteAt((*byte)(unsafe.Pointer(fatalZeroAddress)))
@@ -114,7 +116,7 @@ func fatalLoadNilByteChild() {
 	os.Exit(4)
 }
 
-// fatalPrintHeldChild prints while holding lock64 and exits 0 if it gets that
+// fatalPrintHeldChild prints while holding every atomic64 stripe and exits 0 if it gets that
 // far. It is the direct dynamic form of criterion 3: the print's own unlock of
 // debuglock runs the rate-zero path of mutexSampleContention, so a read of the
 // 64-bit rate there would deadlock this child. It is a hang rather than a report,
@@ -122,8 +124,8 @@ func fatalLoadNilByteChild() {
 func fatalPrintHeldChild() {
 	runtime.LockOSThread()
 	fmt.Println(fatalStartMarker, fatalPrintHeldArg)
-	runtime.HoldLock64AcrossPrint()
-	fmt.Println("fatal child: printed and returned while holding lock64")
+	runtime.HoldAllAtomic64StripesAcrossPrint()
+	fmt.Println("fatal child: printed and returned while holding every atomic64 stripe")
 	os.Exit(0)
 }
 
@@ -220,15 +222,15 @@ func TestMutexProfilingFlagMirrorsRate(t *testing.T) {
 }
 
 // TestFatalReportWhileLock64Held is criterion 1 of goppc-7tqu: the fatal report
-// for a signal delivered to the thread that holds lock64 must print in full and
-// exit 2, instead of printing "SIGQUIT: quit" and spinning in lock64Acquire.
+// for a signal delivered to the thread that holds every atomic64 stripe must print in full and
+// exit 2, instead of printing "SIGQUIT: quit" and spinning in atomic64Lock.
 func TestFatalReportWhileLock64Held(t *testing.T) {
 	r := runFatalChild(t, fatalSIGQUITLock64Arg)
 	requireFatalReport(t, fatalSIGQUITLock64Arg, "SIGQUIT: quit", r)
 }
 
 // TestPrintWhileLock64Held requires the print path itself to survive holding
-// lock64. printunlock -> unlock(&debuglock) -> unlock2 calls mutexSampleContention
+// the stripes. printunlock -> unlock(&debuglock) -> unlock2 calls mutexSampleContention
 // on every unlock, so this is the rate-zero path of unlock2 under test, with no
 // signal and no dump in the way: only the flag check can make it return.
 func TestPrintWhileLock64Held(t *testing.T) {
@@ -237,7 +239,7 @@ func TestPrintWhileLock64Held(t *testing.T) {
 	if r.status != 0 {
 		t.Errorf("child %s: exit status %d, want 0", fatalPrintHeldArg, r.status)
 	}
-	if !strings.Contains(r.out, "printed and returned while holding lock64") {
+	if !strings.Contains(r.out, "printed and returned while holding every atomic64 stripe") {
 		t.Errorf("child %s: the print did not return", fatalPrintHeldArg)
 	}
 }
@@ -249,10 +251,10 @@ func TestFatalReportInvalidAtomic64Operand(t *testing.T) {
 	requireFatalReport(t, fatalLoad64NilArg, "panic: runtime error: invalid memory address or nil pointer dereference", r)
 }
 
-// TestFatalReportControls are the controls: the same reports with lock64 free
+// TestFatalReportControls are the controls: the same reports with the stripes free
 // (leg B) and with a plain byte load instead of a 64-bit atomic (leg A). They
 // must pass on the mutant too -- that is what makes the two tests above evidence
-// about lock64 rather than about the report path in general.
+// about the stripes rather than about the report path in general.
 func TestFatalReportControls(t *testing.T) {
 	t.Run(fatalSIGQUITNoHoldArg, func(t *testing.T) {
 		r := runFatalChild(t, fatalSIGQUITNoHoldArg)

@@ -10,14 +10,14 @@ import "internal/runtime/atomic"
 
 // mutexProfilingFlag mirrors "mutexprofilerate > 0" in 32 bits, because on this
 // architecture reading the rate is not cheap: there is no native 64-bit atomic,
-// and every 64-bit operation takes the global, non-reentrant lock64 (see
-// internal/runtime/atomic's lock64Acquire). mutexSampleContention, which
+// and every 64-bit operation takes a non-reentrant address-hashed stripe lock
+// (see internal/runtime/atomic's atomic64Lock). mutexSampleContention, which
 // unlock2 calls on every unlock, tests this flag before it reads the rate.
 //
 // The consequence it removes: every print() ends in printunlock ->
 // unlock(&debuglock) -> unlock2 -> mutexSampleContention, so a fatal report or a
-// panic report printed on a thread that already held lock64 used to print one
-// line and then spin in lock64Acquire forever -- the lock's owner is the code
+// panic report printed on a thread that already held a stripe used to print one
+// line and then spin in atomic64Lock forever (if the rate hashed to that stripe) -- the lock's owner is the code
 // the report interrupted, and that code cannot run again until the report
 // returns (goppc-7tqu).
 //

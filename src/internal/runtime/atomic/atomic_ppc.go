@@ -6,9 +6,10 @@
 
 package atomic
 
-import "unsafe"
-
-var lock64 uint32
+import (
+	"internal/cpu"
+	"unsafe"
+)
 
 //go:noescape
 func casRaw(ptr *uint32, old, new uint32) bool
@@ -172,77 +173,201 @@ func byteLane(ptr *uint8) (*uint32, uint) {
 	return (*uint32)(unsafe.Pointer(a &^ 3)), uint((a&3)^3) * 8
 }
 
-// The 32-bit target has no native 64-bit reservation instruction. All 64-bit
-// operations serialize through lock64 and use ordinary 32-bit-pair accesses.
+// The 32-bit target has no native 64-bit reservation instruction (lwarx and
+// stwcx. cover one word), so every 64-bit operation runs under a spinlock built
+// from them. Following the 32-bit ARM fallback (atomic_arm.go), the lock is
+// chosen by the operand's address from a table of 57 stripes:
 //
-// lock64 is a plain spinlock and is NOT reentrant: a signal handler that runs
-// on the thread that holds it, and then does a 64-bit atomic of its own,
-// spins forever (goppc-452y). The SIGPROF handler does exactly that through
-// profBuf.write, so sigprof asks Lock64Held first and drops the sample when
-// the answer is yes. Every other 64-bit atomic reachable from a signal handler
-// has the same hazard and needs the same care.
+//	stripe = (uintptr(unsafe.Pointer(addr)) >> 3) % 57
 //
-// lock64Acquire and lock64Release are linknamed (push) only so the runtime's
-// test can hold the lock across a self-directed SIGPROF; see
+// 57 is the upstream ARM table size; upstream records no reason for it (it is
+// 3*19, not prime, and an address stride of 8*k reaches 57/gcd(k,57) stripes).
+// The operand stays where it is and any number of operands share the table.
+// Distinct operands that hash together only wait for each other. Every 64-bit
+// operation on one operand (load, store, CAS, exchange, add, and, or) derives
+// the same stripe from the same address, so they exclude one another; an
+// operation on an operand with a different stripe is independent.
+//
+// Each stripe is one word padded to cpu.CacheLinePadSize (128 bytes here). An
+// lwarx reservation covers a granule of at least a cache line on the 750 and
+// 74xx (32-byte lines), and a store by another processor to the granule
+// cancels it, so two stripes in one line would make their spinners cancel each
+// other's stwcx. 128 bytes is the 970's line; ARM's 32 would be too small if
+// this ppc32 code runs on a G5, and no smaller value has been established for
+// the G4's 64-byte L2/L3 line. This costs 57*128 = 7296 bytes of BSS.
+//
+// Locking uses only lwarx/stwcx. and sync, which exist on the G3 (750) floor.
+// casRaw brackets its reservation loop with sync, as storeRaw does its store:
+// acquire and release are therefore full barriers, and the plain 32-bit loads
+// and stores of the operand between them are ordered with every other
+// operation that takes the same stripe. 64-bit accesses are never made outside
+// the stripe, so no operation sees a torn value.
+//
+// A stripe is a plain spinlock and is NOT reentrant. A signal handler that
+// runs on a thread holding a stripe, and then needs that stripe for a 64-bit
+// atomic of its own, spins forever (goppc-452y). The SIGPROF handler does that
+// through profBuf.write, so sigprof first asks Atomic64AnyStripeHeld and drops
+// the sample when the answer is yes. See that function for why the test is
+// "any stripe" and not "the stripe the handler needs".
+//
+// Operations nest no stripes: a critical section contains only plain loads and
+// stores of the operand, so a thread holds at most one stripe at a time and
+// there is no lock-order deadlock.
+//
+// atomic64StripeAcquire, atomic64StripeRelease, atomic64StripeAcquireAll,
+// atomic64StripeReleaseAll and atomic64StripeIndex are linknamed (push) only so
+// that runtime tests can hold stripes across a self-directed signal; see
 // runtime/proflock64_ppc_test.go.
 //
-//go:linkname lock64Acquire
-//go:linkname lock64Release
+//go:linkname atomic64StripeAcquire
+//go:linkname atomic64StripeRelease
+//go:linkname atomic64StripeAcquireAll
+//go:linkname atomic64StripeReleaseAll
+//go:linkname atomic64StripeIndex
+
+const atomic64Stripes = 57
+
+type atomic64Stripe struct {
+	l   uint32
+	pad [cpu.CacheLinePadSize - 4]byte
+}
+
+var atomic64Table [atomic64Stripes]atomic64Stripe
+
+// atomic64StripeIndex is the address-to-stripe mapping, and the only place it
+// is written down.
+//
 //go:nosplit
-func lock64Acquire() {
-	for !casRaw(&lock64, 0, 1) {
+func atomic64StripeIndex(ptr *uint64) int {
+	return int((uintptr(unsafe.Pointer(ptr)) >> 3) % atomic64Stripes)
+}
+
+//go:nosplit
+func atomic64Lock(ptr *uint64) *uint32 {
+	l := &atomic64Table[atomic64StripeIndex(ptr)].l
+	for !casRaw(l, 0, 1) {
+	}
+	return l
+}
+
+//go:nosplit
+func atomic64Unlock(l *uint32) { storeRaw(l, 0) }
+
+//go:nosplit
+func atomic64StripeAcquire(ptr *uint64) { atomic64Lock(ptr) }
+
+//go:nosplit
+func atomic64StripeRelease(ptr *uint64) {
+	atomic64Unlock(&atomic64Table[atomic64StripeIndex(ptr)].l)
+}
+
+// atomic64StripeAcquireAll holds every stripe, in ascending order. No
+// operation holds one stripe while waiting for another, so this cannot
+// deadlock against operations; it is for tests that need "no 64-bit atomic
+// can proceed".
+//
+//go:nosplit
+func atomic64StripeAcquireAll() {
+	for i := range atomic64Table {
+		for !casRaw(&atomic64Table[i].l, 0, 1) {
+		}
 	}
 }
 
 //go:nosplit
-func lock64Release() { storeRaw(&lock64, 0) }
+func atomic64StripeReleaseAll() {
+	for i := range atomic64Table {
+		atomic64Unlock(&atomic64Table[i].l)
+	}
+}
 
-// Lock64Held reports whether some thread currently holds lock64. A signal
-// handler that is about to do a 64-bit atomic calls it first: if the answer is
-// yes, the holder may be the very thread the signal interrupted, and waiting
-// for the lock would wait for the handler's own caller. The test is exact in
-// that direction: if the interrupted thread holds lock64, the word stays 1 for
-// the whole handler, so a handler that sees 0 cannot be the lock's blocked
-// owner. It can say yes when another thread holds the lock; the caller then
-// drops work it could have done, which is a lost sample, not a hang.
+// Atomic64AnyStripeHeld reports whether any stripe is currently held. A signal
+// handler that is about to do a 64-bit atomic calls it first and drops its
+// work on a yes.
+//
+// Why this is sound. The handler runs on some thread T with signals blocked,
+// and T makes no progress until the handler returns. If T was inside an
+// operation it holds exactly one stripe (see above), and that stripe stays held
+// for the whole handler: the word was written before the signal was taken,
+// T reads its own writes in program order, and only T releases it. So the scan
+// finds it set, whichever stripe it is and whichever operand the handler would
+// have touched. If T held nothing, the handler may wait on another thread's
+// stripe, but that thread's critical section is a few plain loads and stores
+// that depend on nothing T holds, so the wait ends. The acquisition and release
+// windows are covered by instruction order: the stripe is set once stwcx.
+// succeeds, and cleared by the single stw in storeRaw; a signal before the first
+// leaves T holding nothing (the kernel also cancels the reservation, so a
+// signal inside the lwarx/stwcx. loop makes the loop retry), and a signal after
+// the second leaves T holding nothing.
+//
+// Why it is not "the stripe the handler needs". That needs the handler's full
+// operand set, which today is the fields of one profBuf but is whatever
+// sigprof's callees reach. A missed operand is a hang, not a lost sample.
+// "Any stripe" needs no such inventory. The price is the same one the global
+// lock charged: it also answers yes when another thread holds an unrelated
+// stripe, and the caller then drops a sample it could have taken. Those are
+// counted drops, not hangs.
+//
+// The scan uses plain loads. It is exact for the calling thread's own stripe,
+// which is the only one soundness needs; for other threads' stripes it is a
+// racy snapshot, which can only add or omit a conservative drop.
 //
 //go:nosplit
-func Lock64Held() bool { return loadRaw(&lock64) != 0 }
+func Atomic64AnyStripeHeld() bool {
+	for i := range atomic64Table {
+		if atomic64Table[i].l != 0 {
+			return true
+		}
+	}
+	return false
+}
 
 //go:nosplit
 func check64(ptr *uint64) {
 	if uintptr(unsafe.Pointer(ptr))&7 != 0 {
 		panicUnaligned()
 	}
-	// Force the dereference before the caller takes lock64. A nil (or otherwise
-	// faulting) operand must panic while lock64 is still free; otherwise the panic
-	// unwinds out of a held lock that nothing will release, and every later 64-bit
-	// atomic call spins forever in lock64Acquire. Mirrors atomic_mipsx.go's
-	// lockAndCheck ("force dereference before taking lock"). The loaded value is
-	// discarded; the real read/write happens under the lock in the caller.
+	// Force the dereference before the caller takes a stripe. A nil (or otherwise
+	// faulting) operand must panic while no stripe is held; otherwise the panic
+	// unwinds out of a held stripe that nothing will release, and every later
+	// 64-bit atomic that hashes there spins forever in atomic64Lock. Mirrors
+	// atomic_mipsx.go's lockAndCheck ("force dereference before taking lock").
+	// The loaded value is discarded; the real read/write happens under the stripe
+	// in the caller.
 	_ = *ptr
 }
 
 //go:nosplit
 func Cas64(ptr *uint64, old, new uint64) bool {
 	check64(ptr)
-	lock64Acquire()
+	l := atomic64Lock(ptr)
 	ok := *ptr == old
 	if ok {
 		*ptr = new
 	}
-	lock64Release()
+	atomic64Unlock(l)
 	return ok
 }
 
 //go:nosplit
-func Load64(ptr *uint64) uint64 { check64(ptr); lock64Acquire(); v := *ptr; lock64Release(); return v }
+func Load64(ptr *uint64) uint64 {
+	check64(ptr)
+	l := atomic64Lock(ptr)
+	v := *ptr
+	atomic64Unlock(l)
+	return v
+}
 
 //go:nosplit
 func LoadAcq64(ptr *uint64) uint64 { return Load64(ptr) }
 
 //go:nosplit
-func Store64(ptr *uint64, val uint64) { check64(ptr); lock64Acquire(); *ptr = val; lock64Release() }
+func Store64(ptr *uint64, val uint64) {
+	check64(ptr)
+	l := atomic64Lock(ptr)
+	*ptr = val
+	atomic64Unlock(l)
+}
 
 //go:nosplit
 func StoreRel64(ptr *uint64, val uint64) { Store64(ptr, val) }
@@ -250,40 +375,40 @@ func StoreRel64(ptr *uint64, val uint64) { Store64(ptr, val) }
 //go:nosplit
 func Xchg64(ptr *uint64, val uint64) (old uint64) {
 	check64(ptr)
-	lock64Acquire()
+	l := atomic64Lock(ptr)
 	old = *ptr
 	*ptr = val
-	lock64Release()
+	atomic64Unlock(l)
 	return
 }
 
 //go:nosplit
 func Xadd64(ptr *uint64, delta int64) (new uint64) {
 	check64(ptr)
-	lock64Acquire()
+	l := atomic64Lock(ptr)
 	new = *ptr + uint64(delta)
 	*ptr = new
-	lock64Release()
+	atomic64Unlock(l)
 	return
 }
 
 //go:nosplit
 func And64(ptr *uint64, val uint64) (old uint64) {
 	check64(ptr)
-	lock64Acquire()
+	l := atomic64Lock(ptr)
 	old = *ptr
 	*ptr &= val
-	lock64Release()
+	atomic64Unlock(l)
 	return
 }
 
 //go:nosplit
 func Or64(ptr *uint64, val uint64) (old uint64) {
 	check64(ptr)
-	lock64Acquire()
+	l := atomic64Lock(ptr)
 	old = *ptr
 	*ptr |= val
-	lock64Release()
+	atomic64Unlock(l)
 	return
 }
 
