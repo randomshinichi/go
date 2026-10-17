@@ -351,10 +351,30 @@ switch:
 	RET
 
 noswitch:
-	// already on m stack, just call directly
-	// On other arches we do a tail call here, but it appears to be
-	// impossible to tail call a function pointer in shared mode on
-	// ppc64 because the caller is responsible for restoring the TOC.
+#ifdef GOARCH_ppc64
+#ifdef GOOS_linux
+#define SYSTEMSTACK_BE_STATIC
+#endif
+#ifdef GOOS_darwin
+#define SYSTEMSTACK_BE_STATIC
+#endif
+#endif
+#ifdef SYSTEMSTACK_BE_STATIC
+	// Default BE Go code has no TOC. Only that mode is covered here;
+	// conservatively retain the original call/restore for c-archive.
+	MOVBZ	runtime·isarchive(SB), R6
+	CMP	R6, $0
+	BNE	noswitch_call
+	MOVD	0(R11), R12	// raw code pointer; R11 remains the context
+	MOVD	R12, CTR
+	// Restore LR/SP through the generated epilogue, including PC/SP
+	// metadata. The closure returns directly to our original caller.
+	RET	(CTR)
+noswitch_call:
+#endif
+	// Shared-module calls must return here: restoring R2 before a tail
+	// branch would not restore it after a cross-module closure returns.
+	// LE and AIX retain their existing call/restore path as well.
 	MOVD	0(R11), R12	// code pointer
 	MOVD	R12, CTR
 	BL	(CTR)

@@ -510,6 +510,10 @@ func LockOSCounts() (external, internal uint32) {
 	return gp.m.lockedExt, gp.m.lockedInt
 }
 
+// SystemstackTailcallSupported describes the BE default-mode implementation;
+// c-archive retains the call/TOC-restore path. This export exists only in tests.
+var SystemstackTailcallSupported = GOARCH == "ppc64" && (GOOS == "linux" || GOOS == "darwin") && !isarchive
+
 //go:noinline
 func TracebackSystemstack(stk []uintptr, i int) int {
 	if i == 0 {

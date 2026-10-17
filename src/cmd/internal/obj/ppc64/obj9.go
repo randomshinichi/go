@@ -967,6 +967,12 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 			}
 
 			retTarget := p.To.Sym
+			retReg := int16(REG_LR)
+			if retTarget == nil && (p.To.Type == obj.TYPE_REG || p.To.Type == obj.TYPE_MEM) && p.To.Name == obj.NAME_NONE && p.To.Reg == REG_CTR {
+				// An indirect tail call must use the generated epilogue so
+				// the restored SP is also described by the PC/SP table.
+				retReg = REG_CTR
+			}
 
 			if c.cursym.Func().Text.Mark&LEAF != 0 {
 				if autosize == 0 {
@@ -974,7 +980,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 					p.From = obj.Addr{}
 					if retTarget == nil {
 						p.To.Type = obj.TYPE_REG
-						p.To.Reg = REG_LR
+						p.To.Reg = retReg
 					} else {
 						p.To.Type = obj.TYPE_BRANCH
 						p.To.Sym = retTarget
@@ -995,7 +1001,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 				q.Pos = p.Pos
 				if retTarget == nil {
 					q.To.Type = obj.TYPE_REG
-					q.To.Reg = REG_LR
+					q.To.Reg = retReg
 				} else {
 					q.To.Type = obj.TYPE_BRANCH
 					q.To.Sym = retTarget
@@ -1064,7 +1070,7 @@ func preprocess(ctxt *obj.Link, cursym *obj.LSym, newprog obj.ProgAlloc) {
 			q1.Pos = p.Pos
 			if retTarget == nil {
 				q1.To.Type = obj.TYPE_REG
-				q1.To.Reg = REG_LR
+				q1.To.Reg = retReg
 			} else {
 				q1.To.Type = obj.TYPE_BRANCH
 				q1.To.Sym = retTarget
