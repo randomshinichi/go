@@ -425,6 +425,12 @@ func TestStripeHeldIsObservable(t *testing.T) {
 // A mutant that gives one operation a different stripe from the others
 // completes immediately and fails, deterministically. The waiting side cannot
 // fail by mistake: a correct operation cannot complete while the stripe is held.
+//
+// The thread that holds a stripe must not call into the runtime, which makes
+// 64-bit atomics of its own (timers, scheduler, allocator); one that hashes to
+// the held stripe would wait for this very thread. So the worker goroutine is
+// already running, waiting on 32-bit flags, before the stripe is taken, and
+// the holder only spins on 32-bit loads and the clock.
 func TestStripeEveryOpExcludesSameStripe(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	ops := []struct {
@@ -453,31 +459,42 @@ func TestStripeEveryOpExcludesSameStripe(t *testing.T) {
 			name string
 			p    *uint64
 		}{{"same operand", &w[0]}, {"colliding operand", &w[57]}} {
-			var started, finished uint32
-			atomic.StripeAcquire(held)
+			var gate, started, finished uint32
 			go func() {
+				for atomic.Load(&gate) == 0 {
+				}
 				atomic.Store(&started, 1)
 				op.f(target.p)
 				atomic.Store(&finished, 1)
 			}()
-			for i := 0; atomic.Load(&started) == 0; i++ {
-				if i > 5000 {
-					atomic.StripeRelease(held)
-					t.Fatalf("%s on %s: goroutine never started", op.name, target.name)
+			atomic.StripeAcquire(held)
+			atomic.Store(&gate, 1)
+			var early, never bool
+			start := time.Now()
+			for atomic.Load(&started) == 0 {
+				if time.Since(start) > 10*time.Second {
+					never = true
+					break
 				}
-				time.Sleep(time.Millisecond)
 			}
-			time.Sleep(100 * time.Millisecond)
-			early := atomic.Load(&finished) != 0
+			for t0 := time.Now(); time.Since(t0) < 100*time.Millisecond; {
+				if atomic.Load(&finished) != 0 {
+					early = true
+					break
+				}
+			}
 			atomic.StripeRelease(held)
+			if never {
+				t.Fatalf("%s on %s: worker never started", op.name, target.name)
+			}
 			if early {
 				t.Errorf("%s on %s completed while its stripe was held", op.name, target.name)
 			}
-			for i := 0; atomic.Load(&finished) == 0; i++ {
-				if i > 5000 {
+			start = time.Now()
+			for atomic.Load(&finished) == 0 {
+				if time.Since(start) > 10*time.Second {
 					t.Fatalf("%s on %s did not complete after the stripe was released", op.name, target.name)
 				}
-				time.Sleep(time.Millisecond)
 			}
 		}
 	}
