@@ -107,7 +107,7 @@ func TestFatalFaultOnSystemstackKeepsItsReport(t *testing.T) {
 		name, arg, signal string
 	}{
 		{"unmapped-address", badssSegvG0Arg, "SIGSEGV: segmentation violation"},
-		{"nil-address", badssNilG0Arg, "SIGBUS: bus error"},
+		{"nil-address", badssNilG0Arg, badssFaultLine},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := runBadssChild(t, c.arg, badssWitnessBudget(t))

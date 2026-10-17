@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,8 +55,14 @@ const (
 	badssFatalLine    = "fatal: systemstack called from unexpected goroutine"
 	badssReturnedLine = "badss: returned without taking the fatal branch"
 	badssControlLine  = "badss: control returned from systemstack"
-	badssFaultLine    = "SIGBUS: bus error"
 )
+
+var badssFaultLine = func() string {
+	if runtime.GOOS == "linux" {
+		return "SIGSEGV: segmentation violation"
+	}
+	return "SIGBUS: bus error"
+}()
 
 const (
 	// badssReadyLine is the first thing every child writes, after it has
@@ -139,13 +146,23 @@ var badssWitnessExpect = badssExpect{
 	forbidden: []string{badssReturnedLine},
 }
 
+// badssCounterfeitFaultLine describes the actual report in the positive-control
+// child independently of the oracle's expected string. Keeping these separate
+// lets TestBadssOracleCounterfeits detect a wrong platform expectation.
+var badssCounterfeitFaultLine = func() string {
+	if runtime.GOOS == "linux" {
+		return "SIGSEGV: segmentation violation"
+	}
+	return "SIGBUS: bus error"
+}()
+
 // badssNestedReport is the shape of the report the nested-fault witness produces
 // when the fatal ladder runs to the end: the original message, the original
 // fault, the nested fault, and the ladder's last line, in that order.
-const badssNestedReport = badssFatalLine +
-	badssFaultLine + "\nPC=0x1 m=0 sigcode=1 addr=0x0\n\ngoroutine 1 [running]:\n" +
+var badssNestedReport = badssFatalLine +
+	badssCounterfeitFaultLine + "\nPC=0x1 m=0 sigcode=1 addr=0x0\n\ngoroutine 1 [running]:\n" +
 	"panic during panic\n" +
-	badssFaultLine + "\nPC=0x2 m=0 sigcode=1 addr=0x28\n\n" +
+	badssCounterfeitFaultLine + "\nPC=0x2 m=0 sigcode=1 addr=0x28\n\n" +
 	"stack trace unavailable\n"
 
 // badssChildReady is the child's prologue: set a CPU limit on this process, then
@@ -405,6 +422,12 @@ func orderedMarkers(out string, markers []string) (missing string, ok bool) {
 
 // judgeBadss classifies one child against what it was supposed to do.
 func judgeBadss(r badssRun, e badssExpect) badssVerdict {
+	for _, marker := range e.markers {
+		if marker == "" {
+			return badssVerdict{badssFail, []string{"empty-marker"},
+				"expected report contains an empty marker, which would match any output"}
+		}
+	}
 	spent := r.cpu >= r.budget.cpu*3/4
 	facts := fmt.Sprintf("child %s: cpu %v of budget %v, startup %v of %v, run %v of %v",
 		r.arg, r.cpu.Round(time.Millisecond), r.budget.cpu, r.startupElapsed.Round(time.Millisecond),
@@ -484,6 +507,30 @@ func badssLoad() string {
 // badssApply reports a verdict the way every witness does: a pass is logged, a
 // rejection is an error naming the oracle, and an exhausted infrastructure budget
 // is a skip - never a pass and never the regression.
+func badssLinuxWitnessVerdict(r badssRun) badssVerdict {
+	var oracles []string
+	var why []string
+	if r.killedByUs {
+		oracles = append(oracles, "harness-killed")
+		why = append(why, "child was killed by the harness")
+	}
+	ws, ok := r.state.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGSEGV {
+		oracles = append(oracles, "termination")
+		why = append(why, fmt.Sprintf("child status %v, want termination by SIGSEGV", r.state))
+	}
+	for _, marker := range []string{badssFatalLine, badssFaultLine, "runtime.abort()"} {
+		if !strings.Contains(r.out, marker) {
+			oracles = append(oracles, "report-markers")
+			why = append(why, fmt.Sprintf("output missing %q", marker))
+		}
+	}
+	if len(oracles) != 0 {
+		return badssVerdict{badssFail, oracles, strings.Join(why, "; ")}
+	}
+	return badssVerdict{status: badssPass, detail: "child reached the fatal report and terminated by SIGSEGV"}
+}
+
 func badssApply(t *testing.T, what string, r badssRun, v badssVerdict) {
 	t.Helper()
 	t.Logf("%s: %s\n  load: %s\n  child output:\n%s", what, v, badssLoad(), r.out)
@@ -535,6 +582,13 @@ func TestBadssOracleCounterfeits(t *testing.T) {
 			if v.status != c.status {
 				t.Fatalf("verdict %s, want status %s\n%s", v, c.status, r.out)
 			}
+			if c.arg == badssCounterfeitPrefixExit3Arg && runtime.GOOS == "linux" {
+				witness := badssLinuxWitnessVerdict(r)
+				if witness.status != badssFail {
+					t.Errorf("Linux witness accepted fatal-prefix counterfeit: %s", witness)
+				}
+				t.Logf("Linux witness rejects fatal-prefix counterfeit: %s", witness)
+			}
 			for _, o := range c.oracles {
 				if !v.has(o) {
 					t.Errorf("oracle %q did not reject this child: %s", o, v)
@@ -542,4 +596,13 @@ func TestBadssOracleCounterfeits(t *testing.T) {
 			}
 		})
 	}
+	t.Run("empty-expected-marker", func(t *testing.T) {
+		r := runBadssChild(t, badssCounterfeitCompleteArg, badssDefaultBudget)
+		expect := badssWitnessExpect
+		expect.markers = []string{""}
+		v := judgeBadss(r, expect)
+		if v.status != badssFail || !v.has("empty-marker") {
+			t.Fatalf("empty expected marker was not rejected: %s\n%s", v, r.out)
+		}
+	})
 }

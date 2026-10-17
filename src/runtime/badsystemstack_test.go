@@ -77,11 +77,14 @@ var badssAbortExpect = badssExpect{
 // fatal message.
 //
 // The witness grades diagnostic completion, not wall expiry (goppc-0v7x review
-// 691deaec). It passes only if the child terminated by itself with exit 4 after
-// printing the whole nested report (see badssWitnessExpect). A child that is
-// still alive when the budget ends is a wedge only if it had spent its whole CPU
-// budget; otherwise the target was too loaded to say, and the test skips with
-// INFRASTRUCTURE-INCONCLUSIVE. See badsystemstack_oracle_test.go.
+// 691deaec). Darwin passes only if the child terminates by itself with exit 4
+// after printing the whole nested report (see badssWitnessExpect). On Linux the
+// kernel terminates the process with SIGSEGV when the report itself faults, so
+// that arm checks the original fatal line, fault line and runtime.abort() plus
+// the signal termination. A child still alive when the budget ends is a wedge
+// only if it spent its whole CPU budget; otherwise the target was too loaded to
+// say, and the test skips with INFRASTRUCTURE-INCONCLUSIVE. See
+// badsystemstack_oracle_test.go.
 func TestSystemstackBadBranchTaken(t *testing.T) {
 	// Control: with the real g, systemstack must return normally. This catches a
 	// witness that is fatal no matter what it is handed.
@@ -90,6 +93,14 @@ func TestSystemstackBadBranchTaken(t *testing.T) {
 
 	// Witness: the only difference from the control is the g's address.
 	r = runBadssChild(t, badssTakenArg, badssWitnessBudget(t))
+	if runtime.GOOS != "darwin" {
+		// Linux force-delivers a nested fault to the default action instead of
+		// re-entering Go's Darwin-only fatal ladder. Check that it reached the
+		// faulting report and then died from that signal, not from a counterfeit
+		// exit after printing only the first line.
+		badssApply(t, "Linux witness child (nested fault)", r, badssLinuxWitnessVerdict(r))
+		return
+	}
 	badssApply(t, "witness child (g replaced by a copy at another address)", r, judgeBadss(r, badssWitnessExpect))
 }
 
