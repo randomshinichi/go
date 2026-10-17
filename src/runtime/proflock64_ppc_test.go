@@ -22,12 +22,14 @@ import (
 	"time"
 )
 
-// goppc-452y. ppc32 has no native 64-bit atomic: every 64-bit operation in
-// internal/runtime/atomic takes one global spinlock, lock64, and it is not
-// reentrant. The SIGPROF handler writes its sample into a profBuf, whose
-// indices are 64-bit atomics, so a SIGPROF that lands on the thread holding
-// lock64 used to wait for the lock forever: the owner is the code the handler
-// interrupted and cannot run again until the handler returns.
+// goppc-452y, goppc-nzqrh. ppc32 has no native 64-bit atomic: every 64-bit
+// operation in internal/runtime/atomic takes a spinlock chosen by the operand's
+// address from a table of 57 stripes (it was one global lock, lock64, until
+// goppc-nzqrh), and the stripes are not reentrant. The SIGPROF handler writes
+// its sample into a profBuf, whose indices are 64-bit atomics, so a SIGPROF
+// that lands on a thread holding the stripe of one of those indices waits for
+// the lock forever: the owner is the code the handler interrupted and cannot run
+// again until the handler returns.
 //
 // Both children below run in a subprocess because the failure is a hang that no
 // in-process timeout can recover. The parent bounds each with a wall-clock kill
@@ -35,14 +37,16 @@ import (
 // USER time (about the wall time, system near zero). That is how it is told
 // apart from goppc-0v7x, a kernel re-fault loop that burns SYSTEM time.
 // The named mutant for these tests is "M-noguard": the tree with the
-// `if lock64Held() { cpuprof.lostAtomic++; return }` statement removed from
-// sigprof in proc.go and nothing else changed. TestSIGPROFWhileLock64Held hangs
-// on it every time (3 of 3 on a G4, goppc-452y); the profile test hangs on it
-// when a signal lands on the thread holding lock64.
+// `if atomic64AnyStripeHeld() { cpuprof.lostAtomic++; return }` statement removed
+// from sigprof in proc.go and nothing else changed. TestSIGPROFWhileLock64Held
+// hangs on it every time (3 of 3 on a G4, goppc-452y, under the global lock); the
+// profile test hangs on it when a signal lands on a thread holding a stripe the
+// handler needs.
 const (
 	lock64HoldArg    = "lock64HoldAcrossSIGPROF"
 	lock64ProfileArg = "lock64ProfileUnderLoad"
 	lock64ControlArg = "lock64ProfileWithoutAtomic64"
+	lock64OtherArg   = "lock64HoldOtherStripeAcrossSIGPROF"
 	lock64DoneMarker = "lock64: survived"
 	lock64ChildWall  = 60 * time.Second
 )
@@ -54,6 +58,8 @@ func init() {
 	switch os.Args[1] {
 	case lock64HoldArg:
 		lock64HoldChild()
+	case lock64OtherArg:
+		lock64HoldOtherChild()
 	case lock64ProfileArg:
 		lock64ProfileChild(true)
 	case lock64ControlArg:
@@ -61,17 +67,40 @@ func init() {
 	}
 }
 
-// lock64HoldChild holds lock64 while SIGPROF is delivered to this thread.
+// lock64HoldChild holds the stripe of the profile buffer's write index, which
+// the handler must take, while SIGPROF is delivered to this thread.
 func lock64HoldChild() {
 	runtime.LockOSThread()
 	runtime.SetCPUProfileRate(100)
 	before := runtime.ProfLostAtomic()
-	runtime.HoldLock64AcrossSIGPROF()
+	held := runtime.HoldAtomic64StripeAcrossSIGPROF(true)
 	after := runtime.ProfLostAtomic()
 	runtime.SetCPUProfileRate(0)
-	fmt.Printf("%s lostAtomic_before=%d lostAtomic_after=%d\n", lock64DoneMarker, before, after)
+	fmt.Printf("%s stripe=%d profbuf_uses_stripe=%v lostAtomic_before=%d lostAtomic_after=%d\n",
+		lock64DoneMarker, held.Stripe, held.ProfBufUses, before, after)
 	if after <= before {
 		fmt.Println("lock64: the signal was not counted as lost")
+		os.Exit(3)
+	}
+	os.Exit(0)
+}
+
+// lock64HoldOtherChild holds a stripe that no profile-buffer word hashes to.
+// The handler does not need it, but sigprof's guard asks about any stripe, so
+// the sample is dropped and counted: a conservative cross-stripe drop. The child
+// reports what happened and fails only on a hang or a crash; it does not
+// require the drop, so a future guard that is exact per stripe is not forbidden.
+func lock64HoldOtherChild() {
+	runtime.LockOSThread()
+	runtime.SetCPUProfileRate(100)
+	before := runtime.ProfLostAtomic()
+	held := runtime.HoldAtomic64StripeAcrossSIGPROF(false)
+	after := runtime.ProfLostAtomic()
+	runtime.SetCPUProfileRate(0)
+	fmt.Printf("%s stripe=%d profbuf_uses_stripe=%v lostAtomic_before=%d lostAtomic_after=%d\n",
+		lock64DoneMarker, held.Stripe, held.ProfBufUses, before, after)
+	if held.ProfBufUses {
+		fmt.Println("lock64: the hook chose a stripe the profile buffer uses")
 		os.Exit(3)
 	}
 	os.Exit(0)
@@ -185,6 +214,20 @@ func TestSIGPROFWhileLock64Held(t *testing.T) {
 		t.Fatalf("child HUNG: killed after %v wall; user=%v sys=%v. User time about the wall time and "+
 			"system time near zero is a spin in the SIGPROF handler on lock64 (goppc-452y); "+
 			"system time about the wall time would be a kernel re-fault loop (goppc-0v7x)", lock64ChildWall, user, sys)
+	}
+	if err != nil || !strings.Contains(out, lock64DoneMarker) {
+		t.Fatalf("child failed (%v) or did not report survival:\n%s", err, out)
+	}
+}
+
+// TestSIGPROFWhileOtherStripeHeld delivers SIGPROF to a thread that holds a
+// stripe the handler does not need. It must return. The log shows whether the
+// sample was dropped (it is, under the any-stripe guard).
+func TestSIGPROFWhileOtherStripeHeld(t *testing.T) {
+	out, killed, user, sys, err := runLock64Child(t, lock64OtherArg)
+	t.Logf("child output:\n%s", out)
+	if killed {
+		t.Fatalf("child HUNG: killed after %v wall; user=%v sys=%v", lock64ChildWall, user, sys)
 	}
 	if err != nil || !strings.Contains(out, lock64DoneMarker) {
 		t.Fatalf("child failed (%v) or did not report survival:\n%s", err, out)

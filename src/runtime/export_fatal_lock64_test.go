@@ -7,22 +7,25 @@
 package runtime
 
 // Test hooks for goppc-7tqu: run a fatal report on the thread that holds the
-// ppc32 64-bit atomic spinlock. lock64Acquire and lock64Release, linknamed to
-// internal/runtime/atomic, are declared in export_lock64_test.go in this package.
+// ppc32 64-bit atomic spinlock stripes. The linknamed internal/runtime/atomic
+// stripe functions are declared in export_lock64_test.go in this package. These
+// hooks hold ALL stripes, so they prove that no 64-bit atomic runs on the path
+// (the guarantee the one global lock used to give), not only none that hashes to
+// one stripe.
 
-// HoldLock64AcrossSIGQUIT takes the 64-bit atomic spinlock and makes the kernel
-// deliver SIGQUIT to THIS thread, so the fatal report runs on the lock's holder.
+// HoldAllAtomic64StripesAcrossSIGQUIT takes every 64-bit atomic stripe and makes the kernel
+// deliver SIGQUIT to THIS thread, so the fatal report runs on the stripes' holder.
 // pthread_kill to the calling thread delivers the signal before the call
 // returns, which makes the timing explicit rather than raced. The caller must
 // have called LockOSThread so "this thread" is stable.
-func HoldLock64AcrossSIGQUIT() {
-	lock64Acquire()
+func HoldAllAtomic64StripesAcrossSIGQUIT() {
+	atomic64StripeAcquireAll()
 	signalM(getg().m, _SIGQUIT)
-	lock64Release()
+	atomic64StripeReleaseAll()
 }
 
 // SIGQUITCurrentThread delivers SIGQUIT to the calling thread with no lock held:
-// the control for HoldLock64AcrossSIGQUIT.
+// the control for HoldAllAtomic64StripesAcrossSIGQUIT.
 func SIGQUITCurrentThread() {
 	signalM(getg().m, _SIGQUIT)
 }
@@ -33,14 +36,14 @@ func SIGQUITCurrentThread() {
 // single-threaded at the point of the read.
 func MutexProfilingFlag() uint32 { return mutexProfilingFlag }
 
-// HoldLock64AcrossPrint takes the 64-bit atomic spinlock and prints a line while
+// HoldAllAtomic64StripesAcrossPrint takes every 64-bit atomic stripe and prints a line while
 // holding it. Every print() ends in printunlock -> unlock(&debuglock) ->
 // unlock2 -> mutexSampleContention, so this drives the rate-zero path of unlock2
-// directly: if that path reads the 64-bit rate it takes lock64, which this
+// directly: if that path reads the 64-bit rate it takes a stripe, which this
 // thread is holding, and the call never returns. That is the dynamic form of the
 // "the rate-zero path never calls Load64" check.
-func HoldLock64AcrossPrint() {
-	lock64Acquire()
-	println("lock64: printed while holding lock64")
-	lock64Release()
+func HoldAllAtomic64StripesAcrossPrint() {
+	atomic64StripeAcquireAll()
+	println("lock64: printed while holding every stripe")
+	atomic64StripeReleaseAll()
 }
