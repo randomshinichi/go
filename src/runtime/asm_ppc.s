@@ -316,12 +316,12 @@ TEXT runtime·systemstack(SB), NOSPLIT, $0-4
 	LWZ R17, m_gsignal(R16)
 	CMPW R17, R30
 	BC 4, 2, systemstack_checkg0
-	B systemstack_noswitch
+	B systemstack_tailcall
 systemstack_checkg0:
 	LWZ R17, m_g0(R16)
 	CMPW R17, R30
 	BC 4, 2, systemstack_checkcurg
-	B systemstack_noswitch
+	B systemstack_tailcall
 systemstack_checkcurg:
 	LWZ R17, m_curg(R16)
 	CMPW R17, R30
@@ -329,6 +329,8 @@ systemstack_checkcurg:
 	BL runtime·gosave_systemstack_switch(SB)
 	LWZ R30, m_g0(R16)
 	LWZ R1, (g_sched+gobuf_sp)(R30)
+	// This path must return here to restore the caller goroutine.
+	B systemstack_noswitch
 systemstack_noswitch:
 	ADDI R1, R1, $-32
 	STW R15, 24(R1)
@@ -349,6 +351,19 @@ systemstack_noswitch:
 systemstack_restore_noswitch:
 	LWZ R1, 28(R1)
 	RET
+systemstack_tailcall:
+	// On an already-system-stack call no stack switch or call has occurred,
+	// so the ABI prologue frame is still at SP. The prologue saved LR at
+	// 8(SP_old) then moved SP down 32 bytes, placing it at 40(SP). Restore
+	// LR and pop that frame before branching so the closure returns directly
+	// to systemstack's caller. R11 carries the function-value context.
+	OR R11, R14, R14
+	LWZ R12, 0(R14)
+	MTCTR R12
+	LWZ R31, 40(R1)
+	MTLR R31
+	ADDI R1, R1, $32
+	JMP (CTR)
 systemstack_bad:
 	// Hide the call from the linker's nosplit analysis, as the other
 	// architectures do (asm_ppc64x.s: "Hide call from linker nosplit
