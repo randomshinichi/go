@@ -40,6 +40,9 @@ func badLR2(arg int) {
 	lrOff := unsafe.Sizeof(uintptr(0))
 	if runtime.GOARCH == "ppc64" || runtime.GOARCH == "ppc64le" {
 		lrOff = 32 // FIXED_FRAME or sys.MinFrameSize
+	} else if runtime.GOARCH == "ppc" {
+		// badLR2's ppc32 prologue saves LR 16 bytes below &arg.
+		lrOff = 16
 	}
 	lrPtr := (*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(&arg)) - lrOff))
 	*lrPtr = 0xbad
