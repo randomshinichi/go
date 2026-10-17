@@ -419,6 +419,11 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		retAs := ABLR
 		if target.Sym != nil {
 			retAs = AB
+		} else if (target.Type == obj.TYPE_REG || target.Type == obj.TYPE_MEM) && target.Name == obj.NAME_NONE && target.Reg == REG_CTR {
+			// RET (CTR) is an indirect tail call. Use the generated epilogue
+			// so its SP pop is described even in a stack-switching function,
+			// where source-level SP adjustments are deliberately suppressed.
+			retAs = obj.AJMP
 		} else {
 			target = obj.Addr{}
 		}

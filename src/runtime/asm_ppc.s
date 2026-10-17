@@ -353,17 +353,14 @@ systemstack_restore_noswitch:
 	RET
 systemstack_tailcall:
 	// On an already-system-stack call no stack switch or call has occurred,
-	// so the ABI prologue frame is still at SP. The prologue saved LR at
-	// 8(SP_old) then moved SP down 32 bytes, placing it at 40(SP). Restore
-	// LR and pop that frame before branching so the closure returns directly
-	// to systemstack's caller. R11 carries the function-value context.
+	// so the ABI prologue frame is still at SP. RET restores LR and pops that
+	// frame with unwind metadata before branching without link. A handwritten
+	// pop would leave stale PC/SP metadata here because this function also
+	// writes SP dynamically. R11 carries the function-value context.
 	OR R11, R14, R14
 	LWZ R12, 0(R14)
 	MTCTR R12
-	LWZ R31, 40(R1)
-	MTLR R31
-	ADDI R1, R1, $32
-	JMP (CTR)
+	RET (CTR)
 systemstack_bad:
 	// Hide the call from the linker's nosplit analysis, as the other
 	// architectures do (asm_ppc64x.s: "Hide call from linker nosplit
