@@ -35,6 +35,7 @@ func systemstackTailFixture(t *testing.T, locals int64, noframe, broken bool) *o
 		}
 	}
 	ctxt := obj.Linknew(&arch)
+	buildop(ctxt)
 	ctxt.Pkgpath = "systemstacktest"
 	ctxt.IsAsm = true
 	ctxt.DiagFunc = func(format string, args ...interface{}) { t.Fatalf(format, args...) }
