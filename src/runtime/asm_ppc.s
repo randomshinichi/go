@@ -5,6 +5,7 @@
 //go:build ppc
 
 #include "go_asm.h"
+#include "funcdata.h"
 #include "textflag.h"
 
 // mstart is the entry point for a Go machine's scheduler loop.
@@ -221,8 +222,11 @@ memdone:
 
 // The generic 32-bit hash fallbacks are Go ABI0 functions. These small stubs
 // provide the assembly names expected by compiler builtins and forward their
-// arguments through the measured stack-only ABI.
+// arguments through the measured stack-only ABI. Their frames exceed the
+// linkage area, so a stack scan that stops in the fallback needs a locals map;
+// the outgoing arguments are covered by the fallback's own argument map.
 TEXT runtime·memhash32(SB), NOSPLIT, $12-12
+	NO_LOCAL_POINTERS
 	LWZ R3, p+0(FP)
 	STW R3, 24(R1)
 	LWZ R4, h+4(FP)
@@ -232,6 +236,7 @@ TEXT runtime·memhash32(SB), NOSPLIT, $12-12
 	RET
 
 TEXT runtime·memhash64(SB), NOSPLIT, $12-12
+	NO_LOCAL_POINTERS
 	LWZ R3, p+0(FP)
 	STW R3, 24(R1)
 	LWZ R4, h+4(FP)
@@ -241,6 +246,7 @@ TEXT runtime·memhash64(SB), NOSPLIT, $12-12
 	RET
 
 TEXT runtime·memhash(SB), NOSPLIT, $12-16
+	NO_LOCAL_POINTERS
 	LWZ R3, p+0(FP)
 	STW R3, 24(R1)
 	LWZ R4, h+4(FP)
