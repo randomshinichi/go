@@ -74,9 +74,7 @@ func HoldAtomic64StripeAcrossSIGPROF(needed bool) StripeHoldResult {
 			r.ProfBufUses = true
 		}
 	}
-	atomic64StripeAcquire(p)
-	signalM(getg().m, _SIGPROF)
-	atomic64StripeRelease(p)
+	holdStripeAcrossSignal(p, _SIGPROF)
 	return r
 }
 
@@ -104,15 +102,29 @@ func PlanRHeld() ProfBufStripes {
 }
 
 // HoldAcrossSIGPROF takes r's stripe, makes the kernel deliver SIGPROF to THIS
-// thread (pthread_kill to the calling thread delivers before the call returns, so
-// the handler runs while the stripe is held), and releases the stripe. The caller
-// must have called LockOSThread. With sigprof's guard intact the handler drops
-// the sample and counts it in ProfLostAtomic; with a guard that ignores r's
-// stripe it waits for this thread forever.
+// thread (the signal to the calling thread is delivered before the system call
+// returns, so the handler runs while the stripe is held), and releases the
+// stripe. The caller must have called LockOSThread. With sigprof's guard intact
+// the handler drops the sample and counts it in ProfLostAtomic; with a guard
+// that ignores r's stripe it waits for this thread forever.
+//
+// Between acquire and release this thread runs only nosplit code
+// (holdStripeAcrossSignal), so it cannot enter newstack and hence cannot run the
+// scheduler, whatever cooperative-preemption request is pending.
 func (p ProfBufStripes) HoldAcrossSIGPROF() {
-	atomic64StripeAcquire(p.r)
-	signalM(getg().m, _SIGPROF)
-	atomic64StripeRelease(p.r)
+	holdStripeAcrossSignal(p.r, _SIGPROF)
+}
+
+// holdStripeAcrossSignal is the whole held region: acquire, deliver, release.
+// Every function it reaches is nosplit (atomic64StripeAcquire/Release and
+// signalMNoSplit, per OS); no allocation or runtime helper is called.
+//
+//go:nosplit
+func holdStripeAcrossSignal(p *uint64, sig int) {
+	mp := getg().m
+	atomic64StripeAcquire(p)
+	signalMNoSplit(mp, sig)
+	atomic64StripeRelease(p)
 }
 
 // stripeOtherThan returns an operand address whose stripe none of avoid hashes

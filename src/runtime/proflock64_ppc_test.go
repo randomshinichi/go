@@ -97,8 +97,11 @@ func lock64HoldChild() {
 // Preconditions, printed BEFORE the signal so that a hang still carries them:
 // r's and w's stripes differ. The delivery witness is the lost-sample count: the
 // handler ran and dropped the sample, so the count must rise across the hook. A
-// signal that never arrived would exit 3 here, not hang; a hang is therefore
-// the guard's omission and nothing else.
+// signal that never arrived would exit 3 here, not hang. The sender's held
+// region is nosplit end to end (holdStripeAcrossSignal), so this thread cannot
+// run the scheduler while it holds r's stripe through the sender; a hang here is
+// attributed to the guard on that basis, and on the audit of the emitted code,
+// not on the absence of other causes in general.
 func lock64RHeldChild() {
 	runtime.LockOSThread()
 	runtime.SetCPUProfileRate(100)
