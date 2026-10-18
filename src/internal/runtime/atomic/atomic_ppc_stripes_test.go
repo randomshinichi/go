@@ -371,6 +371,7 @@ func TestStripeFaultsDoNotPoison(t *testing.T) {
 				op(p)
 			}()
 			if atomic.AnyStripeHeld() {
+				atomic.StripeReleaseAll() // do not wedge the rest of the process on a leaked stripe
 				t.Fatalf("%s(%s) left a stripe held", name, what)
 			}
 			// Every stripe must still be usable.
