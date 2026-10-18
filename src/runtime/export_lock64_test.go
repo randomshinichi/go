@@ -80,6 +80,41 @@ func HoldAtomic64StripeAcrossSIGPROF(needed bool) StripeHoldResult {
 	return r
 }
 
+// ProfBufStripes is a plan to hold the stripe of the profile buffer's READ
+// index r across a SIGPROF (goppc-l3r5t). cpuprof.add takes r's stripe as well
+// as w's, and an any-stripe guard must cover it: a guard that looked only at the
+// stripe of w would let the handler wait for the held r stripe forever. R and W
+// are the two stripes, reported so that the control can state, before the
+// signal, that they differ. r and w are adjacent 8-byte words of one profBuf, so
+// their stripes are adjacent modulo 57 and cannot coincide; Distinct records
+// that fact rather than assuming it.
+type ProfBufStripes struct {
+	R, W     int
+	Distinct bool
+	r        *uint64
+}
+
+// PlanRHeld chooses r. The profile must be running so that cpuprof.log exists.
+func PlanRHeld() ProfBufStripes {
+	ops := profBufOperands()
+	r, w := ops[0], ops[1]
+	p := ProfBufStripes{R: atomic64StripeIndex(r), W: atomic64StripeIndex(w), r: r}
+	p.Distinct = p.R != p.W
+	return p
+}
+
+// HoldAcrossSIGPROF takes r's stripe, makes the kernel deliver SIGPROF to THIS
+// thread (pthread_kill to the calling thread delivers before the call returns, so
+// the handler runs while the stripe is held), and releases the stripe. The caller
+// must have called LockOSThread. With sigprof's guard intact the handler drops
+// the sample and counts it in ProfLostAtomic; with a guard that ignores r's
+// stripe it waits for this thread forever.
+func (p ProfBufStripes) HoldAcrossSIGPROF() {
+	atomic64StripeAcquire(p.r)
+	signalM(getg().m, _SIGPROF)
+	atomic64StripeRelease(p.r)
+}
+
 // stripeOtherThan returns an operand address whose stripe none of avoid hashes
 // to. Consecutive 8-byte words hash to consecutive stripes, so a table of
 // more than 57 aligned words reaches all of them.

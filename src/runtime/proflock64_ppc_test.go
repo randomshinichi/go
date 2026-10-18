@@ -47,6 +47,7 @@ const (
 	lock64ProfileArg = "lock64ProfileUnderLoad"
 	lock64ControlArg = "lock64ProfileWithoutAtomic64"
 	lock64OtherArg   = "lock64HoldOtherStripeAcrossSIGPROF"
+	lock64RHeldArg   = "lock64HoldReadIndexStripeAcrossSIGPROF"
 	lock64DoneMarker = "lock64: survived"
 	lock64ChildWall  = 60 * time.Second
 )
@@ -58,6 +59,8 @@ func init() {
 	switch os.Args[1] {
 	case lock64HoldArg:
 		lock64HoldChild()
+	case lock64RHeldArg:
+		lock64RHeldChild()
 	case lock64OtherArg:
 		lock64HoldOtherChild()
 	case lock64ProfileArg:
@@ -78,6 +81,38 @@ func lock64HoldChild() {
 	runtime.SetCPUProfileRate(0)
 	fmt.Printf("%s stripe=%d profbuf_uses_stripe=%v lostAtomic_before=%d lostAtomic_after=%d\n",
 		lock64DoneMarker, held.Stripe, held.ProfBufUses, before, after)
+	if after <= before {
+		fmt.Println("lock64: the signal was not counted as lost")
+		os.Exit(3)
+	}
+	os.Exit(0)
+}
+
+// lock64RHeldChild holds the stripe of the profile buffer's READ index r while
+// SIGPROF is delivered to this thread. The handler's cpuprof.add needs r's stripe
+// as well as w's (goppc-l3r5t). It is the discriminator for a sigprof guard that
+// checks fewer stripes than cpuprof.add takes: such a guard sees w's stripe free
+// and the handler then waits for r's stripe, held by the thread it interrupted.
+//
+// Preconditions, printed BEFORE the signal so that a hang still carries them:
+// r's and w's stripes differ. The delivery witness is the lost-sample count: the
+// handler ran and dropped the sample, so the count must rise across the hook. A
+// signal that never arrived would exit 3 here, not hang; a hang is therefore
+// the guard's omission and nothing else.
+func lock64RHeldChild() {
+	runtime.LockOSThread()
+	runtime.SetCPUProfileRate(100)
+	plan := runtime.PlanRHeld()
+	fmt.Printf("lock64: r-held plan r_stripe=%d w_stripe=%d distinct=%v\n", plan.R, plan.W, plan.Distinct)
+	if !plan.Distinct {
+		fmt.Println("lock64: r and w share a stripe; this is not an r-held discriminator")
+		os.Exit(3)
+	}
+	before := runtime.ProfLostAtomic()
+	plan.HoldAcrossSIGPROF()
+	after := runtime.ProfLostAtomic()
+	runtime.SetCPUProfileRate(0)
+	fmt.Printf("%s r-held lostAtomic_before=%d lostAtomic_after=%d\n", lock64DoneMarker, before, after)
 	if after <= before {
 		fmt.Println("lock64: the signal was not counted as lost")
 		os.Exit(3)
@@ -214,6 +249,27 @@ func TestSIGPROFWhileLock64Held(t *testing.T) {
 		t.Fatalf("child HUNG: killed after %v wall; user=%v sys=%v. User time about the wall time and "+
 			"system time near zero is a spin in the SIGPROF handler on lock64 (goppc-452y); "+
 			"system time about the wall time would be a kernel re-fault loop (goppc-0v7x)", lock64ChildWall, user, sys)
+	}
+	if err != nil || !strings.Contains(out, lock64DoneMarker) {
+		t.Fatalf("child failed (%v) or did not report survival:\n%s", err, out)
+	}
+}
+
+// TestSIGPROFWhileReadIndexStripeHeld delivers SIGPROF to a thread that holds the
+// stripe of profBuf.r, distinct from the stripe of profBuf.w. The existing
+// required-stripe control holds w's stripe and the other-stripe control holds
+// neither, so a guard that checks only w's stripe passes both; this one hangs on
+// it, and is killed by the unchanged child wall. A hang with the precondition
+// line present is the intended failure.
+func TestSIGPROFWhileReadIndexStripeHeld(t *testing.T) {
+	out, killed, user, sys, err := runLock64Child(t, lock64RHeldArg)
+	t.Logf("child output:\n%s", out)
+	if !strings.Contains(out, "lock64: r-held plan r_stripe=") || !strings.Contains(out, "distinct=true") {
+		t.Fatalf("child did not establish the distinct r/w stripe precondition:\n%s", out)
+	}
+	if killed {
+		t.Fatalf("child HUNG: killed after %v wall with r's stripe held and the precondition established; user=%v sys=%v. "+
+			"User time about the wall time is a spin in the SIGPROF handler on a stripe the guard did not cover", lock64ChildWall, user, sys)
 	}
 	if err != nil || !strings.Contains(out, lock64DoneMarker) {
 		t.Fatalf("child failed (%v) or did not report survival:\n%s", err, out)

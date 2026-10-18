@@ -424,14 +424,40 @@ func TestStripeHeldIsObservable(t *testing.T) {
 // every 64-bit operation on that operand, and on a different operand that
 // collides with it, must wait; once the stripe is released it must complete.
 // A mutant that gives one operation a different stripe from the others
-// completes immediately and fails, deterministically. The waiting side cannot
-// fail by mistake: a correct operation cannot complete while the stripe is held.
+// completes while the stripe is held and fails, deterministically. A correct
+// operation cannot complete while the stripe is held.
 //
-// The thread that holds a stripe must not call into the runtime, which makes
-// 64-bit atomics of its own (timers, scheduler, allocator); one that hashes to
-// the held stripe would wait for this very thread. So the worker goroutine is
-// already running, waiting on 32-bit flags, before the stripe is taken, and
-// the holder only spins on 32-bit loads and the clock.
+// Holder protocol (goppc-5azvb). While the holder owns a stripe it must never
+// enter the scheduler: the scheduler makes 64-bit atomics of its own (timers,
+// run queues, sysmon bookkeeping), and one that hashes to the held stripe would
+// wait for the very thread that holds it. Two things send a goroutine into the
+// scheduler: a call through a stack-splitting prologue after sysmon has asked
+// for preemption (time.Now, t.Errorf, ...), and a blocking operation. The
+// previous holder polled time.Now/time.Since under the stripe and, under QEMU,
+// hung until the CPU limit. This holder therefore, between StripeAcquire and
+// StripeRelease, executes only plain loops of atomic.Load (a nosplit call with
+// no preemption check) bounded by an iteration count, never by the clock, so
+// the hold always ends and needs nothing from any other thread. (Asynchronous
+// preemption cannot interrupt either: this function's name begins with
+// "internal/runtime/", which isAsyncSafePoint excludes.) All reporting happens
+// after release.
+//
+// Progress: the worker goroutine is running, and has said so through a 32-bit
+// flag, before the stripe is taken, so it does not depend on the scheduler
+// while the stripe is held. The holder waits for the worker's "started" flag
+// for at most holdStartBound loads, then watches "finished" for holdWindow
+// loads. The window is meaningful because each arm is calibrated: an operation
+// on a stripe the holder does not hold must finish within the same loop
+// protocol (the "unrelated operand" arm), so a window too short for an
+// operation to complete at all fails that arm instead of letting an exclusion
+// failure pass unseen. The worker is unblocked by the release, so a wait for
+// it after release is ordinary and bounded by the parent test timeout and the
+// runner's wall limit; neither is raised.
+const (
+	holdStartBound = 4000000 // loads waiting for the worker to announce the operation
+	holdWindow     = 2000000 // loads watching for an operation completing under the hold
+)
+
 func TestStripeEveryOpExcludesSameStripe(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	ops := []struct {
@@ -455,47 +481,72 @@ func TestStripeEveryOpExcludesSameStripe(t *testing.T) {
 	}
 	w := operandWords(t, 58)
 	held := &w[0]
+	if atomic.StripeIndex(&w[57]) != atomic.StripeIndex(held) || atomic.StripeIndex(&w[1]) == atomic.StripeIndex(held) {
+		t.Fatalf("operand setup: w[57] must collide with w[0] and w[1] must not (%d %d %d)",
+			atomic.StripeIndex(&w[57]), atomic.StripeIndex(held), atomic.StripeIndex(&w[1]))
+	}
+	arms := []struct {
+		name      string
+		p         *uint64
+		mustBlock bool
+	}{
+		{"same operand", &w[0], true},
+		{"colliding operand", &w[57], true},
+		{"unrelated operand (calibration)", &w[1], false},
+	}
 	for _, op := range ops {
-		for _, target := range []struct {
-			name string
-			p    *uint64
-		}{{"same operand", &w[0]}, {"colliding operand", &w[57]}} {
-			var gate, started, finished uint32
+		for _, arm := range arms {
+			var ready, gate, started, finished uint32
 			go func() {
+				atomic.Store(&ready, 1)
 				for atomic.Load(&gate) == 0 {
 				}
 				atomic.Store(&started, 1)
-				op.f(target.p)
+				op.f(arm.p)
 				atomic.Store(&finished, 1)
 			}()
+			// Not holding: the runtime may be used freely here.
+			for i := 0; atomic.Load(&ready) == 0; i++ {
+				if i > 1000 {
+					t.Fatalf("%s, %s: worker goroutine did not start", op.name, arm.name)
+				}
+				time.Sleep(time.Millisecond)
+			}
+
+			// Hold: atomic.Load and the stripe functions only.
+			var startedSeen, early bool
 			atomic.StripeAcquire(held)
 			atomic.Store(&gate, 1)
-			var early, never bool
-			start := time.Now()
-			for atomic.Load(&started) == 0 {
-				if time.Since(start) > 10*time.Second {
-					never = true
+			for i := 0; i < holdStartBound; i++ {
+				if atomic.Load(&started) != 0 {
+					startedSeen = true
 					break
 				}
 			}
-			for t0 := time.Now(); time.Since(t0) < 100*time.Millisecond; {
-				if atomic.Load(&finished) != 0 {
-					early = true
-					break
+			if startedSeen {
+				for i := 0; i < holdWindow; i++ {
+					if atomic.Load(&finished) != 0 {
+						early = true
+						break
+					}
 				}
 			}
 			atomic.StripeRelease(held)
-			if never {
-				t.Fatalf("%s on %s: worker never started", op.name, target.name)
+
+			if !startedSeen {
+				t.Fatalf("%s, %s: worker never announced the operation within %d loads", op.name, arm.name, holdStartBound)
 			}
-			if early {
-				t.Errorf("%s on %s completed while its stripe was held", op.name, target.name)
+			switch {
+			case arm.mustBlock && early:
+				t.Errorf("%s on %s completed while its stripe was held", op.name, arm.name)
+			case !arm.mustBlock && !early:
+				t.Errorf("%s on %s: an operation on an unheld stripe did not complete in the %d-load window; the window is too short to discriminate", op.name, arm.name, holdWindow)
 			}
-			start = time.Now()
-			for atomic.Load(&finished) == 0 {
-				if time.Since(start) > 10*time.Second {
-					t.Fatalf("%s on %s did not complete after the stripe was released", op.name, target.name)
+			for i := 0; atomic.Load(&finished) == 0; i++ {
+				if i > 2000 {
+					t.Fatalf("%s on %s did not complete after the stripe was released", op.name, arm.name)
 				}
+				time.Sleep(time.Millisecond)
 			}
 		}
 	}
