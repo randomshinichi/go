@@ -39,13 +39,102 @@ TEXT runtime·setg(SB), NOSPLIT, $0-4
 	LWZ	R30, gg+0(FP)
 	RET
 
-// mstart_stub is called with the C ABI on a newly created pthread. The
-// pthread_create argument is m; its g0 is already initialized by newm.
-TEXT runtime·mstart_stub(SB), NOSPLIT, $0-0
+// mstart_stub is called with the Darwin PPC32 C ABI on a new pthread. Go's
+// internal ABI may clobber the C nonvolatile GPRs/FPRs and CR across mstart.
+// Save R13..R31 (19*4), CR (4), and F14..F31 (18*8): 224 local bytes. The
+// PPC32 fixed linkage area is 24 bytes, so (224+24) rounded to 16-byte stack
+// alignment reserves 256 bytes. The explicit NOSPLIT frame makes that whole
+// reservation visible to the ppc32 linker's nosplit stack-bound check; this
+// stub does not take a morestack_noctxt path. The PPC32 backend does not emit
+// VMX operations, so vector nonvolatiles remain untouched.
+// Use a manual return: the generated PPC32 RET epilogue uses R31 to restore LR,
+// which would overwrite the C caller's R31 after it had been restored.
+TEXT runtime·mstart_stub(SB), NOSPLIT, $224-0
+	STW	R13, 32(R1)
+	STW	R14, 36(R1)
+	STW	R15, 40(R1)
+	STW	R16, 44(R1)
+	STW	R17, 48(R1)
+	STW	R18, 52(R1)
+	STW	R19, 56(R1)
+	STW	R20, 60(R1)
+	STW	R21, 64(R1)
+	STW	R22, 68(R1)
+	STW	R23, 72(R1)
+	STW	R24, 76(R1)
+	STW	R25, 80(R1)
+	STW	R26, 84(R1)
+	STW	R27, 88(R1)
+	STW	R28, 92(R1)
+	STW	R29, 96(R1)
+	STW	R30, 100(R1)
+	STW	R31, 104(R1)
+	MFCR	R0
+	STW	R0, 108(R1)
+	STFD	F14, 112(R1)
+	STFD	F15, 120(R1)
+	STFD	F16, 128(R1)
+	STFD	F17, 136(R1)
+	STFD	F18, 144(R1)
+	STFD	F19, 152(R1)
+	STFD	F20, 160(R1)
+	STFD	F21, 168(R1)
+	STFD	F22, 176(R1)
+	STFD	F23, 184(R1)
+	STFD	F24, 192(R1)
+	STFD	F25, 200(R1)
+	STFD	F26, 208(R1)
+	STFD	F27, 216(R1)
+	STFD	F28, 224(R1)
+	STFD	F29, 232(R1)
+	STFD	F30, 240(R1)
+	STFD	F31, 248(R1)
 	LWZ	R30, m_g0(R3)
 	BL	runtime·mstart(SB)
 	ADDI	R3, R0, $0
-	RET
+	LFD	112(R1), F14
+	LFD	120(R1), F15
+	LFD	128(R1), F16
+	LFD	136(R1), F17
+	LFD	144(R1), F18
+	LFD	152(R1), F19
+	LFD	160(R1), F20
+	LFD	168(R1), F21
+	LFD	176(R1), F22
+	LFD	184(R1), F23
+	LFD	192(R1), F24
+	LFD	200(R1), F25
+	LFD	208(R1), F26
+	LFD	216(R1), F27
+	LFD	224(R1), F28
+	LFD	232(R1), F29
+	LFD	240(R1), F30
+	LFD	248(R1), F31
+	LWZ	R13, 32(R1)
+	LWZ	R14, 36(R1)
+	LWZ	R15, 40(R1)
+	LWZ	R16, 44(R1)
+	LWZ	R17, 48(R1)
+	LWZ	R18, 52(R1)
+	LWZ	R19, 56(R1)
+	LWZ	R20, 60(R1)
+	LWZ	R21, 64(R1)
+	LWZ	R22, 68(R1)
+	LWZ	R23, 72(R1)
+	LWZ	R24, 76(R1)
+	LWZ	R25, 80(R1)
+	LWZ	R26, 84(R1)
+	LWZ	R27, 88(R1)
+	LWZ	R28, 92(R1)
+	LWZ	R29, 96(R1)
+	LWZ	R30, 100(R1)
+	LWZ	R31, 104(R1)
+	LWZ	R0, 108(R1)
+	MTCRF	$0xff, R0
+	LWZ	R0, 264(R1)
+	ADDI	R1, R1, $256
+	MTLR	R0
+	JMP	(LR)
 
 // gogo restores a saved goroutine context. PPC32 has stack-only public Go
 // arguments and keeps g in R30; all values needed after changing SP are first
