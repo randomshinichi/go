@@ -99,8 +99,10 @@ func netpoll(delay int64) (gList, int32) {
 		tp = &ts
 	} else {
 		ts.setNsec(delay)
-		if ts.tv_sec > 1e6 {
+		if delay/1e9 > 1e6 {
 			// Darwin returns EINVAL if the sleep time is too long.
+			// Compare the int64 seconds before the narrowing: on 32-bit
+			// Darwin tv_sec is int32, and a long delay has already wrapped.
 			ts.tv_sec = 1e6
 		}
 		tp = &ts
