@@ -58,10 +58,20 @@ func TestRemoveAllNonEmptyDarwinPPC(t *testing.T) {
 	}
 }
 
-// TestRootNotSupportedDarwinPPC keeps the fd-relative boundary honest. Opening
-// a Root handle may succeed, but confined operations must report ENOTSUP, not
-// act on the process working directory (or temporarily swap it).
-func TestRootNotSupportedDarwinPPC(t *testing.T) {
+// TestRootOpsConfinedDarwinPPC keeps the fd-relative boundary honest from the
+// other side: a Root's operations must act on the root's own entries and never
+// on the process working directory, and they must do that without changing the
+// working directory, even transiently (the endpoint comparison below cannot see
+// a swap that is restored before the call returns; the chdir recorder in
+// root_darwin_ppc_test.go does).
+//
+// The two trees have entries with the same names and different contents, so an
+// operation that fell back to the working directory would be visible as a
+// change to "f" == "cwd". RemoveAll stays refused on this platform until the
+// confined directory walk is retired (docs/leopard-at-compat-design.md); the
+// refusal is asserted here so that turning it into a working call is a visible
+// edit.
+func TestRootOpsConfinedDarwinPPC(t *testing.T) {
 	rootDir, cwd := t.TempDir(), t.TempDir()
 	for dir, content := range map[string]string{rootDir: "root", cwd: "cwd"} {
 		if err := os.WriteFile(filepath.Join(dir, "f"), []byte(content), 0o644); err != nil {
@@ -81,6 +91,7 @@ func TestRootNotSupportedDarwinPPC(t *testing.T) {
 		t.Fatalf("OpenRoot: %v", err)
 	}
 	defer r.Close()
+
 	ops := map[string]func() error{
 		"Open": func() error {
 			f, err := r.Open("f")
@@ -96,38 +107,47 @@ func TestRootNotSupportedDarwinPPC(t *testing.T) {
 			}
 			return err
 		},
-		"Mkdir":     func() error { return r.Mkdir("m", 0o755) },
-		"Remove":    func() error { return r.Remove("f") },
-		"RemoveAll": func() error { return r.RemoveAll("sub") },
-		"Stat":      func() error { _, err := r.Stat("f"); return err },
-		"Lstat":     func() error { _, err := r.Lstat("f"); return err },
-		"Rename":    func() error { return r.Rename("f", "g") },
-		"Symlink":   func() error { return r.Symlink("f", "s") },
+		"Mkdir":   func() error { return r.Mkdir("m", 0o755) },
+		"Remove":  func() error { return r.Remove("m") },
+		"Stat":    func() error { _, err := r.Stat("f"); return err },
+		"Lstat":   func() error { _, err := r.Lstat("f"); return err },
+		"Rename":  func() error { return r.Rename("f", "g") },
+		"Symlink": func() error { return r.Symlink("g", "s") },
 	}
 	for name, op := range ops {
-		if err := op(); !errors.Is(err, syscall.ENOTSUP) {
-			t.Errorf("Root.%s = %v; want an error wrapping ENOTSUP", name, err)
+		if err := op(); err != nil {
+			t.Errorf("Root.%s = %v; want success", name, err)
 		}
 		if after, err := os.Getwd(); err != nil || after != before {
 			t.Errorf("Root.%s changed cwd: %q, %v; want %q", name, after, err, before)
 		}
 	}
+	if err := r.RemoveAll("sub"); !errors.Is(err, syscall.ENOTSUP) {
+		t.Errorf("Root.RemoveAll = %v; want an error wrapping ENOTSUP (the confined directory walk is not retired yet)", err)
+	}
+
+	// The root's own tree took the changes; the working directory did not.
+	if b, err := os.ReadFile(filepath.Join(rootDir, "g")); err != nil || string(b) != "root" {
+		t.Errorf("%s/g = %q, %v; want the root's own file renamed to g", rootDir, b, err)
+	}
+	if _, err := os.Lstat(filepath.Join(rootDir, "s")); err != nil {
+		t.Errorf("%s/s: %v; want the symlink created inside the root", rootDir, err)
+	}
+	if _, err := os.Lstat(filepath.Join(rootDir, "m")); !os.IsNotExist(err) {
+		t.Errorf("%s/m: %v; want it removed inside the root", rootDir, err)
+	}
 	for dir, want := range map[string]string{rootDir: "root", cwd: "cwd"} {
-		// Readdirnames needs no statat support; Readdir is a separate port gap.
-		f, err := os.Open(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		names, err := f.Readdirnames(-1)
-		f.Close()
-		if err != nil || len(names) != 2 {
-			t.Errorf("directory %s changed: %v, %v", dir, names, err)
-		}
 		if b, err := os.ReadFile(filepath.Join(dir, "f")); err != nil || string(b) != want {
 			t.Errorf("%s/f = %q, %v; want %q", dir, b, err, want)
 		}
-		if fi, err := os.Lstat(filepath.Join(dir, "sub")); err != nil || !fi.IsDir() {
-			t.Errorf("%s/sub changed: %v, %v", dir, fi, err)
-		}
+	}
+	if fi, err := os.Lstat(filepath.Join(cwd, "sub")); err != nil || !fi.IsDir() {
+		t.Errorf("%s/sub changed: %v, %v", cwd, fi, err)
+	}
+	if _, err := os.Lstat(filepath.Join(cwd, "g")); !os.IsNotExist(err) {
+		t.Errorf("%s/g: %v; want the working directory untouched by Root.Rename", cwd, err)
+	}
+	if _, err := os.Lstat(filepath.Join(cwd, "s")); !os.IsNotExist(err) {
+		t.Errorf("%s/s: %v; want the working directory untouched by Root.Symlink", cwd, err)
 	}
 }

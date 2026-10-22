@@ -104,9 +104,28 @@ func rootOpenFileNolog(root *Root, name string, flag int, perm FileMode) (*File,
 	if err != nil {
 		return nil, &PathError{Op: "openat", Path: name, Err: err}
 	}
+	// O_CLOEXEC is zero on this port (supportsCloseOnExec is false), so the
+	// descriptor would otherwise survive every exec. Set it immediately after
+	// the open, without holding ForkLock, exactly as upstream's Open does for
+	// the same case (../syscall/exec_unix.go:36-62): an Openat can block in
+	// lookup on a network, automount or user filesystem, and ForkLock is
+	// process-wide for fork, pipe and socket creation. The documented fork race
+	// is accepted; the guarantee here is that every descriptor Root holds has
+	// FD_CLOEXEC set once its open returns.
+	closeOnExecNoForkLock(fd)
 	f := newFile(fd, joinPath(root.Name(), name), kindOpenFile, unix.HasNonblockFlag(flag))
 	f.inRoot = true
 	return f, nil
+}
+
+// closeOnExecNoForkLock sets FD_CLOEXEC on a descriptor opened without
+// O_CLOEXEC. Leopard has no O_CLOEXEC (syscall.O_CLOEXEC is zero and
+// supportsCloseOnExec is false), so Root's descriptors are made close-on-exec
+// explicitly, under the open/fork race policy of ../syscall/exec_unix.go.
+func closeOnExecNoForkLock(fd int) {
+	if !supportsCloseOnExec {
+		syscall.CloseOnExec(fd)
+	}
 }
 
 func rootOpenDir(parent int, name string) (int, error) {
@@ -126,6 +145,11 @@ func rootOpenDir(parent int, name string) (int, error) {
 		}
 		return err
 	})
+	if err == nil {
+		// An intermediate directory is held open for the rest of the traversal,
+		// so it needs FD_CLOEXEC as well; see closeOnExecNoForkLock.
+		closeOnExecNoForkLock(fd)
+	}
 	return fd, err
 }
 

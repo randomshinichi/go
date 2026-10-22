@@ -35,7 +35,6 @@ import (
 	"bytes"
 	"errors"
 	"internal/testlog"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -109,17 +108,16 @@ func confinedTree(t *testing.T, dir, fileContent string) {
 // rootOpsDarwinPPC is the Root surface a confined operation is exposed through.
 // It is the union of the sets pinned by root_darwin_ppc64_test.go and
 // removeall_darwin_ppc_test.go, so a ppc32 divergence shows up as a difference
-// rather than as silence. Every one of them must be refused: the *at calls they
-// need take a real directory descriptor, which Leopard does not have
-// (internal/syscall/unix/at_darwin_ppc.go), and refusing is the whole of this
-// platform's Root support.
+// rather than as silence.
 //
-// The errno differs for a path with more than one component, and that is
-// recorded rather than smoothed over: the intermediate openat is refused with
-// ENOTSUP, and rootOpenDir (root_unix.go, upstream code) deliberately reports an
-// intermediate component it cannot open as ENOTDIR. So "m/n" is refused with
-// ENOTDIR. Both are refusals of the same call; nothing acts on the working
-// directory either way, which is what this test is for.
+// On Leopard the operations that xnu-1228 can express through an anchored
+// descriptor or the thread-private cwd succeed, and they must act on the
+// contents of the Root, not on the working directory (see
+// internal/syscall/unix/at_darwin_ppc.go for the dispatch and the reasons).
+// Five are still refused, and the tests below assert the refusal rather than
+// hiding it: Link (link(2) follows the source symlink), RemoveAll (needs the
+// confined directory walk that has not been retired yet), Chmod (no-follow chmod
+// needs setattrlist parity) and Chtimes (same setattrlist gate).
 func rootOpsDarwinPPC(r *os.Root) map[string]func() error {
 	now := time.Now()
 	return map[string]func() error{
@@ -169,15 +167,31 @@ func rootOpsDarwinPPC(r *os.Root) map[string]func() error {
 	}
 }
 
-// rootRefusalDarwinPPC is the errno Root."%s" is refused with. Paths of one
-// component stop at the *at substitution and get ENOTSUP; "m/n" reaches
-// rootOpenDir for the intermediate "m", which reports what it cannot open as
-// ENOTDIR.
-func rootRefusalDarwinPPC(op string) error {
-	if op == "MkdirAll" {
-		return syscall.ENOTDIR
+// rootWantDarwinPPC is the outcome Root."%s" must have on Leopard 10.5.8: nil
+// for the operations the anchored backend serves, ENOTSUP for the ones that
+// stay refused. A refusal is listed here explicitly so that changing it is a
+// visible edit, not a silent success in a test that only checked for an error.
+func rootWantDarwinPPC(op string) error {
+	switch op {
+	case "Link", "RemoveAll", "Chmod", "Chtimes":
+		return syscall.ENOTSUP
 	}
-	return syscall.ENOTSUP
+	return nil
+}
+
+// checkRootOutcome applies the expected outcome for op.
+func checkRootOutcome(t *testing.T, name string, err error) {
+	t.Helper()
+	want := rootWantDarwinPPC(name)
+	if want == nil {
+		if err != nil {
+			t.Errorf("Root.%s = %v; want success (the anchored backend serves this operation on this kernel)", name, err)
+		}
+		return
+	}
+	if !errors.Is(err, want) {
+		t.Errorf("Root.%s = %v; want an error wrapping %v", name, err, want)
+	}
 }
 
 // TestRootConfinedOpsNoChdirDarwinPPC requires the confined operations to be
@@ -204,9 +218,7 @@ func TestRootConfinedOpsNoChdirDarwinPPC(t *testing.T) {
 		err := op()
 		moved := chdirLog.since()
 
-		if !errors.Is(err, rootRefusalDarwinPPC(name)) {
-			t.Errorf("Root.%s = %v; want an error wrapping %v", name, err, rootRefusalDarwinPPC(name))
-		}
+		checkRootOutcome(t, name, err)
 		if len(moved) != 0 {
 			t.Errorf("Root.%s moved the process working directory to %q; a confined operation must be refused without acting on it, whether or not it moves back", name, moved)
 		}
@@ -307,9 +319,7 @@ func TestRootConfinedOpsNoChdirSyscallDarwinPPC(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("reading %s: %v", logPath, rerr)
 		}
-		if !errors.Is(err, rootRefusalDarwinPPC(name)) {
-			t.Errorf("Root.%s = %v; want an error wrapping %v", name, err, rootRefusalDarwinPPC(name))
-		}
+		checkRootOutcome(t, name, err)
 		if len(bytes.TrimSpace(b)) != 0 {
 			t.Errorf("Root.%s reached the working directory through the syscall boundary: %q; a confined operation must be refused without changing directory, whether or not it changes back", name, bytes.TrimSpace(b))
 		}
@@ -345,33 +355,20 @@ func TestRootConfinedOpsNoChdirSyscallDarwinPPC(t *testing.T) {
 	}
 }
 
-// checkInRootRefusal requires exactly the refusal statat_darwin_ppc.go makes for
-// a File opened in a Root. The operation is asserted, not only the errno: an
-// ENOTSUP from the readdir syscall itself, or from the *at substitution on the
-// way somewhere else, would be a different fault and must not be read as this
-// refusal.
-func checkInRootRefusal(t *testing.T, name string, err error) {
-	t.Helper()
-	if !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("%s on a File marked inRoot = %v; want an error wrapping ENOTSUP", name, err)
-		return
-	}
-	var pe *fs.PathError
-	if !errors.As(err, &pe) || pe.Op != "lstat" {
-		t.Errorf("%s on a File marked inRoot = %v; want the refusal from lstatat, a *fs.PathError with Op \"lstat\"", name, err)
-	}
-}
-
-// TestInRootEntryStatRefusedDarwinPPC exercises the dormant guard at
-// statat_darwin_ppc.go:39. Root's operations are all ENOTSUP here, so the only
-// way to reach a File whose entries would be stat'ed through the substituted
-// path lookup is to mark an ordinary directory File. That is what MarkInRoot
-// does: an instrument for the guard, not evidence that Root works, and not a
-// second way to open a File in a Root.
+// TestInRootEntryStatDarwinPPC exercises the in-root branch of
+// statat_darwin_ppc.go: a File whose entries must be described through the
+// descriptor it was opened from, not through a pathname that could name a
+// different directory by the time it is read.
 //
-// The un-marked File is the control. Without it, a failure of the marked File
-// would be indistinguishable from a broken descriptor, an empty directory or a
-// directory listing that was never reached.
+// Root's own operations now succeed on this kernel, so the branch is reachable
+// through os.OpenRoot directly; MarkInRoot is kept for the case the Root test
+// cannot express, a File that is in a root but was opened elsewhere, and it is
+// still an instrument, not a second way to open a File in a Root.
+//
+// The un-marked File is the control: it takes the other branch
+// (unix.LstatatByPath) and must describe the same entries. Without it, a
+// failure of the marked File would be indistinguishable from a broken
+// descriptor, an empty directory or a listing that was never reached.
 func TestInRootEntryStatRefusedDarwinPPC(t *testing.T) {
 	dir := t.TempDir()
 	confinedTree(t, dir, "root")
@@ -416,30 +413,61 @@ func TestInRootEntryStatRefusedDarwinPPC(t *testing.T) {
 		return nil, nil // let the real statat path run
 	})
 
+	// Entry statting through the confined branch must describe the same entries
+	// as the path branch does, including lstat semantics for the symlink.
 	for _, tc := range []struct {
 		name string
-		call func(*os.File) error
+		call func(*os.File) ([]os.FileInfo, error)
 	}{
-		{"File.Readdir", func(f *os.File) error { _, err := f.Readdir(-1); return err }},
-		{"File.ReadDir", func(f *os.File) error { _, err := f.ReadDir(-1); return err }},
+		{"File.Readdir", func(f *os.File) ([]os.FileInfo, error) { return f.Readdir(-1) }},
+		{"File.ReadDirInfo", func(f *os.File) ([]os.FileInfo, error) {
+			entries, err := f.ReadDir(-1)
+			if err != nil {
+				return nil, err
+			}
+			infos := make([]os.FileInfo, 0, len(entries))
+			for _, e := range entries {
+				info, err := e.Info()
+				if err != nil {
+					return nil, err
+				}
+				infos = append(infos, info)
+			}
+			return infos, nil
+		}},
 	} {
 		f := confinedDir()
 		open = append(open, f)
 		statts = 0
-		err := tc.call(f)
-		checkInRootRefusal(t, tc.name, err)
+		infos, err := tc.call(f)
+		if err != nil {
+			t.Fatalf("%s on a File marked inRoot: %v; want the confined statat to describe its entries", tc.name, err)
+		}
+		if len(infos) != 3 {
+			t.Fatalf("%s on a File marked inRoot returned %d entries; want 3", tc.name, len(infos))
+		}
 		if statts != 1 {
-			t.Errorf("%s stat'ed %d entries before returning; want 1 -- the refusal must come from the first entry, or the assertion above did not test it", tc.name, statts)
+			t.Errorf("%s stat'ed %d entries before returning; want 1 -- a run that never reached lstatatNolog must not pass", tc.name, statts)
+		}
+		names := make([]string, 0, len(infos))
+		for _, info := range infos {
+			want, err := os.Lstat(filepath.Join(dir, info.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode() != want.Mode() || info.Size() != want.Size() || !os.SameFile(info, want) {
+				t.Errorf("%s entry %s = %v; want Lstat %v", tc.name, info.Name(), info, want)
+			}
+			names = append(names, info.Name())
 		}
 	}
 
-	// The refusal is scoped to entry statting, not to the directory: listing
-	// the same File's names needs no statat and must keep working, as it does
-	// for a Root (removeall_darwin_ppc_test.go relies on exactly that).
+	// The confined branch is scoped to entry statting, not to the directory:
+	// listing the same File's names needs no statat and must keep working.
 	listed := confinedDir()
 	open = append(open, listed)
 	names, err := listed.Readdirnames(-1)
 	if err != nil || len(names) != 3 {
-		t.Errorf("File.Readdirnames on a File marked inRoot = %q, %v; want the 3 names (the refusal must not spread to operations that need no statat)", names, err)
+		t.Errorf("File.Readdirnames on a File marked inRoot = %q, %v; want the 3 names", names, err)
 	}
 }
