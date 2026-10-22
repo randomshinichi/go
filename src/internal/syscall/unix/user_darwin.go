@@ -31,14 +31,14 @@ const (
 type Passwd struct {
 	Name   *byte
 	Passwd *byte
-	Uid    uint32 // uid_t
-	Gid    uint32 // gid_t
-	Change int64  // time_t
+	Uid    uint32     // uid_t
+	Gid    uint32     // gid_t
+	Change passwdTime // time_t
 	Class  *byte
 	Gecos  *byte
 	Dir    *byte
 	Shell  *byte
-	Expire int64 // time_t
+	Expire passwdTime // time_t
 }
 
 type Group struct {
