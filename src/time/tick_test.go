@@ -218,7 +218,11 @@ func TestLongAdjustTimers(t *testing.T) {
 	for i := range 50000 {
 		const try = 20
 		for range try {
-			inQ <- func() {}
+			select {
+			case inQ <- func() {}:
+			case <-done:
+				t.Fatal("timer expired")
+			}
 		}
 		for range try {
 			select {
