@@ -86,7 +86,7 @@ func TestAtomicAlignment(t *testing.T) {
 	// Call go/types to analyze the runtime package.
 	var info types.Info
 	info.Types = map[ast.Expr]types.TypeAndValue{}
-	conf := types.Config{Importer: importer.Default()}
+	conf := types.Config{Importer: importer.Default(), Sizes: types.SizesFor("gc", runtime.GOARCH)}
 	_, err = conf.Check("runtime", fset, files, &info)
 	if err != nil {
 		t.Fatalf("typechecking runtime failed: %v", err)
