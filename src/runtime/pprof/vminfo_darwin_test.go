@@ -185,11 +185,26 @@ func parseVmmap(data []byte) (hi, lo uint64, err error) {
 		l := sc.Text()
 		if grabbing {
 			p := strings.Fields(l)
-			if len(p) > 7 && p[0] == "__TEXT" && p[7] == "r-x/rwx" {
+			if len(p) > 1 && p[0] == "__TEXT" {
 				locs := strings.Split(p[1], "-")
-				start, _ := strconv.ParseUint(locs[0], 16, 64)
-				end, _ := strconv.ParseUint(locs[1], 16, 64)
-				return start, end, nil
+				if len(locs) != 2 {
+					continue
+				}
+				hasProtection := false
+				for _, field := range p[2:] {
+					if strings.Contains(field, "r-x/rwx") {
+						hasProtection = true
+						break
+					}
+				}
+				if !hasProtection {
+					continue
+				}
+				start, startErr := strconv.ParseUint(locs[0], 16, 64)
+				end, endErr := strconv.ParseUint(locs[1], 16, 64)
+				if startErr == nil && endErr == nil {
+					return start, end, nil
+				}
 			}
 		}
 		if strings.HasPrefix(l, banner) {
@@ -197,4 +212,39 @@ func parseVmmap(data []byte) (hi, lo uint64, err error) {
 		}
 	}
 	return 0, 0, fmt.Errorf("vmmap no text segment found")
+}
+
+func TestParseVmmap(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		lo   uint64
+		hi   uint64
+	}{
+		{
+			name: "Leopard vmmap 2.2",
+			data: `==== Non-writable regions for process 59450
+__TEXT                 01000000-01445000 [ 4372K] r-x/rwx SM=COW  /tmp/go-build2913026089/b001/pprof.test`,
+			lo: 0x01000000,
+			hi: 0x01445000,
+		},
+		{
+			name: "modern vmmap",
+			data: `==== Non-writable regions for process 53799
+__TEXT                      1029a0000-1033bc000    [ 10.1M  7360K     0K     0K] r-x/rwx SM=COW          /Users/USER/*/gopls`,
+			lo: 0x1029a0000,
+			hi: 0x1033bc000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lo, hi, err := parseVmmap([]byte(tt.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lo != tt.lo || hi != tt.hi {
+				t.Errorf("parseVmmap = %#x-%#x, want %#x-%#x", lo, hi, tt.lo, tt.hi)
+			}
+		})
+	}
 }
