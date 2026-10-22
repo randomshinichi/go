@@ -65,89 +65,129 @@ func TestRemoveAllNonEmptyDarwinPPC(t *testing.T) {
 // a swap that is restored before the call returns; the chdir recorder in
 // root_darwin_ppc_test.go does).
 //
-// The two trees have entries with the same names and different contents, so an
-// operation that fell back to the working directory would be visible as a
-// change to "f" == "cwd". RemoveAll stays refused on this platform until the
-// confined directory walk is retired (docs/leopard-at-compat-design.md); the
-// refusal is asserted here so that turning it into a working call is a visible
-// edit.
+// The two trees hold entries with the same names and different contents, so an
+// operation that fell back to the working directory would be visible as a change
+// to "f" == "cwd". Each step gets a fresh root tree: several of them mutate it,
+// and sharing one made the expectations depend on the order the steps ran in.
+//
+// RemoveAll stays refused on this platform until the confined directory walk is
+// retired (docs/leopard-at-compat-design.md): it is listed here with its refusal
+// so that turning it into a working call is a visible edit, and so that the
+// no-mutation half is asserted now.
 func TestRootOpsConfinedDarwinPPC(t *testing.T) {
-	rootDir, cwd := t.TempDir(), t.TempDir()
-	for dir, content := range map[string]string{rootDir: "root", cwd: "cwd"} {
-		if err := os.WriteFile(filepath.Join(dir, "f"), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
+	cwd := t.TempDir()
+	confinedTree(t, cwd, "cwd")
 	t.Chdir(cwd)
 	before, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := os.OpenRoot(rootDir)
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	defer r.Close()
 
-	ops := map[string]func() error{
-		"Open": func() error {
+	freshRoot := func(t *testing.T) (*os.Root, string) {
+		t.Helper()
+		rootDir := t.TempDir()
+		confinedTree(t, rootDir, "root")
+		r, err := os.OpenRoot(rootDir)
+		if err != nil {
+			t.Fatalf("OpenRoot(%q): %v", rootDir, err)
+		}
+		t.Cleanup(func() { r.Close() })
+		return r, rootDir
+	}
+
+	steps := []struct {
+		name string
+		run  func(r *os.Root) error
+		want error
+		// check asserts the step's effect inside the root, and is nil when the
+		// step is meant to leave it untouched.
+		check func(t *testing.T, rootDir string)
+	}{
+		{"Open", func(r *os.Root) error {
 			f, err := r.Open("f")
 			if f != nil {
 				f.Close()
 			}
 			return err
-		},
-		"OpenRoot": func() error {
+		}, nil, nil},
+		{"OpenRoot", func(r *os.Root) error {
 			sub, err := r.OpenRoot("sub")
 			if sub != nil {
 				sub.Close()
 			}
 			return err
-		},
-		"Mkdir":   func() error { return r.Mkdir("m", 0o755) },
-		"Remove":  func() error { return r.Remove("m") },
-		"Stat":    func() error { _, err := r.Stat("f"); return err },
-		"Lstat":   func() error { _, err := r.Lstat("f"); return err },
-		"Rename":  func() error { return r.Rename("f", "g") },
-		"Symlink": func() error { return r.Symlink("g", "s") },
-	}
-	for name, op := range ops {
-		if err := op(); err != nil {
-			t.Errorf("Root.%s = %v; want success", name, err)
-		}
-		if after, err := os.Getwd(); err != nil || after != before {
-			t.Errorf("Root.%s changed cwd: %q, %v; want %q", name, after, err, before)
-		}
-	}
-	if err := r.RemoveAll("sub"); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Root.RemoveAll = %v; want an error wrapping ENOTSUP (the confined directory walk is not retired yet)", err)
+		}, nil, nil},
+		{"Stat", func(r *os.Root) error { _, err := r.Stat("f"); return err }, nil, nil},
+		{"Lstat", func(r *os.Root) error { _, err := r.Lstat("f"); return err }, nil, nil},
+		{"Mkdir", func(r *os.Root) error { return r.Mkdir("m", 0o755) }, nil,
+			func(t *testing.T, rootDir string) {
+				if fi, err := os.Lstat(filepath.Join(rootDir, "m")); err != nil || !fi.IsDir() {
+					t.Errorf("%s/m: %v, %v; want the directory created inside the root", rootDir, fi, err)
+				}
+			}},
+		{"Remove", func(r *os.Root) error { return r.Remove("sub") }, nil,
+			func(t *testing.T, rootDir string) {
+				if _, err := os.Lstat(filepath.Join(rootDir, "sub")); !os.IsNotExist(err) {
+					t.Errorf("%s/sub: %v; want it removed inside the root", rootDir, err)
+				}
+			}},
+		{"Rename", func(r *os.Root) error { return r.Rename("f", "g") }, nil,
+			func(t *testing.T, rootDir string) {
+				if b, err := os.ReadFile(filepath.Join(rootDir, "g")); err != nil || string(b) != "root" {
+					t.Errorf("%s/g = %q, %v; want the root's own file renamed to g", rootDir, b, err)
+				}
+				if _, err := os.Lstat(filepath.Join(rootDir, "f")); !os.IsNotExist(err) {
+					t.Errorf("%s/f: %v; want the rename to have moved it", rootDir, err)
+				}
+			}},
+		{"Symlink", func(r *os.Root) error { return r.Symlink("g", "s") }, nil,
+			func(t *testing.T, rootDir string) {
+				fi, err := os.Lstat(filepath.Join(rootDir, "s"))
+				if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+					t.Errorf("%s/s: %v, %v; want the symlink created inside the root", rootDir, fi, err)
+				}
+			}},
+		{"RemoveAll", func(r *os.Root) error { return r.RemoveAll("sub") }, syscall.ENOTSUP,
+			func(t *testing.T, rootDir string) {
+				if fi, err := os.Lstat(filepath.Join(rootDir, "sub")); err != nil || !fi.IsDir() {
+					t.Errorf("%s/sub: %v, %v; the refusal must not remove anything", rootDir, fi, err)
+				}
+			}},
 	}
 
-	// The root's own tree took the changes; the working directory did not.
-	if b, err := os.ReadFile(filepath.Join(rootDir, "g")); err != nil || string(b) != "root" {
-		t.Errorf("%s/g = %q, %v; want the root's own file renamed to g", rootDir, b, err)
-	}
-	if _, err := os.Lstat(filepath.Join(rootDir, "s")); err != nil {
-		t.Errorf("%s/s: %v; want the symlink created inside the root", rootDir, err)
-	}
-	if _, err := os.Lstat(filepath.Join(rootDir, "m")); !os.IsNotExist(err) {
-		t.Errorf("%s/m: %v; want it removed inside the root", rootDir, err)
-	}
-	for dir, want := range map[string]string{rootDir: "root", cwd: "cwd"} {
-		if b, err := os.ReadFile(filepath.Join(dir, "f")); err != nil || string(b) != want {
-			t.Errorf("%s/f = %q, %v; want %q", dir, b, err, want)
+	for _, step := range steps {
+		r, rootDir := freshRoot(t)
+		err := step.run(r)
+		if step.want == nil {
+			if err != nil {
+				t.Errorf("Root.%s = %v; want success", step.name, err)
+			}
+		} else if !errors.Is(err, step.want) {
+			t.Errorf("Root.%s = %v; want an error wrapping %v", step.name, err, step.want)
 		}
-	}
-	if fi, err := os.Lstat(filepath.Join(cwd, "sub")); err != nil || !fi.IsDir() {
-		t.Errorf("%s/sub changed: %v, %v", cwd, fi, err)
-	}
-	if _, err := os.Lstat(filepath.Join(cwd, "g")); !os.IsNotExist(err) {
-		t.Errorf("%s/g: %v; want the working directory untouched by Root.Rename", cwd, err)
-	}
-	if _, err := os.Lstat(filepath.Join(cwd, "s")); !os.IsNotExist(err) {
-		t.Errorf("%s/s: %v; want the working directory untouched by Root.Symlink", cwd, err)
+		if after, err := os.Getwd(); err != nil || after != before {
+			t.Errorf("Root.%s changed cwd: %q, %v; want %q", step.name, after, err, before)
+		}
+		if step.check != nil {
+			step.check(t, rootDir)
+		}
+
+		// The decoy working directory never changes, whatever the step did
+		// inside the root.
+		if b, err := os.ReadFile(filepath.Join(cwd, "f")); err != nil || string(b) != "cwd" {
+			t.Errorf("after Root.%s, %s/f = %q, %v; want the working directory untouched (%q)", step.name, cwd, b, err, "cwd")
+		}
+		if fi, err := os.Lstat(filepath.Join(cwd, "sub")); err != nil || !fi.IsDir() {
+			t.Errorf("after Root.%s, %s/sub: %v, %v; want the working directory untouched", step.name, cwd, fi, err)
+		}
+		if _, err := os.Lstat(filepath.Join(cwd, "g")); !os.IsNotExist(err) {
+			t.Errorf("after Root.%s, %s/g: %v; want the working directory untouched", step.name, cwd, err)
+		}
+		if _, err := os.Lstat(filepath.Join(cwd, "s")); !os.IsNotExist(err) {
+			t.Errorf("after Root.%s, %s/s: %v; want the working directory untouched", step.name, cwd, err)
+		}
+		if _, err := os.Lstat(filepath.Join(cwd, "m")); !os.IsNotExist(err) {
+			t.Errorf("after Root.%s, %s/m: %v; want the working directory untouched", step.name, cwd, err)
+		}
 	}
 }

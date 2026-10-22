@@ -28,7 +28,29 @@
 //
 // Register use stays inside the volatile set: R3-R10 are the kernel's argument
 // and result registers, R30 (g) and R31 (LR save, and the ppc32 RET epilogue's
-// scratch) are never written.
+// scratch) are never written. R10 holds the request base wherever a syscall's
+// own arguments have to occupy R3 and up.
+//
+// Darwin raw system call convention: the number is in R0, the arguments begin in
+// R3 (r3, r4, ... in order), and the result returns in R3 (bsd/dev/ppc/
+// systemcalls.c munges from regs->save_r3 onwards). Every `SC` below therefore
+// has to be audited as "R0 = number, R3.. = arguments", not as Go-level
+// parameters:
+//
+//	SC  address   R0    R3         R4      R5      R6      R7
+//	enter         349   anchor      -       -       -       -
+//	stat64        338   dot         st1     -       -       -
+//	fstat64       339   anchor      st2     -       -       -
+//	selected op   nr    w0          w1      w2      w3      w4
+//	clear         349   -1          -       -       -       -
+//	exit fail-stop 1    127         -       -       -       -
+//
+// `ADDI R0, R0, $N` loads N here, it does not add to whatever R0 held: on
+// PowerPC an addi whose RA field is 0 uses the literal zero as the addend, so
+// the instruction is `li r0,N` no matter what R0 contains (and the kernel
+// restores the user's R0 across `sc`, so relying on a cleared R0 would be
+// wrong anyway). Tests: TestAtCompoundRegisterAuditDarwinPPC pins the resulting
+// machine code, and the layout test pins the request offsets.
 
 // atCompoundReq field offsets. These must match the atReq* constants in
 // at_compound_darwin_ppc.go; TestAtCompoundLayoutDarwinPPC fails if they drift.
@@ -63,26 +85,27 @@
 TEXT ·atCompound(SB),NOSPLIT,$32-4
 	BL	runtime·entersyscall<ABIInternal>(SB)
 
-	// Install the anchor as this thread's private cwd. Nothing has changed if
-	// this fails, so the error is reported without a clear attempt.
-	LWZ	R3, req+0(FP)
-	LWZ	R4, ATC_ANCHOR(R3)
+	// Install the anchor as this thread's private cwd: __pthread_fchdir(anchor).
+	// Nothing has changed if this fails, so the error is reported without a
+	// clear attempt.
+	LWZ	R10, req+0(FP)
+	LWZ	R3, ATC_ANCHOR(R10)
 	ADDI	R0, R0, $SYS_pthread_fchdir_
 	SC
 	B	atCompoundEnterFail
 
 	// stat64(".", st1): what the private cwd actually resolved to.
-	LWZ	R3, req+0(FP)
-	LWZ	R4, ATC_DOT(R3)
-	LWZ	R5, ATC_ST1(R3)
+	LWZ	R10, req+0(FP)
+	LWZ	R3, ATC_DOT(R10)
+	LWZ	R4, ATC_ST1(R10)
 	ADDI	R0, R0, $SYS_stat64_
 	SC
 	B	atCompoundIdentFail
 
 	// fstat64(anchor, st2): the object this call is anchored to.
-	LWZ	R3, req+0(FP)
-	LWZ	R4, ATC_ANCHOR(R3)
-	LWZ	R5, ATC_ST2(R3)
+	LWZ	R10, req+0(FP)
+	LWZ	R3, ATC_ANCHOR(R10)
+	LWZ	R4, ATC_ST2(R10)
 	ADDI	R0, R0, $SYS_fstat64_
 	SC
 	B	atCompoundIdentFail
@@ -148,8 +171,8 @@ atCompoundOpFail:
 	// 349(-1) clears the private cwd and returns 0. Any other result after a
 	// successful install is an internal invariant failure.
 atCompoundClear:
+	ADDI	R3, R0, $-1		// RA=0 is the literal zero: r3 = -1
 	ADDI	R0, R0, $SYS_pthread_fchdir_
-	ADDI	R3, R0, $-1		// R0 as a base is the literal 0: R3 = -1
 	SC
 	B	atCompoundClearFail
 	B	atCompoundDone
@@ -160,8 +183,8 @@ atCompoundClear:
 	// allocation, no Go code: raw exit(127) only. If exit somehow returns, an
 	// invalid syscall number raises SIGSYS instead of continuing.
 atCompoundClearFail:
+	ADDI	R3, R0, $127		// RA=0 is the literal zero: r3 = 127
 	ADDI	R0, R0, $SYS_exit_
-	ADDI	R3, R0, $127		// R0 as a base is the literal 0: R3 = 127
 	SC
 	ADDI	R0, R0, $-1		// invalid syscall number
 	SC

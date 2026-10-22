@@ -55,8 +55,12 @@ func (cmsg *Cmsghdr) SetLen(length int) { cmsg.Len = uint32(length) }
 //go:linkname lchmod
 //go:linkname lstatatByPath
 
-// Leopard does not implement the POSIX *at calls. Preserve the path-based
-// fallback contract and return ENOTSUP for real directory descriptors.
+// Leopard does not implement the POSIX *at calls, so this is the AT_FDCWD form:
+// stat or lstat of a path relative to the calling thread's working directory,
+// with the flag validation the callers rely on. A real directory descriptor is
+// still refused here; the anchored form of the same operation lives one layer up
+// in internal/syscall/unix/at_darwin_ppc.go, which is also where the kernel
+// version gate and the refusals are documented.
 func fstatat(fd int, path string, stat *Stat_t, flags int) error {
 	const atSymlinkNofollow = 0x20
 	if fd != _AT_FDCWD {
@@ -82,9 +86,10 @@ func fstatat(fd int, path string, stat *Stat_t, flags int) error {
 // descriptor-based call's symlink-race (TOCTOU) protection. If the directory
 // is renamed/removed/replaced between F_GETPATH and the lstat, the result
 // describes whatever is at the old path now. It only ever reads; nothing that
-// writes is given this form (they stay ENOTSUP for a real descriptor, and
-// os.Root is refused). A very deep path that overflows MAXPATHLEN fails here
-// with ENAMETOOLONG where the descriptor version would not.
+// writes is given this form. A File opened through an os.Root does not use it
+// either: root entries are described by the confined Fstatat form
+// (os/statat_darwin_ppc.go). A very deep path that overflows MAXPATHLEN fails
+// here with ENAMETOOLONG where the descriptor version would not.
 //
 // name must be a single directory-entry name: empty or containing '/' is
 // refused so the call cannot be steered out of the directory. With _AT_FDCWD

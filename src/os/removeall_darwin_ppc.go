@@ -6,11 +6,13 @@ package os
 
 import "syscall"
 
-// On darwin/ppc (Mac OS X 10.5 Leopard) RemoveAll is the path-based
-// removeall_noat.go, not the descriptor-based removeall_at.go, because Leopard
-// has no unlinkat/openat to resolve names against a directory descriptor
-// (internal/syscall/unix/at_darwin_ppc.go returns ENOTSUP for any dirfd other
-// than AT_FDCWD).
+// On darwin/ppc (Mac OS X 10.5 Leopard) RemoveAll is still the path-based
+// removeall_noat.go, not the descriptor-based removeall_at.go. Leopard has no
+// unlinkat/openat, and although most *at operations now have an anchored form
+// (internal/syscall/unix/at_darwin_ppc.go), the descriptor-based walk needs the
+// directory-reading path to be retired and re-validated first, so it is not
+// selected here yet. Root.RemoveAll therefore refuses: the path algorithm's
+// symlink race is exactly what Root must not have.
 //
 // SECURITY-RELEVANT DIVERGENCE from non-PowerPC Darwin targets: removeall_noat.go
 // is the pre-Go-1.12 algorithm. It does not have the descriptor-based version's

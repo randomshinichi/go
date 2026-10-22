@@ -35,6 +35,7 @@ import (
 	"bytes"
 	"errors"
 	"internal/testlog"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -105,93 +106,100 @@ func confinedTree(t *testing.T, dir, fileContent string) {
 	}
 }
 
-// rootOpsDarwinPPC is the Root surface a confined operation is exposed through.
-// It is the union of the sets pinned by root_darwin_ppc64_test.go and
-// removeall_darwin_ppc_test.go, so a ppc32 divergence shows up as a difference
-// rather than as silence.
+// rootOpDarwinPPC is one entry of the Root surface a confined operation is
+// exposed through. It is the union of the sets pinned by
+// root_darwin_ppc64_test.go and removeall_darwin_ppc_test.go, so a ppc32
+// divergence shows up as a difference rather than as silence.
 //
-// On Leopard the operations that xnu-1228 can express through an anchored
-// descriptor or the thread-private cwd succeed, and they must act on the
-// contents of the Root, not on the working directory (see
-// internal/syscall/unix/at_darwin_ppc.go for the dispatch and the reasons).
-// Five are still refused, and the tests below assert the refusal rather than
-// hiding it: Link (link(2) follows the source symlink), RemoveAll (needs the
-// confined directory walk that has not been retired yet), Chmod (no-follow chmod
-// needs setattrlist parity) and Chtimes (same setattrlist gate).
-func rootOpsDarwinPPC(r *os.Root) map[string]func() error {
+// Each operation runs against its own fresh tree. Several of them mutate the
+// tree (Remove, Rename, Mkdir, Create), and a shared tree made the expectations
+// depend on iteration order: a Refused-everything version could share one
+// because nothing changed, a version that succeeds cannot.
+//
+// want is nil for an operation the anchored backend serves on Leopard 10.5.8,
+// and the refusal errno for one that stays refused by design: Link (link(2)
+// follows the source symlink), RemoveAll (the confined directory walk is a later
+// slice), Chmod and Chtimes (no-follow metadata needs the setattrlist parity
+// work). A refusal is listed explicitly so that changing it is a visible edit.
+type rootOpDarwinPPC struct {
+	name string
+	run  func(r *os.Root) error
+	want error
+}
+
+func rootOpsDarwinPPC() []rootOpDarwinPPC {
 	now := time.Now()
-	return map[string]func() error{
-		"Open": func() error {
-			f, err := r.Open("f")
-			if f != nil {
-				f.Close()
-			}
-			return err
-		},
-		"OpenFile": func() error {
-			f, err := r.OpenFile("f", os.O_RDONLY, 0)
-			if f != nil {
-				f.Close()
-			}
-			return err
-		},
-		"Create": func() error {
-			f, err := r.Create("new")
-			if f != nil {
-				f.Close()
-			}
-			return err
-		},
-		"OpenRoot": func() error {
+	closeErr := func(f *os.File, err error) error {
+		if f != nil {
+			f.Close()
+		}
+		return err
+	}
+	return []rootOpDarwinPPC{
+		{"Open", func(r *os.Root) error { return closeErr(r.Open("f")) }, nil},
+		{"OpenFile", func(r *os.Root) error { return closeErr(r.OpenFile("f", os.O_RDONLY, 0)) }, nil},
+		{"Create", func(r *os.Root) error { return closeErr(r.Create("new")) }, nil},
+		{"OpenRoot", func(r *os.Root) error {
 			sub, err := r.OpenRoot("sub")
 			if sub != nil {
 				sub.Close()
 			}
 			return err
-		},
-		"Mkdir":     func() error { return r.Mkdir("m", 0o755) },
-		"MkdirAll":  func() error { return r.MkdirAll("m/n", 0o755) },
-		"Remove":    func() error { return r.Remove("f") },
-		"RemoveAll": func() error { return r.RemoveAll("sub") },
-		"Stat":      func() error { _, err := r.Stat("f"); return err },
-		"Lstat":     func() error { _, err := r.Lstat("f"); return err },
-		"Readlink":  func() error { _, err := r.Readlink("link"); return err },
-		"ReadFile":  func() error { _, err := r.ReadFile("f"); return err },
-		"WriteFile": func() error { return r.WriteFile("w", []byte("x"), 0o644) },
-		"Rename":    func() error { return r.Rename("f", "g") },
-		"Link":      func() error { return r.Link("f", "g") },
-		"Symlink":   func() error { return r.Symlink("f", "s") },
-		"Chmod":     func() error { return r.Chmod("f", 0o600) },
-		"Chown":     func() error { return r.Chown("f", os.Getuid(), os.Getgid()) },
-		"Chtimes":   func() error { return r.Chtimes("f", now, now) },
+		}, nil},
+		{"Mkdir", func(r *os.Root) error { return r.Mkdir("m", 0o755) }, nil},
+		{"MkdirAll", func(r *os.Root) error { return r.MkdirAll("m/n", 0o755) }, nil},
+		{"Remove", func(r *os.Root) error { return r.Remove("f") }, nil},
+		{"RemoveEmptyDir", func(r *os.Root) error { return r.Remove("sub") }, nil},
+		{"RemoveAll", func(r *os.Root) error { return r.RemoveAll("sub") }, syscall.ENOTSUP},
+		{"Stat", func(r *os.Root) error { _, err := r.Stat("f"); return err }, nil},
+		{"Lstat", func(r *os.Root) error { _, err := r.Lstat("f"); return err }, nil},
+		{"Readlink", func(r *os.Root) error { _, err := r.Readlink("link"); return err }, nil},
+		{"ReadFile", func(r *os.Root) error { _, err := r.ReadFile("f"); return err }, nil},
+		{"WriteFile", func(r *os.Root) error { return r.WriteFile("w", []byte("x"), 0o644) }, nil},
+		{"Rename", func(r *os.Root) error { return r.Rename("f", "g") }, nil},
+		{"Link", func(r *os.Root) error { return r.Link("f", "g") }, syscall.ENOTSUP},
+		{"Symlink", func(r *os.Root) error { return r.Symlink("f", "s") }, nil},
+		{"Chmod", func(r *os.Root) error { return r.Chmod("f", 0o600) }, syscall.ENOTSUP},
+		{"Chown", func(r *os.Root) error { return r.Chown("f", os.Getuid(), os.Getgid()) }, nil},
+		{"Chtimes", func(r *os.Root) error { return r.Chtimes("f", now, now) }, syscall.ENOTSUP},
 	}
 }
 
-// rootWantDarwinPPC is the outcome Root."%s" must have on Leopard 10.5.8: nil
-// for the operations the anchored backend serves, ENOTSUP for the ones that
-// stay refused. A refusal is listed here explicitly so that changing it is a
-// visible edit, not a silent success in a test that only checked for an error.
-func rootWantDarwinPPC(op string) error {
-	switch op {
-	case "Link", "RemoveAll", "Chmod", "Chtimes":
-		return syscall.ENOTSUP
-	}
-	return nil
-}
-
-// checkRootOutcome applies the expected outcome for op.
-func checkRootOutcome(t *testing.T, name string, err error) {
+// check applies the expected outcome for this operation.
+func (op rootOpDarwinPPC) check(t *testing.T, err error) {
 	t.Helper()
-	want := rootWantDarwinPPC(name)
-	if want == nil {
+	if op.want == nil {
 		if err != nil {
-			t.Errorf("Root.%s = %v; want success (the anchored backend serves this operation on this kernel)", name, err)
+			t.Errorf("Root.%s = %v; want success (the anchored backend serves this operation on this kernel)", op.name, err)
 		}
 		return
 	}
-	if !errors.Is(err, want) {
-		t.Errorf("Root.%s = %v; want an error wrapping %v", name, err, want)
+	// A refusal must not be reached sideways: an ENOTSUP produced before the
+	// operation got to its own refusal (a missing parent, say) would look the
+	// same through errors.Is. The operations below all name existing entries in
+	// a fresh tree, so a "not exist" error is reported as such.
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Root.%s = %v; want %v, and the entry it names exists in the fresh tree", op.name, err, op.want)
+		return
 	}
+	if !errors.Is(err, op.want) {
+		t.Errorf("Root.%s = %v; want an error wrapping %v", op.name, err, op.want)
+	}
+}
+
+// freshConfinedRoot creates a fresh confined tree and opens a Root on it. Each
+// operation gets its own tree: the mutating ones must not consume another
+// operation's fixtures.
+func freshConfinedRoot(t *testing.T) (*os.Root, string) {
+	t.Helper()
+	rootDir := t.TempDir()
+	confinedTree(t, rootDir, "root")
+	r, err := os.OpenRoot(rootDir)
+	if err != nil {
+		t.Fatalf("OpenRoot(%q): %v", rootDir, err)
+	}
+	t.Cleanup(func() { r.Close() })
+	return r, rootDir
 }
 
 // TestRootConfinedOpsNoChdirDarwinPPC requires the confined operations to be
@@ -202,25 +210,19 @@ func checkRootOutcome(t *testing.T, name string, err error) {
 func TestRootConfinedOpsNoChdirDarwinPPC(t *testing.T) {
 	installChdirRecorder()
 
-	rootDir, cwd := t.TempDir(), t.TempDir()
-	confinedTree(t, rootDir, "root")
+	cwd := t.TempDir()
 	confinedTree(t, cwd, "cwd")
 	t.Chdir(cwd)
 
-	r, err := os.OpenRoot(rootDir)
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	defer r.Close()
-
-	for name, op := range rootOpsDarwinPPC(r) {
+	for _, op := range rootOpsDarwinPPC() {
+		r, _ := freshConfinedRoot(t)
 		chdirLog.reset()
-		err := op()
+		err := op.run(r)
 		moved := chdirLog.since()
 
-		checkRootOutcome(t, name, err)
+		op.check(t, err)
 		if len(moved) != 0 {
-			t.Errorf("Root.%s moved the process working directory to %q; a confined operation must be refused without acting on it, whether or not it moves back", name, moved)
+			t.Errorf("Root.%s moved the process working directory to %q; a confined operation must not need to, whether or not it moves back", op.name, moved)
 		}
 	}
 
@@ -229,12 +231,13 @@ func TestRootConfinedOpsNoChdirDarwinPPC(t *testing.T) {
 	// fallback would use and require it to be recorded. The recorded path is
 	// the one Getwd reported, so on this system /tmp arrives as /private/tmp;
 	// compare the directories, not the spellings.
+	probe := t.TempDir()
 	chdirLog.reset()
-	if err := os.Chdir(rootDir); err != nil {
-		t.Fatalf("os.Chdir(%q): %v", rootDir, err)
+	if err := os.Chdir(probe); err != nil {
+		t.Fatalf("os.Chdir(%q): %v", probe, err)
 	}
-	if moved := chdirLog.since(); len(moved) != 1 || !sameDir(t, moved[0], rootDir) {
-		t.Fatalf("the chdir recorder is not live: os.Chdir(%q) recorded %q; a confined operation could change the working directory unobserved", rootDir, moved)
+	if moved := chdirLog.since(); len(moved) != 1 || !sameDir(t, moved[0], probe) {
+		t.Fatalf("the chdir recorder is not live: os.Chdir(%q) recorded %q; a confined operation could change the working directory unobserved", probe, moved)
 	}
 	if err := os.Chdir(cwd); err != nil {
 		t.Fatalf("os.Chdir(%q): %v", cwd, err)
@@ -301,37 +304,32 @@ func TestRootConfinedOpsNoChdirSyscallDarwinPPC(t *testing.T) {
 		return bytes.Contains(b, []byte("chdir "+want+"\n"))
 	}
 
-	rootDir, cwd := t.TempDir(), t.TempDir()
-	confinedTree(t, rootDir, "root")
+	cwd := t.TempDir()
 	confinedTree(t, cwd, "cwd")
 	t.Chdir(cwd)
 
-	r, err := os.OpenRoot(rootDir)
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	defer r.Close()
-
-	for name, op := range rootOpsDarwinPPC(r) {
+	for _, op := range rootOpsDarwinPPC() {
+		r, _ := freshConfinedRoot(t)
 		clearLog()
-		err := op()
+		err := op.run(r)
 		b, rerr := os.ReadFile(logPath)
 		if rerr != nil {
 			t.Fatalf("reading %s: %v", logPath, rerr)
 		}
-		checkRootOutcome(t, name, err)
+		op.check(t, err)
 		if len(bytes.TrimSpace(b)) != 0 {
-			t.Errorf("Root.%s reached the working directory through the syscall boundary: %q; a confined operation must be refused without changing directory, whether or not it changes back", name, bytes.TrimSpace(b))
+			t.Errorf("Root.%s reached the working directory through the syscall boundary: %q; a confined operation must not need to, whether or not it changes back", op.name, bytes.TrimSpace(b))
 		}
 	}
 
 	// Liveness: the two calls the os-level recorder cannot see. Both must be
 	// recorded, and the chdir must be recorded as the path asked for.
+	probe := t.TempDir()
 	clearLog()
-	if err := syscall.Chdir(rootDir); err != nil {
-		t.Fatalf("syscall.Chdir(%q): %v", rootDir, err)
+	if err := syscall.Chdir(probe); err != nil {
+		t.Fatalf("syscall.Chdir(%q): %v", probe, err)
 	}
-	f, err := os.Open(rootDir)
+	f, err := os.Open(probe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,8 +338,8 @@ func TestRootConfinedOpsNoChdirSyscallDarwinPPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("syscall.Fchdir: %v", err)
 	}
-	if !showsDir(rootDir) {
-		t.Fatalf("the chdir interposer is not live: syscall.Chdir(%q) was not recorded in %s", rootDir, logPath)
+	if !showsDir(probe) {
+		t.Fatalf("the chdir interposer is not live: syscall.Chdir(%q) was not recorded in %s", probe, logPath)
 	}
 	b, err := os.ReadFile(logPath)
 	if err != nil {
@@ -369,7 +367,7 @@ func TestRootConfinedOpsNoChdirSyscallDarwinPPC(t *testing.T) {
 // (unix.LstatatByPath) and must describe the same entries. Without it, a
 // failure of the marked File would be indistinguishable from a broken
 // descriptor, an empty directory or a listing that was never reached.
-func TestInRootEntryStatRefusedDarwinPPC(t *testing.T) {
+func TestInRootEntryStatDarwinPPC(t *testing.T) {
 	dir := t.TempDir()
 	confinedTree(t, dir, "root")
 
@@ -446,8 +444,12 @@ func TestInRootEntryStatRefusedDarwinPPC(t *testing.T) {
 		if len(infos) != 3 {
 			t.Fatalf("%s on a File marked inRoot returned %d entries; want 3", tc.name, len(infos))
 		}
-		if statts != 1 {
-			t.Errorf("%s stat'ed %d entries before returning; want 1 -- a run that never reached lstatatNolog must not pass", tc.name, statts)
+		// The hook fires once per entry described, so a three-entry listing
+		// must stat three. The old refusal-era expectation of 1 came from a
+		// refusal that aborted on the first entry; a run that stats nothing at
+		// all did not reach lstatatNolog and must not pass either.
+		if statts != len(infos) {
+			t.Errorf("%s stat'ed %d entries; want %d, one per entry in the listing", tc.name, statts, len(infos))
 		}
 		names := make([]string, 0, len(infos))
 		for _, info := range infos {

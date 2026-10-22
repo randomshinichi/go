@@ -52,6 +52,21 @@ func TestCloseOnExecDarwinPPC(t *testing.T) {
 	}
 	defer r.Close()
 
+	// The two descriptors Root itself produces: rootOpenFileNolog (a returned
+	// file) and rootOpenDir (an intermediate directory, observed through
+	// OpenRoot). They are the call sites that had to grow a close-on-exec step
+	// when the anchored backend made them reachable on this platform.
+	rf, err := r.Open("f")
+	if err != nil {
+		t.Fatalf("Root.Open: %v", err)
+	}
+	defer rf.Close()
+	rd, err := r.OpenFile("f", os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatalf("Root.OpenFile: %v", err)
+	}
+	defer rd.Close()
+
 	for _, h := range []struct {
 		name string
 		fd   int
@@ -59,6 +74,8 @@ func TestCloseOnExecDarwinPPC(t *testing.T) {
 		{"os.Create(file)", int(f.Fd())},
 		{"os.Open(dir)", int(d.Fd())},
 		{"os.OpenRoot(dir)", os.RootFd(r)},
+		{"Root.Open(file)", int(rf.Fd())},
+		{"Root.OpenFile(file)", int(rd.Fd())},
 	} {
 		flags, err := unix.Fcntl(h.fd, syscall.F_GETFD, 0)
 		if err != nil {
