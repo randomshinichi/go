@@ -215,6 +215,12 @@ func libc_readdir_r_inode64_trampoline()
 // 32-bit-inode record and is not layout-compatible. The 64-bit record layout
 // was measured on the G5 for ppc64 (ino@0, seekoff@8, reclen@16, namlen@18,
 // type@20, name@21); the inode record is independent of userspace pointer size.
+//
+// The syscall's position argument is an off_t *: the kernel writes 8 bytes
+// through it. darwin/ppc32's *uintptr is only 4 bytes and cannot express that,
+// so a real int64 receives the kernel's value and only its low 32 bits are
+// stored back into *basep. The value is therefore truncated on write-back, and
+// a directory offset above 4 GiB is unrepresentable through this API.
 func Getdirentries(fd int, buf []byte, basep *uintptr) (n int, err error) {
 	var p unsafe.Pointer
 	if len(buf) > 0 {
@@ -222,14 +228,14 @@ func Getdirentries(fd int, buf []byte, basep *uintptr) (n int, err error) {
 	} else {
 		p = unsafe.Pointer(&_zero)
 	}
-	var base uintptr
-	if basep == nil {
-		basep = &base
-	}
-	r0, _, e1 := Syscall6(SYS_GETDIRENTRIES64, uintptr(fd), uintptr(p), uintptr(len(buf)), uintptr(unsafe.Pointer(basep)), 0, 0)
+	var base int64
+	r0, _, e1 := Syscall6(SYS_GETDIRENTRIES64, uintptr(fd), uintptr(p), uintptr(len(buf)), uintptr(unsafe.Pointer(&base)), 0, 0)
 	n = int(r0)
 	if e1 != 0 {
 		err = errnoErr(e1)
+	}
+	if basep != nil {
+		*basep = uintptr(uint32(base))
 	}
 	return
 }
