@@ -1,0 +1,27 @@
+--- /data/source/go/pkg/mod/golang.org/x/sys@v0.39.0/unix/mkerrors.sh	2026-10-12 13:47:34.749275836 +0200
++++ kit-inv3/mkerrors.sh	2026-10-22 17:29:35.064987990 +0200
+@@ -58,9 +58,7 @@
+ #define _DARWIN_USE_64_BIT_INODE
+ #define __APPLE_USE_RFC_3542
+ #include <stdint.h>
+-#include <sys/stdio.h>
+ #include <sys/attr.h>
+-#include <sys/clonefile.h>
+ #include <sys/kern_control.h>
+ #include <sys/types.h>
+ #include <sys/event.h>
+@@ -77,13 +75,13 @@
+ #include <sys/utsname.h>
+ #include <sys/wait.h>
+ #include <sys/xattr.h>
+-#include <sys/vsock.h>
+ #include <net/bpf.h>
+ #include <net/if.h>
+ #include <net/if_types.h>
+ #include <net/route.h>
+ #include <netinet/in.h>
+ #include <netinet/ip.h>
++#include <netinet/ip_mroute.h>
+ #include <termios.h>
+ 
+ // for backwards compatibility because moved TIOCREMOTE to Kernel.framework after MacOSX12.0.sdk.
