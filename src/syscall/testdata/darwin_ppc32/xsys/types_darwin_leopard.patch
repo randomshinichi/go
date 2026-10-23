@@ -1,0 +1,170 @@
+--- /data/source/go/pkg/mod/golang.org/x/sys@v0.39.0/unix/types_darwin.go	2026-10-12 13:47:34.764685622 +0200
++++ kit-inv3/types_darwin_leopard.go	2026-10-22 17:36:33.448717641 +0200
+@@ -28,6 +28,7 @@
+ #include <mach/message.h>
+ #include <sys/event.h>
+ #include <sys/ipc.h>
++#include <sys/types.h>
+ #include <sys/kern_control.h>
+ #include <sys/mman.h>
+ #include <sys/mount.h>
+@@ -47,7 +48,6 @@
+ #include <sys/un.h>
+ #include <sys/utsname.h>
+ #include <sys/wait.h>
+-#include <sys/vsock.h>
+ #include <net/bpf.h>
+ #include <net/if.h>
+ #include <net/if_dl.h>
+@@ -74,7 +74,7 @@
+ 	char pad[sizeof(union sockaddr_all) - sizeof(struct sockaddr)];
+ };
+ 
+-#if defined(__x86_64__)
++#if defined(__x86_64__) || defined(__ppc__)
+ typedef struct stat64 stat_t;
+ typedef struct statfs64 statfs_t;
+ #else // __arm__
+@@ -97,10 +97,10 @@
+ // Basic types
+ 
+ type (
+-	_C_short     C.short
+-	_C_int       C.int
+-	_C_long      C.long
+-	_C_long_long C.longlong
++	_C_short     int16
++	_C_int       int32
++	_C_long      int32
++	_C_long_long int64
+ )
+ 
+ // Time
+@@ -109,21 +109,19 @@
+ 
+ type Timeval C.struct_timeval
+ 
+-type Timeval32 C.struct_timeval32
+-
+ // Processes
+ 
+ type Rusage C.struct_rusage
+ 
+ type Rlimit C.struct_rlimit
+ 
+-type _Gid_t C.gid_t
++type _Gid_t uint32
+ 
+ // Files
+ 
+-type Stat_t C.stat_t
++type Stat_t C.struct_stat64
+ 
+-type Statfs_t C.statfs_t
++type Statfs_t C.struct_statfs64
+ 
+ type Flock_t C.struct_flock
+ 
+@@ -163,25 +161,7 @@
+ 
+ type RawSockaddrCtl C.struct_sockaddr_ctl
+ 
+-type RawSockaddrVM C.struct_sockaddr_vm
+-
+-type XVSockPCB C.struct_xvsockpcb
+-
+-type XSocket C.struct_xsocket
+-
+-type XSocket64 C.struct_xsocket64
+-
+-type XSockbuf C.struct_xsockbuf
+-
+-type XVSockPgen C.struct_xvsockpgen
+-
+-type _Socklen C.socklen_t
+-
+-type SaeAssocID C.sae_associd_t
+-
+-type SaeConnID C.sae_connid_t
+-
+-type SaEndpoints C.struct_sa_endpoints
++type _Socklen uint32
+ 
+ type Xucred C.struct_xucred
+ 
+@@ -191,24 +171,16 @@
+ 
+ type IPMreq C.struct_ip_mreq
+ 
+-type IPMreqn C.struct_ip_mreqn
+-
+ type IPv6Mreq C.struct_ipv6_mreq
+ 
+ type Msghdr C.struct_msghdr
+ 
+ type Cmsghdr C.struct_cmsghdr
+ 
+-type Inet4Pktinfo C.struct_in_pktinfo
+-
+ type Inet6Pktinfo C.struct_in6_pktinfo
+ 
+-type IPv6MTUInfo C.struct_ip6_mtuinfo
+-
+ type ICMPv6Filter C.struct_icmp6_filter
+ 
+-type TCPConnectionInfo C.struct_tcp_connection_info
+-
+ const (
+ 	SizeofSockaddrInet4     = C.sizeof_struct_sockaddr_in
+ 	SizeofSockaddrInet6     = C.sizeof_struct_sockaddr_in6
+@@ -216,24 +188,15 @@
+ 	SizeofSockaddrUnix      = C.sizeof_struct_sockaddr_un
+ 	SizeofSockaddrDatalink  = C.sizeof_struct_sockaddr_dl
+ 	SizeofSockaddrCtl       = C.sizeof_struct_sockaddr_ctl
+-	SizeofSockaddrVM        = C.sizeof_struct_sockaddr_vm
+-	SizeofXvsockpcb         = C.sizeof_struct_xvsockpcb
+-	SizeofXSocket           = C.sizeof_struct_xsocket
+-	SizeofXSockbuf          = C.sizeof_struct_xsockbuf
+-	SizeofXVSockPgen        = C.sizeof_struct_xvsockpgen
+ 	SizeofXucred            = C.sizeof_struct_xucred
+ 	SizeofLinger            = C.sizeof_struct_linger
+ 	SizeofIovec             = C.sizeof_struct_iovec
+ 	SizeofIPMreq            = C.sizeof_struct_ip_mreq
+-	SizeofIPMreqn           = C.sizeof_struct_ip_mreqn
+ 	SizeofIPv6Mreq          = C.sizeof_struct_ipv6_mreq
+ 	SizeofMsghdr            = C.sizeof_struct_msghdr
+ 	SizeofCmsghdr           = C.sizeof_struct_cmsghdr
+-	SizeofInet4Pktinfo      = C.sizeof_struct_in_pktinfo
+ 	SizeofInet6Pktinfo      = C.sizeof_struct_in6_pktinfo
+-	SizeofIPv6MTUInfo       = C.sizeof_struct_ip6_mtuinfo
+ 	SizeofICMPv6Filter      = C.sizeof_struct_icmp6_filter
+-	SizeofTCPConnectionInfo = C.sizeof_struct_tcp_connection_info
+ )
+ 
+ // Ptrace requests
+@@ -250,7 +213,7 @@
+ 
+ // Select
+ 
+-type FdSet C.fd_set
++type FdSet C.struct_fd_set
+ 
+ // Routing and interface messages
+ 
+@@ -313,16 +276,6 @@
+ 
+ type Winsize C.struct_winsize
+ 
+-// fchmodat-like syscalls.
+-
+-const (
+-	AT_FDCWD            = C.AT_FDCWD
+-	AT_REMOVEDIR        = C.AT_REMOVEDIR
+-	AT_SYMLINK_FOLLOW   = C.AT_SYMLINK_FOLLOW
+-	AT_SYMLINK_NOFOLLOW = C.AT_SYMLINK_NOFOLLOW
+-	AT_EACCESS          = C.AT_EACCESS
+-)
+-
+ // poll
+ 
+ type PollFd C.struct_pollfd

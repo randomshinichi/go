@@ -1,0 +1,273 @@
+xsys/ — recipe for the darwin/ppc32 (Mac OS X 10.5 Leopard) tables of the
+vendored golang.org/x/sys/unix (goppc-jic6x.3)
+==============================================================================
+
+Purpose
+-------
+`cmd/vendor/golang.org/x/sys/unix` and `cmd/vendor/golang.org/x/term` had no
+darwin/ppc32 build files, so `go/types` TestStdlib could not typecheck them on
+a ppc32 GOROOT and the 179 identifiers of x/sys/unix (plus 23 cascading x/term
+names) were undefined.  This directory holds everything needed to regenerate
+the nine port-local files that fix that, byte for byte:
+
+  cmd/vendor/golang.org/x/sys/unix/ztypes_darwin_ppc.go      (target: cgo)
+  cmd/vendor/golang.org/x/sys/unix/zerrors_darwin_ppc.go     (target: mkerrors)
+  cmd/vendor/golang.org/x/sys/unix/zsyscall_darwin_ppc.go    (host: mksyscall)
+  cmd/vendor/golang.org/x/sys/unix/zsyscall_darwin_ppc.s     (host: mkasm)
+  cmd/vendor/golang.org/x/sys/unix/zsysnum_darwin_ppc.go     (host: mksysnum)
+and the inputs for the four hand-written files (not generated here; committed
+verbatim, see contract §5 H3):
+
+  syscall_darwin_ppc.go, absent_darwin_ppc.go, asm_darwin_ppc.s,
+  syscall_darwin_libcdir.go (the verbatim move of commit C1)
+
+`testdata` is invisible to the go tool, to TestStdlib and to `go mod vendor`, so
+this recipe survives the operations that delete the generated files.
+
+Upstream base
+-------------
+golang.org/x/sys v0.39.0, origin go.googlesource.com/sys@08e54827f670,
+module hash h1:CvCKL8MeisomCi6qNZ+wbb0DN9E5AATixKsvNtMoMFk= (== src/cmd/go.sum:17);
+golang.org/x/term v0.38.0, h1:PQ5pkm/rLO6HnxFR7N2lJHOZX6Kez5Y1gDSJla6jo7Q=
+(== src/cmd/go.sum:21).  The seven upstream generator sources are pinned in
+`xsys-generators.sha256`; gen-host.sh refuses to run if the module copy differs.
+The whole vendored tree is upstream v0.39.0 except the files listed under
+"Vendored divergences" below.  x/term is unmodified.
+
+Decisions
+---------
+1. **Option A (supervisor, 2026-10-22).**  Upstream's darwin `Getdirentries`
+   is implemented through fdopendir/readdir_r.  Leopard's libSystem has no
+   `fdopendir`, and Go binds darwin dynamic imports non-lazily at launch, so
+   that wrapper cannot even be reached on ppc32.  Commit C1 moves the function
+   and `fdopendir` verbatim into `syscall_darwin_libcdir.go`, tagged
+   `//go:build darwin && !ppc`; darwin/ppc32 provides `Getdirentries` in
+   `syscall_darwin_ppc.go` with the raw `SYS_GETDIRENTRIES64` system call
+   (344; xnu-1228 syscalls.master, off_t * stored as a full 8 bytes by the
+   kernel).  amd64/arm64 behaviour is unchanged (A5 API identity).
+
+2. **Absent-function policy.**  The 23 `//sys` declarations in
+   `leopard-absent-sys.txt` name libc symbols that `nm -g -arch ppc
+   /usr/lib/libSystem.B.dylib` on the iBook (libSystem 111.1.7) does not
+   define.  gen-host.sh removes those declarations before mksyscall runs, and
+   `syscall_darwin_ppc.go` supplies the Go functions: 12 return ENOSYS, and
+   the 11 `*at` functions emulate AT_FDCWD with the path-based calls and
+   return ENOTSUP for any other dirfd.  Failing explicitly beats silently
+   operating on the wrong file, and `unix.UtimesNano` already falls back to
+   `utimes` on ENOSYS.  This mirrors std darwin/ppc (`src/syscall`).
+
+3. **ABSENT compatibility identifiers.**  14 identifiers that generic vendored
+   code references do not exist in Leopard's headers (`AT_FDCWD`, the other
+   `AT_*`, `AF_VSOCK`, `RawSockaddrVM`, `SaEndpoints`, `SaeAssocID`,
+   `SaeConnID`, `IPMreqn`, `IPv6MTUInfo`, `TCPConnectionInfo` and their
+   `Sizeof*`).  They live in `absent_darwin_ppc.go`, marked ABSENT, with the
+   ppc32 Go layout; every use fails in the Leopard kernel or in the ENOSYS /
+   ENOTSUP wrappers.  Nothing else is invented: names Leopard lacks that
+   upstream references elsewhere (Syscall9, Inet4Pktinfo, XVSockPCB, XSocket64,
+   XVSockPgen, VMADDR_*, CLOCK_*, UTIME_*, Timeval32, XSocket, XSockbuf) stay
+   undefined, and code that names them fails to compile.
+
+4. **Legacy (unsuffixed) libc symbols, shared with std.**  As in std
+   darwin/ppc32, the imports are the legacy entry points, not their
+   `$UNIX2003` twins, and struct layouts are pinned to `__DARWIN_UNIX03 0`
+   (the `#define` at the top of `types_darwin_leopard.go`).  This is
+   internally consistent and matches std's hardware-validated choice; a
+   port-wide decision on legacy vs POSIX/`$UNIX2003` semantics is still open
+   (contract §8 residual risk 1).
+
+5. **No Syscall9.**  darwin/ppc32 std has no `syscall.Syscall9`, so x/sys
+   cannot offer `unix.Syscall9`.  API parity exception, documented in
+   `asm_darwin_ppc.s`.
+
+6. **Generator inputs may only lose declarations proven ABSENT.**  The target
+   inputs (`types_darwin_leopard.go`, `mkerrors.sh`, `xsys_sizes.c`) are
+   copies of the upstream files with the changes recorded in
+   `types_darwin_leopard.patch` and `mkerrors-leopard.patch`; each deletion is
+   backed by a read-only grep of the Leopard SDK recorded in
+   runs/jic6x-3-gen-ibook-20261022T152445Z/input-changes-{1,2,3}.md.
+
+Inputs and sha256
+-----------------
+Upstream generators (see `xsys-generators.sha256`, verified before every run):
+
+  0e352432abfc14dd773409c3f954c92e0d89b1f1f61881c7390918f4a24584e3  mksyscall.go
+  1ec26e4f2de5965629c30b1e55a1f7f22c31cdfffba0c86f2f24f87109e3cd57  mkasm.go
+  b4538e16e3cea924a899a2bad1e6c883ae1e0b9b30ab70e7f4e5751060e45b0f  mkpost.go
+  f9f6c867cc2b54c7ea30498537103f16a84740b1993c89087c9bb38499b3f580  mksysnum.go
+  bf67d6e01915bf8c780cca5ef97627bd59820c4a365368d5df92fcb1b1556cd7  types_darwin.go
+  3c3a209840c282f60efc53a19c2b2a2eb7456d76af67bcf9ec20c69d06fbf812  mkerrors.sh
+  1e3f998aaa38a1fe14ec19f86ed70350cdece5e97cf472b4b5fb2d9b4ce1b0c9  mkall.sh
+
+Recipe files (this directory):
+
+  75b0a2a1728a52a274fb795f7d5705f1e22d13f37c1d6ff378099d66d014aae1  cc-ppc.sh
+  d1c8a556c651bcebe6d9af82f2872c678055f16383b04182cc9aacbe29ab95cf  gen-host.sh
+  9d78241e2cf8e3a52bb3087f4b42caaa61c3eb89614f33f5ec9a3f136cfdc8a5  gen-target.sh
+  4ef05703a6637053bb3d8813d5f2698c16bf4e72a8aba3c47b759f310e8ab056  leopard-absent-sys.txt
+  fe65a0f27609b6ddc5199e7e4caf07a0991287273b0f2300efcc5b43928fec7b  mkasm-ppc.patch
+  213190f628e5527bddb1202cd6a61e92022e2797709f9498cd96f615889b1a5a  mkerrors-leopard.patch
+  b7b96f72ed80efc035cfc348b8f558287c3d3beb3e269ae52897dac9c906a83a  mkerrors.sh
+  f30233d7155127457a313e4a38236ea5584ca834176606ec806b80ebb617c4ea  types_darwin_leopard.go
+  701bf0f209fc1e5273dae003513265863791d81c0ec496272ed1ccc3f0b25a56  types_darwin_leopard.patch
+  7b76668b398a082cfe16c6eebc585d52faecc9063e5b9373b0e806e3b3b08a26  xsys-generators.sha256
+  98f4a2f167a9d180bcea32ae7f72f98bce22472f367d3bb7ad08e0c747a1bf5e  xsys_sizes.c
+  955f2eff828f8b62de7407ab24e1436446088a4559b28239e946bb568ae81cb2  xsys_sizes.txt
+
+`types_darwin_leopard.go` == `golang.org/x/sys@v0.39.0/unix/types_darwin.go`
++ `types_darwin_leopard.patch`; `mkerrors.sh` == the module's `mkerrors.sh` +
+`mkerrors-leopard.patch` (both checked with `patch`, 2026-10-22).  The patches
+were generated against the hash-verified module copy, so the `---` path they
+name is the module's, not a worktree path; apply them with an explicit file
+argument (`patch out.go < types_darwin_leopard.patch`) or `-p1` on a copy whose
+name matches the `+++` line.
+
+Target generation outputs (produced on the iBook by the run below; not stored
+here because they are transcribed into the two committed tables):
+
+  622a93687e179aeed6ffed8bbb726b9d19754e52a97c22d5d2a7654b0f8249a4  ztypes.raw
+  29ee7a550687f050c0258ff45043f6a87b840a32280e19ee6cef3f6e266c39cb  zerrors.raw
+  955f2eff828f8b62de7407ab24e1436446088a4559b28239e946bb568ae81cb2  xsys_sizes.txt
+
+`xsys_sizes.txt` (committed here) is the C `sizeof` transcription check for 62
+types, measured by the same iBook gcc in the generation session.  It is
+comparison evidence, not a grade: the grading oracle for the 42 overlapping
+types and 109 measured rows is the pmg5 C-probe data in
+`src/syscall/testdata/darwin_ppc32/layout.txt`, and the constant oracle is
+`constants.txt`.
+
+Generators and their inputs (what makes each output)
+----------------------------------------------------
+* `ztypes_darwin_ppc.go`     `go tool cgo -godefs types_darwin_leopard.go` on
+                             the target, then `go run mkpost.go` on the host.
+                             Target changes vs upstream `types_darwin.go`:
+                             drop `<sys/vsock.h>`, `#include <sys/types.h>`
+                             before `<sys/kern_control.h>`, `stat_t`/`statfs_t`
+                             select `struct stat64`/`struct statfs64` for
+                             `__ppc__` as well, delete the ABSENT
+                             vsock/xsocket/sae/ip_mreqn/ip6_mtuinfo/tcp_conn
+                             declarations and the `AT_*` block, spell the C
+                             types cgo cannot classify (`_C_*`, `_Gid_t`,
+                             `_Socklen`, `FdSet`) directly, and drop
+                             `Timeval32`/`XSocket`/`XSockbuf` (Leopard never
+                             completes those types).
+* `zerrors_darwin_ppc.go`    `bash mkerrors.sh` on the target; the Leopard
+                             copy removes `#include <sys/clonefile.h>`,
+                             `<sys/vsock.h>`, `<sys/stdio.h>` and adds
+                             `<netinet/ip_mroute.h>` (SIOCGETSGCNT /
+                             SIOCGETVIFCNT, as std's mkerrors.sh does).
+* `zsyscall_darwin_ppc.go`   `mksyscall.go -b32 -tags darwin,ppc` on
+                             `syscall_bsd.go` + a *filtered* copy of
+                             `syscall_darwin.go` + `syscall_darwin_ppc.go`.
+* `zsyscall_darwin_ppc.s`    `mkasm.go darwin ppc` with the one-line
+                             `mkasm-ppc.patch` (`archPtrSize` learns
+                             `"ppc": 4`); the generated `darwin_ppc_test.go`
+                             is deleted.
+* `zsysnum_darwin_ppc.go`    `perl src/syscall/mksysnum_darwin.pl` on
+                             `reference/xnu/bsd/sys/syscall.h`
+                             (md5 33dfdddbb1866a4e524711b01d59aebe, identical
+                             to the iBook SDK's), `package syscall` →
+                             `package unix`, and the one rename below.
+
+Syscall-202 rename: std's `mksysnum_darwin.pl` emits `SYS___SYSCTL = 202`.
+x/sys spells entry 202 `SYS_SYSCTL` in `zsysnum_darwin_{amd64,arm64}.go` and
+provides `const SYS___SYSCTL = SYS_SYSCTL` in `syscall_darwin.go:101`, so the
+generated file is renamed to `SYS_SYSCTL` and must not declare
+`SYS___SYSCTL`.  gen-host.sh asserts that exactly one line was renamed; the
+line count (338) and every value are unchanged.
+
+Regeneration
+------------
+Host part (pure Go/perl; needs the worktree's `bin/go` and a hash-verified
+x/sys v0.39.0 module copy):
+
+    mkdir -p $SCR/stage && gen-host.sh $XSYS $WT $SCR/stage [ztypes.raw zerrors.raw]
+
+`XSYS` is `<GOMODCACHE>/golang.org/x/sys@v0.39.0`, `WT` the Go worktree,
+`$SCR/stage` an empty directory.  Outputs: `zsyscall_darwin_ppc.{go,s}`,
+`zsysnum_darwin_ppc.go`, plus `ztypes_darwin_ppc.go` and `zerrors_darwin_ppc.go`
+when the target raws are given.  Nothing is copied into the worktree; copy the
+files explicitly and re-insert the provenance header (the committed tables have
+a `// Port-local generation provenance` block after the `Code generated` line —
+see `git show C2 -- ztypes_darwin_ppc.go`).
+
+Target part (native darwin/ppc Go on Leopard, run on the iBook; never on the
+shared GOROOT — upload this directory to /tmp and run there):
+
+    tar -C <this dir> -cf - . | ssh ibook 'mkdir /tmp/jic6x3-gen-TS && tar -C /tmp/jic6x3-gen-TS -xpf -'
+    ssh ibook '...bounded-run.sh --cpu 0 --wall 1800 --prefix jic6x3-gen-full \
+        -- /bin/bash /tmp/jic6x3-gen-TS/gen-target.sh /tmp/jic6x3-gen-TS'
+    scp ibook:/tmp/jic6x3-gen-TS/{ztypes.raw,zerrors.raw,xsys_sizes.txt,rc.txt,host-identity.txt} .
+
+`gen-target.sh` sets `GOOS=darwin GOARCH=ppc CGO_ENABLED=1 GOENV=off
+GO111MODULE=off GOTOOLCHAIN=local CC=$PWD/cc-ppc.sh` and runs `mkerrors.sh`,
+`go tool cgo -godefs types_darwin_leopard.go` and `xsys_sizes.c`.  Every Go
+workload on the target goes through `tools/harness/bounded-run.sh`; the three
+rc values in `rc.txt` must be 0.  `cc-ppc.sh` execs `/usr/bin/gcc -arch ppc`
+after stripping `-fno-lto` (Tigerbrew gcc wrappers add it).  A
+`cc-ppc64.sh`/`godefs-preflight.go` pair is used only for the G0 negative
+control and is deliberately not committed.
+
+Evidence
+--------
+* `runs/jic6x-3-plan-20261022T1433Z/` — planner evidence: missing-symbol
+  baselines, the libSystem ppc symbol list, the Leopard SDK presence tables,
+  the amd64 libc import list, the before/after `go list` and `go doc -all`
+  baselines, and pf1–pf7.  Read-only for every lane.
+* `runs/jic6x-3-impl-20261022T150719Z/` — L1: C1, the host generation
+  (`h4-gen-host-stage1.log`), A6(a) with its two negative controls (`a6/`),
+  the 13-file kit (`h5-kit.sha256`).
+* `runs/jic6x-3-gen-ibook-20261022T152445Z/` — L2: the three target
+  invocations, the generated raws, `host-identity.txt`, and the input-change
+  records `input-changes-{1,2,3}.md` + `kit-inv3/`.
+* `runs/jic6x-3-impl-20261022T154034Z/` — L3: the integration run
+  (`h6-gen-host-stage2.log` regenerates all five tables), the A1–A8/A12/A13
+  gate logs, the probe source, and the A7 counts.
+* `runs/jic6x-3-hw-<TS>/` — L4: the iBook hardware legs (TestStdlib, the
+  probe, the mutant), the overlay manifest and the cleanup record.
+* Contract: `docs/jic6x-3-darwin-ppc-tables.md`; bead `goppc-jic6x.3`.
+
+Vendored divergences
+--------------------
+`cmd/vendor/golang.org/x/sys/unix` differs from v0.39.0 in exactly these files
+(A2):
+
+  syscall_darwin.go        C1: fdopendir + darwin Getdirentries moved out
+  syscall_darwin_libcdir.go  C1: new, `darwin && !ppc`, the moved code verbatim
+  syscall_darwin_ppc.go    new, port-local (arch helpers, Getdirentries, *at)
+  absent_darwin_ppc.go     new, port-local ABSENT compatibility identifiers
+  asm_darwin_ppc.s         new, port-local Syscall*/RawSyscall* → std forwarding
+  zsyscall_darwin_ppc.go   new, generated here
+  zsyscall_darwin_ppc.s    new, generated here
+  zsysnum_darwin_ppc.go    new, generated here
+  zerrors_darwin_ppc.go    new, generated here
+  ztypes_darwin_ppc.go     new, generated here
+
+plus the five files already differing before this work (port commit
+ba4a0942cc, linux/ppc): `syscall_linux_gc.go`, `syscall_linux_ppc.go`,
+`syscall_unix_gc.go`, `zsyscall_linux_ppc.go`,
+`zsyscall_linux_ppc_abi_test.go`.  `src/cmd/vendor/modules.txt` is untouched:
+adding files to an already-vendored package changes neither the versions nor
+the package list.  A future `go mod vendor` (or an x/sys bump) deletes the nine
+files and reverts C1; regenerate from this directory.
+
+Known limitations
+-----------------
+1. Legacy vs `$UNIX2003` libc entry points (see Decisions 4): corner-case errno
+   and semantics of `kill`, `fcntl`, `select`, `shmctl`, `mmap` differ from
+   amd64.  Open port-wide decision covering std and x/sys together.
+2. 12 Leopard-absent functions return ENOSYS; the `*at` family emulates
+   AT_FDCWD only and returns ENOTSUP otherwise.  `UtimesNanoAt` with any dirfd
+   therefore returns ENOSYS.  No in-tree darwin/ppc consumer exists today.
+3. The ABSENT shapes (`RawSockaddrVM`, `SaEndpoints`, `TCPConnectionInfo`,
+   `IPMreqn`, `IPv6MTUInfo`) have no Leopard authority; they exist only so
+   generic code compiles.  `SizeofTCPConnectionInfo` is the ppc32 Go size
+   (0x6c), not macOS's 0x70, so `getsockopt` cannot overrun the Go value.
+4. `unix.Syscall9` is absent on darwin/ppc32 (API parity exception, Decision 5).
+5. `Timeval32`, `XSocket`, `XSockbuf` and their `Sizeof*` are not defined:
+   Leopard never completes those C types and cgo therefore cannot emit them.
+6. `go vet`'s asmdecl cannot check ppc32 assembly ("cannot determine
+   architecture for assembly file"), so the frame sizes in `asm_darwin_ppc.s`
+   rest on review, the std precedent and the hardware probe executing
+   Syscall6 through Getdirentries.
+7. darwin/ppc64 tables are out of scope (goppc-proc-mil000.1.6.2); the same
+   pipeline would apply, using pmg5.

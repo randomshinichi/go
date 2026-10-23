@@ -403,6 +403,7 @@ func typecheckFiles(path string, filenames []string, importer Importer) (*Packag
 			errs = append(errs, err)
 		},
 		Importer: importer,
+		Sizes:    SizesFor("gc", runtime.GOARCH),
 	}
 	info := Info{Uses: make(map[*ast.Ident]Object)}
 	pkg, _ := conf.Check(path, fset, files, &info)

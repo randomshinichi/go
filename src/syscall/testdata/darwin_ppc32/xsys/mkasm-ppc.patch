@@ -1,0 +1,11 @@
+--- a/mkasm.go	2026-10-22 17:18:15.613152667 +0200
++++ b/mkasm.go	2026-10-22 17:18:15.616727461 +0200
+@@ -19,7 +19,7 @@
+ 
+ func archPtrSize(arch string) int {
+ 	switch arch {
+-	case "386", "arm":
++	case "386", "arm", "ppc":
+ 		return 4
+ 	case "amd64", "arm64", "mips64", "ppc64", "riscv64":
+ 		return 8

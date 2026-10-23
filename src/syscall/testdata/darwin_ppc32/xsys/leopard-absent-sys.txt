@@ -1,0 +1,44 @@
+# Leopard-absent libSystem functions: the //sys declarations of
+# golang.org/x/sys/unix v0.39.0 syscall_darwin.go that darwin/ppc32 must not
+# import. Oracle: runs/jic6x-3-plan-20261022T1433Z/xsys-libc-vs-leopard.txt,
+# derived from read-only `nm -g -arch ppc /usr/lib/libSystem.B.dylib` on the
+# iBook (Mac OS X 10.5.8, libSystem 111.1.7,
+# sha256 5b441f64f04e46e60ca895129795cf6bf6950222cc1823bfb819ab8bb64c2b8a,
+# 4122 symbols). The Go linker binds darwin dynamic imports non-lazily at
+# launch, so an import that Leopard lacks stops every program that merely
+# reaches the wrapper from starting.
+#
+# One data row per filtered declaration, tab-separated:
+# GoName<TAB>libSystem symbol<TAB>replacement. gen-host.sh drops the matching
+# //sys lines from the staged syscall_darwin.go and asserts that exactly 23
+# were removed.
+#
+# Two cases are handled but deliberately not listed here:
+#   Fstatat/fstatat64 - the ppc arch file (syscall_darwin_ppc.go) does not
+#     declare it, so mksyscall never emits the import; Fstatat is the AT_FDCWD
+#     emulation in syscall_darwin_ppc.go.
+#   fdopendir - moved out of syscall_darwin.go by commit C1
+#     (syscall_darwin_libcdir.go, tagged darwin && !ppc).
+readdir_r	readdir_r	dropped: plain symbol is the 32-bit-inode variant; its only caller moved to syscall_darwin_libcdir.go
+utimensat	utimensat	ENOSYS (UtimesNano falls back to utimes)
+renamexNp	renamex_np	ENOSYS
+renameatxNp	renameatx_np	ENOSYS
+pthread_chdir_np	pthread_chdir_np	ENOSYS
+pthread_fchdir_np	pthread_fchdir_np	ENOSYS
+connectx	connectx	ENOSYS
+ClockGettime	clock_gettime	ENOSYS
+Clonefile	clonefile	ENOSYS
+Clonefileat	clonefileat	ENOSYS
+Fclonefileat	fclonefileat	ENOSYS
+Faccessat	faccessat	AT_FDCWD emulation
+Fchmodat	fchmodat	AT_FDCWD emulation
+Fchownat	fchownat	AT_FDCWD emulation
+Linkat	linkat	AT_FDCWD emulation
+Mkdirat	mkdirat	AT_FDCWD emulation
+Openat	openat	AT_FDCWD emulation
+Readlinkat	readlinkat	AT_FDCWD emulation
+Renameat	renameat	AT_FDCWD emulation
+Symlinkat	symlinkat	AT_FDCWD emulation
+Unlinkat	unlinkat	AT_FDCWD emulation
+preadv	preadv	ENOSYS
+pwritev	pwritev	ENOSYS
