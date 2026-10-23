@@ -33,7 +33,7 @@ func ppcAtTestDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		for _, name := range []string{"file", "renamed", "link", "d", "new", "excl"} {
+		for _, name := range []string{"file", "renamed", "link", "sub", "d", "new", "excl"} {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 		if err := os.Remove(dir); err != nil {
