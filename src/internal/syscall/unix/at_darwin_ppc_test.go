@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // These tests are the Unix-layer controls for the anchored backend described in
@@ -295,17 +294,10 @@ func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 	wantContent(t, filepath.Join(cwdDir, "file"), "cwd")
 	wantAbsent(t, filepath.Join(cwdDir, "moved"))
 
-	// No-follow chmod: a following chmod would change the wrong object, and the
-	// setattrlist form has not passed its parity gates.
-	if err := unix.Fchmodat(fd, "file", 0600, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Fchmodat(AT_SYMLINK_NOFOLLOW) = %v; want ENOTSUP", err)
-	}
-
-	// Timestamps through a real descriptor are refused for the same reason.
-	now := syscall.NsecToTimespec(time.Now().UnixNano())
-	if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{now, now}, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Utimensat(real dirfd) = %v; want ENOTSUP", err)
-	}
+	// The no-follow metadata forms are no longer refused here: they are served
+	// by setattrlist(FSOPT_NOFOLLOW) and have their own controls in
+	// TestAtDarwinPPCMetadataDarwinPPC. The forms that stay refused are the ones
+	// with no equivalent, and each must still refuse without mutating anything.
 
 	// The anchored open of a real descriptor is not "supported" for a file
 	// descriptor that is not a directory: the kernel interface requires a
@@ -369,4 +361,184 @@ func TestOpenatDarwinPPCAtFDCWDFallsBackToPath(t *testing.T) {
 	if err := syscall.Close(fd); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestAtDarwinPPCMetadataDarwinPPC is the Unix-layer control for the two
+// no-follow metadata operations, which Leopard expresses only as
+// setattrlist(FSOPT_NOFOLLOW) (there is no lchmod and no lutimes syscall, and
+// libSystem's lchmod/lutimes are built on this same request — disassembled and
+// measured on the target, runs/root-at-metadata-20261023).
+//
+// Every case names the entry in the anchor tree that must change and the decoy
+// entry of the same name in the working directory that must not: the decoy is
+// what makes "acted relative to the descriptor" distinguishable from "acted
+// relative to the process cwd". The times are chosen far from "now" so a
+// request that silently did nothing cannot look like success.
+func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
+	anchorDir, cwdDir, fd := atTree(t)
+	anchorPath := func(name string) string { return filepath.Join(anchorDir, name) }
+
+	// A symlink inside the anchor, and a decoy file of the same name outside it,
+	// so "changed the link itself" is distinguishable from "followed it" and
+	// from "changed the cwd's file".
+	if err := os.WriteFile(anchorPath("target"), []byte("t"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target", anchorPath("slink")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwdDir, "slink"), []byte("decoy"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(anchorPath("target"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	lstat := func(t *testing.T, path string) syscall.Stat_t {
+		t.Helper()
+		var st syscall.Stat_t
+		if err := syscall.Lstat(path, &st); err != nil {
+			t.Fatalf("Lstat %s: %v", path, err)
+		}
+		return st
+	}
+
+	t.Run("ChmodNofollowRegularFile", func(t *testing.T) {
+		if err := unix.Fchmodat(fd, "file", 0641, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Fchmodat(AT_SYMLINK_NOFOLLOW): %v", err)
+		}
+		if got := lstat(t, anchorPath("file")).Mode & 0o777; got != 0641 {
+			t.Errorf("anchor file mode = %o; want 641", got)
+		}
+		// The decoy in the working directory keeps its own mode.
+		if got := lstat(t, filepath.Join(cwdDir, "file")).Mode & 0o777; got != 0600 {
+			t.Errorf("cwd file mode = %o; want the untouched 600", got)
+		}
+	})
+
+	t.Run("ChmodNofollowChangesTheLinkNotItsTarget", func(t *testing.T) {
+		if err := unix.Fchmodat(fd, "slink", 0700, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Fchmodat(AT_SYMLINK_NOFOLLOW) on a symlink: %v", err)
+		}
+		if got := lstat(t, anchorPath("slink")).Mode & 0o777; got != 0700 {
+			t.Errorf("anchor symlink mode = %o; want 700 on the link itself", got)
+		}
+		if got := lstat(t, anchorPath("target")).Mode & 0o777; got != 0644 {
+			t.Errorf("symlink target mode = %o; want the untouched 644 (the link was followed)", got)
+		}
+		if got := lstat(t, filepath.Join(cwdDir, "slink")).Mode & 0o777; got != 0600 {
+			t.Errorf("cwd decoy mode = %o; want the untouched 600", got)
+		}
+	})
+
+	// chmod(2) masks the mode with ALLPERMS (bsd/vfs/vfs_syscalls.c:4106-4117).
+	// File-type bits passed in the mode must not reach the file.
+	t.Run("ChmodMasksAllPerms", func(t *testing.T) {
+		if err := unix.Fchmodat(fd, "file", 0o170701, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Fchmodat with high mode bits: %v", err)
+		}
+		st := lstat(t, anchorPath("file"))
+		if got := st.Mode & 0o777; got != 0701 {
+			t.Errorf("mode = %o; want 701", got)
+		}
+		if st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+			t.Errorf("file type = %o; want a regular file: the type bits in the mode must be masked, not stored", st.Mode&syscall.S_IFMT)
+		}
+	})
+
+	t.Run("ChmodMissingName", func(t *testing.T) {
+		if err := unix.Fchmodat(fd, "no-such-entry", 0600, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOENT) {
+			t.Errorf("Fchmodat(missing) = %v; want ENOENT", err)
+		}
+	})
+
+	// Explicit times: the two times are distinguishable, and one second of
+	// separation keeps them so after the filesystem's own rounding.
+	mod := syscall.Timespec{Sec: 1300000001, Nsec: 0}
+	acc := syscall.Timespec{Sec: 1300000000, Nsec: 0}
+	setStamp := func(t *testing.T, path string) {
+		t.Helper()
+		if err := syscall.UtimesNano(path, []syscall.Timespec{{Sec: 1200000000}, {Sec: 1200000000}}); err != nil {
+			t.Fatalf("UtimesNano(%s): %v", path, err)
+		}
+	}
+	checkTimes := func(t *testing.T, path string, wantAcc, wantMod int32) {
+		t.Helper()
+		st := lstat(t, path)
+		if got := st.Atimespec.Sec; got != wantAcc {
+			t.Errorf("%s atime = %d; want %d", path, got, wantAcc)
+		}
+		if got := st.Mtimespec.Sec; got != wantMod {
+			t.Errorf("%s mtime = %d; want %d", path, got, wantMod)
+		}
+	}
+
+	t.Run("UtimensatBoth", func(t *testing.T) {
+		setStamp(t, anchorPath("file"))
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{acc, mod}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Utimensat: %v", err)
+		}
+		checkTimes(t, anchorPath("file"), acc.Sec, mod.Sec)
+		checkTimes(t, filepath.Join(cwdDir, "file"), 1200000000, 1200000000)
+	})
+
+	t.Run("UtimensatModTimeOnly", func(t *testing.T) {
+		setStamp(t, anchorPath("file"))
+		omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{omit, mod}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Utimensat(MODTIME only): %v", err)
+		}
+		// The access time keeps the stamp it had: the omitted attribute is not
+		// read back and rewritten, it is not sent at all.
+		checkTimes(t, anchorPath("file"), 1200000000, mod.Sec)
+	})
+
+	t.Run("UtimensatAcctimeOnly", func(t *testing.T) {
+		setStamp(t, anchorPath("file"))
+		omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{acc, omit}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Utimensat(ACCTIME only): %v", err)
+		}
+		checkTimes(t, anchorPath("file"), acc.Sec, 1200000000)
+	})
+
+	t.Run("UtimensatSymlinkNofollow", func(t *testing.T) {
+		setStamp(t, anchorPath("slink"))
+		setStamp(t, anchorPath("target"))
+		if err := unix.Utimensat(fd, "slink", &[2]syscall.Timespec{acc, mod}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Utimensat on a symlink: %v", err)
+		}
+		checkTimes(t, anchorPath("slink"), acc.Sec, mod.Sec)
+		checkTimes(t, anchorPath("target"), 1200000000, 1200000000)
+	})
+
+	// Both times omitted must still resolve the pathname: a missing name is
+	// ENOENT, not a silent success, and an existing name is not modified.
+	t.Run("UtimensatBothOmitted", func(t *testing.T) {
+		setStamp(t, anchorPath("file"))
+		omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{omit, omit}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Utimensat(both omitted) on an existing name: %v", err)
+		}
+		checkTimes(t, anchorPath("file"), 1200000000, 1200000000)
+		if err := unix.Utimensat(fd, "no-such-entry", &[2]syscall.Timespec{omit, omit}, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOENT) {
+			t.Errorf("Utimensat(both omitted) on a missing name = %v; want ENOENT", err)
+		}
+	})
+
+	// The forms this backend does not claim are refused rather than
+	// approximated, and the refusals are named so that changing one is an edit.
+	t.Run("RetainedRefusals", func(t *testing.T) {
+		now := syscall.Timespec{Sec: 0, Nsec: -1} // UTIME_NOW
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{now, now}, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Utimensat(UTIME_NOW) = %v; want ENOTSUP (the different UTIME_NOW permission rule is not claimed)", err)
+		}
+		if err := unix.Utimensat(fd, "file", nil, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Utimensat(nil times) = %v; want ENOTSUP (utimes(NULL) is \"both times now\")", err)
+		}
+		half := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: 1234}
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{half, half}, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.EINVAL) {
+			t.Errorf("Utimensat(UTIME_OMIT mixed with a timestamp) = %v; want EINVAL", err)
+		}
+	})
 }

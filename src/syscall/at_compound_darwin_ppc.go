@@ -26,6 +26,8 @@ import (
 //go:linkname atStatatCompound
 //go:linkname atChownatCompound
 //go:linkname atChmodatCompound
+//go:linkname atChmodNofollowCompound
+//go:linkname atUtimensatCompound
 //go:linkname atRenameatCompound
 
 // Leopard has no *at family, but xnu-1228 has two kernel interfaces that make
@@ -130,6 +132,12 @@ type atCompoundReq struct {
 	// not the caller's: the caller is parked on a channel while the helper
 	// runs, and a parked goroutine's stack may be moved or shrunk.
 	out *Stat_t
+
+	// keepAlist and keepAttr hold the two buffers a setattrlist(2) request
+	// points at, for the same reason. They are after atReqOpErr, so they do not
+	// move any offset the native routine uses.
+	keepAlist *atAttrlist
+	keepAttr  *byte
 }
 
 // The two private (SPI) fcntl commands this file uses, from bsd/sys/fcntl.h:235.
@@ -149,6 +157,34 @@ const (
 // atDot is the pathname the identity check stats. It is a package variable so
 // that its address is stable and never on a goroutine stack.
 var atDot = [2]byte{'.', 0}
+
+// atAttrlist is the ppc32 struct attrlist that setattrlist(2) copies in
+// (bsd/sys/attr.h:65-86 for the 32-bit field widths; the shape is fixed-width,
+// so it is the same 24 bytes on both ABIs). Measured on the target in
+// runs/root-at-metadata-20261023: sizeof 24, bitmapcount at 0, reserved at 2,
+// commonattr/volattr/dirattr/fileattr/forkattr at 4/8/12/16/20.
+type atAttrlist struct {
+	bitmapcount uint16
+	reserved    uint16
+	commonattr  uint32
+	volattr     uint32
+	dirattr     uint32
+	fileattr    uint32
+	forkattr    uint32
+}
+
+// The attrlist values the no-follow metadata forms use, from bsd/sys/attr.h.
+// ATTR_BIT_MAP_COUNT is the only accepted bitmapcount
+// (bsd/vfs/vfs_attrlist.c:1578-1581), FSOPT_NOFOLLOW keeps the final component
+// unresolved (vfs_attrlist.c:1571-1574), and ACCESSMASK/MODTIME/ACCTIME are the
+// three attributes Root.Chmod and Root.Chtimes need.
+const (
+	atAttrBitMapCount   = 5
+	atFsOptNoFollow     = 0x00000001
+	atAttrCmnModTime    = 0x00000400
+	atAttrCmnAcctime    = 0x00001000
+	atAttrCmnAccessMask = 0x00020000
+)
 
 // atCompound is implemented in at_compound_darwin_ppc.s.
 func atCompound(req *atCompoundReq)
@@ -404,6 +440,89 @@ func atChmodatCompound(anchor int, path string, mode uint32) error {
 	req.w1 = uintptr(mode)
 	_, err = atCompoundDispatch(req)
 	return err
+}
+
+// atSetattrCompound is one setattrlist(2) request relative to a held directory
+// descriptor, run in the private-cwd compound. The kernel takes five arguments
+// (path, attrlist, buffer, bufferSize, options), so they occupy R3..R7 — the
+// request's five argument words — and no packing is involved.
+//
+// The attribute payload is passed as bytes, but it is built from typed values
+// by the callers below, so its field order and width are the compiler's, not a
+// hand-written byte sequence.
+func atSetattrCompound(anchor int, path string, alist *atAttrlist, attr []byte) error {
+	req, err := atNewRequest(SYS_SETATTRLIST, anchor, path)
+	if err != nil {
+		return err
+	}
+	var buf *byte
+	if len(attr) > 0 {
+		buf = &attr[0]
+	} else {
+		// An attribute-less request still has to resolve the pathname (that is
+		// how utimensat(2) reports ENOENT when both times are UTIME_OMIT), but
+		// a zero bufferSize is unusable: the kernel allocates bufferSize bytes
+		// and fails with ENOMEM for a zero-size request (measured on the
+		// target; runs/root-at-metadata-20261023). One harmless byte is passed
+		// instead, and no attribute is unpacked from it.
+		buf = &atDot[0]
+		attr = atDot[:1]
+	}
+	req.keepAlist = alist
+	req.keepAttr = buf
+	req.w1 = uintptr(unsafe.Pointer(alist))
+	req.w2 = uintptr(unsafe.Pointer(buf))
+	req.w3 = uintptr(len(attr))
+	req.w4 = uintptr(atFsOptNoFollow)
+	_, err = atCompoundDispatch(req)
+	runtime.KeepAlive(alist)
+	runtime.KeepAlive(attr)
+	return err
+}
+
+// atChmodNofollowCompound is Fchmodat(AT_SYMLINK_NOFOLLOW) for a real directory
+// descriptor: setattrlist with FSOPT_NOFOLLOW selecting ATTR_CMN_ACCESSMASK.
+//
+// Leopard has no lchmod syscall, and libSystem's lchmod is built on exactly this
+// request for a symlink and on plain chmod(2) otherwise (disassembled on the
+// target: _lchmod lstat's, compares st_mode's type nibble with S_IFLNK, and
+// calls setattrlist with bitmapcount 5, commonattr ATTR_CMN_ACCESSMASK, a 4-byte
+// mode buffer and FSOPT_NOFOLLOW). os.Root.Chmod resolves symlinks before it
+// gets here, so the no-follow form is the one that keeps a replaced component
+// inside the root.
+func atChmodNofollowCompound(anchor int, path string, mode uint32) error {
+	al := &atAttrlist{bitmapcount: atAttrBitMapCount, commonattr: atAttrCmnAccessMask}
+	attr := &struct{ mode uint32 }{mode: mode}
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(attr)), unsafe.Sizeof(*attr))
+	return atSetattrCompound(anchor, path, al, buf)
+}
+
+// atUtimensatCompound is Utimensat(AT_SYMLINK_NOFOLLOW) for a real directory
+// descriptor. A nil mod or acc omits that attribute entirely; the kernel unpacks
+// the selected timespec attributes in bitmap order, MODTIME before ACCTIME
+// (bsd/vfs/vfs_attrlist.c:1663-1674), and an omitted one is never read back from
+// the file and written out again.
+//
+// Each timespec is 8 bytes for a 32-bit caller: the kernel unpacks
+// sizeof(struct timespec) for a non-64-bit process (ATTR_UNPACK_TIME,
+// vfs_attrlist.c:1526-1536), and its timespec is int32 sec/nsec here.
+func atUtimensatCompound(anchor int, path string, mod, acc *Timespec) error {
+	var al atAttrlist
+	al.bitmapcount = atAttrBitMapCount
+	var buf [2]Timespec
+	n := 0
+	if mod != nil {
+		al.commonattr |= atAttrCmnModTime
+		buf[n] = *mod
+		n++
+	}
+	if acc != nil {
+		al.commonattr |= atAttrCmnAcctime
+		buf[n] = *acc
+		n++
+	}
+	attr := unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), n*int(unsafe.Sizeof(buf[0])))
+	return atSetattrCompound(anchor, path, &al, attr)
 }
 
 // atRenameatCompound is Renameat when both operands share one anchor.

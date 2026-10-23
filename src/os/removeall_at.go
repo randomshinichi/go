@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build (unix || wasip1 || windows) && !(darwin && (ppc || ppc64))
+//go:build (unix || wasip1 || windows) && !(darwin && ppc64)
 
 package os
 
@@ -17,6 +17,16 @@ func removeAll(path string) error {
 		// fail silently to retain compatibility with previous behavior
 		// of RemoveAll. See issue 28830.
 		return nil
+	}
+
+	// On darwin/ppc32 the descriptor walk below needs the anchored *at backend,
+	// which exists only on the kernel this port measured it on. Where it is
+	// absent the call keeps working through the path-based algorithm instead of
+	// failing, which is the behaviour every Darwin/ppc build had before the
+	// backend existed. On every other platform confinedRemoveAll is a constant
+	// true. See removeall_darwin_ppc.go.
+	if !confinedRemoveAll() {
+		return removeAllByPath(path)
 	}
 
 	// The rmdir system call does not permit removing ".",

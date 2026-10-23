@@ -18,15 +18,15 @@ import "internal/syscall/unix"
 //     is not enabled it returns ENOTSUP, which is the honest answer rather than
 //     a pathname lookup that could describe a replaced directory.
 //
-//   - For an ordinary directory File, the confined form would work too, but the
-//     listing path it belongs to still routes through the older substitute: the
-//     descriptor is resolved to a path with F_GETPATH and the entry is lstat'ed
-//     by that path (unix.LstatatByPath). That loses the descriptor-based
-//     lookup's symlink-race (TOCTOU) protection -- if the directory is moved or
-//     replaced between the lookup and the lstat, the FileInfo describes the
-//     wrong file -- and it is a read, never a write. Retiring it in favour of
-//     unix.Fstatat is a separate, reviewable step with its own controls
-//     (docs/leopard-at-compat-design.md, "Integration").
+//   - For an ordinary directory File the same confined form is now the primary
+//     answer too, which retires the older substitute for the kernels where the
+//     backend exists: it used to resolve the descriptor to a path with F_GETPATH
+//     and lstat the entry by that path (unix.LstatatByPath), losing the
+//     descriptor-based lookup's symlink-race protection and failing with
+//     ENAMETOOLONG on a path longer than MAXPATHLEN. The substitute is kept only
+//     as the fallback for a kernel where the anchored backend is disabled, since
+//     there the descriptor form cannot run at all; it is a read either way, never
+//     a write.
 //
 // Per-arch file (darwin_ppc.go / darwin_ppc64.go), not merged: the same xnu-1228
 // kernel serves both ABIs so this logic is arch-neutral, but keeping them
@@ -36,8 +36,9 @@ func (f *File) lstatatNolog(name string) (FileInfo, error) {
 	var fs fileStat
 	var err error
 	inRoot := f.inRoot
+	confined := inRoot || unix.AnchoredAvailable()
 	if rerr := f.pfd.RawControl(func(fd uintptr) {
-		if inRoot {
+		if confined {
 			err = unix.Fstatat(int(fd), name, &fs.sys, unix.AT_SYMLINK_NOFOLLOW)
 			return
 		}
