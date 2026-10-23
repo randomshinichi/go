@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // These tests are the Unix-layer controls for the anchored backend described in
@@ -32,7 +33,8 @@ func ppcAtTestDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		for _, name := range []string{"file", "renamed", "link", "sub", "d", "new", "excl"} {
+		for _, name := range []string{"file", "renamed", "link", "sub", "d", "new", "excl",
+			"target", "slink", "alt", "fifo", "while-blocked"} {
 			_ = os.Remove(filepath.Join(dir, name))
 		}
 		if err := os.Remove(dir); err != nil {
@@ -374,6 +376,10 @@ func TestOpenatDarwinPPCAtFDCWDFallsBackToPath(t *testing.T) {
 // what makes "acted relative to the descriptor" distinguishable from "acted
 // relative to the process cwd". The times are chosen far from "now" so a
 // request that silently did nothing cannot look like success.
+// timeNowDarwinPPC is the current time in seconds, for the one assertion that
+// has to compare against a clock.
+func timeNowDarwinPPC() int32 { return int32(time.Now().Unix()) }
+
 func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
 	anchorDir, cwdDir, fd := atTree(t)
 	anchorPath := func(name string) string { return filepath.Join(anchorDir, name) }
@@ -475,6 +481,7 @@ func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
 
 	t.Run("UtimensatBoth", func(t *testing.T) {
 		setStamp(t, anchorPath("file"))
+		setStamp(t, filepath.Join(cwdDir, "file"))
 		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{acc, mod}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			t.Fatalf("Utimensat: %v", err)
 		}
@@ -493,13 +500,30 @@ func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
 		checkTimes(t, anchorPath("file"), 1200000000, mod.Sec)
 	})
 
-	t.Run("UtimensatAcctimeOnly", func(t *testing.T) {
+	// An access-time-only request is the one form HFS+ interprets differently: it
+	// is a lazy access-time touch, so the supplied value is discarded and the
+	// stored access time is the moment of the call (bsd/hfs/hfs_vnops.c:776-780,
+	// see the comment on atUtimensatNofollow). The control is the pair: with both
+	// times selected the value is honored exactly (UtimensatBoth), and with only
+	// the modification time selected the access time is untouched
+	// (UtimensatModTimeOnly), so this case pins the one divergence rather than
+	// excusing all three.
+	t.Run("UtimensatAcctimeOnlyIsAnHFSPlusTouch", func(t *testing.T) {
 		setStamp(t, anchorPath("file"))
 		omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+		before := timeNowDarwinPPC()
 		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{acc, omit}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			t.Fatalf("Utimensat(ACCTIME only): %v", err)
 		}
-		checkTimes(t, anchorPath("file"), acc.Sec, 1200000000)
+		st := lstat(t, anchorPath("file"))
+		if got := st.Mtimespec.Sec; got != 1200000000 {
+			t.Errorf("mtime = %d; want the untouched 1200000000: the omitted time must not be sent", got)
+		}
+		if got := st.Atimespec.Sec; got == acc.Sec {
+			t.Errorf("atime = %d; this test pins the measured HFS+ behaviour (a lazy touch, so not the requested value); if the filesystem now honors the value, update the record", got)
+		} else if got < before-5 {
+			t.Errorf("atime = %d; want around the current time %d for HFS+'s lazy access-time touch", got, before)
+		}
 	})
 
 	t.Run("UtimensatSymlinkNofollow", func(t *testing.T) {
@@ -536,9 +560,15 @@ func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
 		if err := unix.Utimensat(fd, "file", nil, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
 			t.Errorf("Utimensat(nil times) = %v; want ENOTSUP (utimes(NULL) is \"both times now\")", err)
 		}
-		half := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: 1234}
-		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{half, half}, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.EINVAL) {
-			t.Errorf("Utimensat(UTIME_OMIT mixed with a timestamp) = %v; want EINVAL", err)
+		// POSIX says tv_sec is ignored when tv_nsec is UTIME_OMIT, so this
+		// spelling is an omission and must not be an error.
+		half := syscall.Timespec{Sec: 12, Nsec: unix.UTIME_OMIT}
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{half, half}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Errorf("Utimensat(UTIME_OMIT with a non-sentinel tv_sec) = %v; want nil", err)
+		}
+		bad := syscall.Timespec{Sec: 0, Nsec: 1 << 30}
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{bad, bad}, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.EINVAL) {
+			t.Errorf("Utimensat(nanoseconds out of range) = %v; want EINVAL", err)
 		}
 	})
 }

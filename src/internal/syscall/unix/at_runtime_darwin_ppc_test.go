@@ -73,10 +73,12 @@ func TestAtDarwinPPCLockedCallerDarwinPPC(t *testing.T) {
 		}
 		// A goroutine that is locked and then exits without clearing would leak
 		// its private cwd into whichever thread it was on, so clean up even if an
-		// assertion below fails.
+		// assertion below fails. The last clear below sets cleared, so the two
+		// paths do not both report.
+		cleared := false
 		defer func() {
-			if err := rawPthreadFchdir(-1); err != nil {
-				t.Errorf("clearing the caller's private cwd: %v", err)
+			if !cleared {
+				rawPthreadFchdir(-1)
 			}
 		}()
 
@@ -85,7 +87,7 @@ func TestAtDarwinPPCLockedCallerDarwinPPC(t *testing.T) {
 			t.Errorf("Getwd after installing a private cwd: %v", err)
 			return
 		}
-		if got != callerDir && !sameFile(t, got, callerDir) {
+		if !sameFile(t, got, callerDir) {
 			t.Errorf("this thread's cwd is %q; want its own private cwd %q (the install did not take)", got, callerDir)
 			return
 		}
@@ -105,7 +107,7 @@ func TestAtDarwinPPCLockedCallerDarwinPPC(t *testing.T) {
 			t.Errorf("Getwd after the operation: %v", err)
 			return
 		}
-		if got != callerDir && !sameFile(t, got, callerDir) {
+		if !sameFile(t, got, callerDir) {
 			t.Errorf("after the operation this thread's cwd is %q; want the caller's private cwd %q preserved: the compound must not touch the caller's thread",
 				got, callerDir)
 		}
@@ -116,12 +118,13 @@ func TestAtDarwinPPCLockedCallerDarwinPPC(t *testing.T) {
 			t.Errorf("clearing the caller's private cwd: %v; want nil (the compound's own clear must not have removed it)", err)
 			return
 		}
+		cleared = true
 		got, err = syscall.Getwd()
 		if err != nil {
 			t.Errorf("Getwd after clearing: %v", err)
 			return
 		}
-		if got != cwdDir {
+		if !sameFile(t, got, cwdDir) {
 			t.Errorf("this thread's cwd is %q after clearing; want the process directory %q", got, cwdDir)
 		}
 	}()
@@ -240,10 +243,7 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 				// caller-stack address into the request unsafe.
 				var pad [512]byte
 				pad[i%len(pad)] = byte(i)
-				name := fmt.Sprintf("file%d", i%3)
-				if name != "file0" {
-					name = "file"
-				}
+				name := "file"
 				var st syscall.Stat_t
 				if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 					errs <- fmt.Errorf("worker %d iter %d: %v", w, i, err)
