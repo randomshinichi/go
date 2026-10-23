@@ -6,8 +6,7 @@
 
 package os
 
-// confinedRemoveAll reports whether RemoveAll may use the descriptor-based
-// algorithm. Everywhere except darwin/ppc32 the answer is fixed at build time;
-// see removeall_darwin_ppc.go for the one platform where it depends on the
-// kernel.
-func confinedRemoveAll() bool { return true }
+// removeAllPathFallback reports "not handled" everywhere except darwin/ppc32,
+// where the descriptor-based algorithm depends on a kernel that may not have the
+// anchored *at operations; see removeall_darwin_ppc.go.
+func removeAllPathFallback(path string) (handled bool, err error) { return false, nil }
