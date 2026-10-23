@@ -507,6 +507,7 @@ func TestRootChtimes(t *testing.T) {
 				atime: time.Now(),
 				mtime: time.Time{},
 			}} {
+				skipAtime := false
 				switch runtime.GOOS {
 				case "js", "plan9":
 					times.atime = times.atime.Truncate(1 * time.Second)
@@ -514,6 +515,20 @@ func TestRootChtimes(t *testing.T) {
 				case "illumos":
 					times.atime = times.atime.Truncate(1 * time.Microsecond)
 					times.mtime = times.mtime.Truncate(1 * time.Microsecond)
+				case "darwin":
+					// HFS+ on Leopard keeps whole seconds, so no exact
+					// nanosecond round trip is possible on darwin/ppc32 or
+					// darwin/ppc64 (measured: a sub-second setattrlist request
+					// comes back with tv_nsec 0, runs/root-at-metadata-20261023).
+					// And an access-time-ONLY request is a kernel lazy
+					// access-time touch that discards the supplied value
+					// (bsd/hfs/hfs_vnops.c:776-780), so when the modification
+					// time is omitted there is no access time to compare.
+					if runtime.GOARCH == "ppc" || runtime.GOARCH == "ppc64" {
+						times.atime = times.atime.Truncate(1 * time.Second)
+						times.mtime = times.mtime.Truncate(1 * time.Second)
+						skipAtime = times.mtime.IsZero()
+					}
 				}
 
 				err := root.Chtimes(test.open, times.atime, times.mtime)
@@ -527,7 +542,7 @@ func TestRootChtimes(t *testing.T) {
 				if got := st.ModTime(); !times.mtime.IsZero() && !got.Equal(times.mtime) {
 					t.Errorf("after root.Chtimes(%q, %v, %v): got mtime=%v, want %v", test.open, times.atime, times.mtime, got, times.mtime)
 				}
-				if checkAtimes {
+				if checkAtimes && !skipAtime {
 					if got := os.Atime(st); !times.atime.IsZero() && !got.Equal(times.atime) {
 						t.Errorf("after root.Chtimes(%q, %v, %v): got atime=%v, want %v", test.open, times.atime, times.mtime, got, times.atime)
 					}
