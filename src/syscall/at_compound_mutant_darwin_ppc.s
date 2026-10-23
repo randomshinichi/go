@@ -5,6 +5,7 @@
 //go:build darwin && ppc && goppc_atcompound_mutant
 
 #include "textflag.h"
+#include "funcdata.h"
 
 // Two deliberately broken copies of atCompound, compiled only under the
 // goppc_atcompound_mutant build tag. They exist so the cleanup oracle can be
@@ -50,6 +51,7 @@
 
 // func atCompoundSkipClearMutant(req *atCompoundReq)
 TEXT ·atCompoundSkipClearMutant(SB),NOSPLIT,$32-4
+	NO_LOCAL_POINTERS	// same 32-byte frame as atCompound; see that file
 	BL	runtime·entersyscall<ABIInternal>(SB)
 
 	LWZ	R10, req+0(FP)
@@ -130,6 +132,7 @@ atSkipClearDone:
 
 // func atCompoundClearFailMutant(req *atCompoundReq)
 TEXT ·atCompoundClearFailMutant(SB),NOSPLIT,$32-4
+	NO_LOCAL_POINTERS	// same 32-byte frame as atCompound; see that file
 	BL	runtime·entersyscall<ABIInternal>(SB)
 
 	LWZ	R10, req+0(FP)

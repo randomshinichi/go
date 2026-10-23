@@ -106,9 +106,10 @@ func TestAtCompatReleaseDarwinPPC(t *testing.T) {
 			t.Errorf("release %q: enabled = %v; want %v", tc.release, got, tc.want)
 		}
 	}
-	if !unix.AtCompatEnabledForTest() {
-		t.Fatal("the anchored backend is disabled on this kernel; these tests only make sense on the reviewed 9.8.x regime")
-	}
+	// Whether the gate is actually ON here is asserted in two build-tag-scoped
+	// files, because a test-only build can force it off
+	// (at_disabled_darwin_ppc_test.go, tag goppc_atcompat_disabled): the parser
+	// above is what this test can decide unconditionally.
 }
 
 // TestAtDarwinPPCAnchoredOps requires each served operation to reach the anchor.

@@ -347,6 +347,68 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 	}
 }
 
+// TestAtDarwinPPCCompoundGCScanDarwinPPC requires the garbage collector to be
+// able to scan a goroutine that is parked inside the native scope.
+//
+// This is deterministic where the stress test is probabilistic: a FIFO open for
+// reading blocks in the kernel, so the helper goroutine stays inside atCompound's
+// frame — in _Gsyscall, with the private cwd installed — until a writer appears.
+// scanstack() scans exactly that frame (gp.syscallsp, runtime/mgcmark.go:938-960),
+// so the GC it is forced to run here must walk through it. The routine's frame is
+// 32 bytes of locals plus the 24-byte Darwin linkage area, more than the 32 bytes
+// an assembly frame may have without a locals pointer map, so the frame carries
+// NO_LOCAL_POINTERS; without it this test dies with "fatal error: missing
+// stackmap" instead of failing an assertion. That is the measured pre-fix
+// behaviour of the subject this test was added with (see goppc-jic6x.1), which is
+// why the test is here rather than left to chance in the stress loop.
+func TestAtDarwinPPCCompoundGCScanDarwinPPC(t *testing.T) {
+	anchorDir, _, fd := atTree(t)
+	fifo := filepath.Join(anchorDir, "gcscan-fifo")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(fifo) })
+
+	blocked := make(chan error, 1)
+	go func() {
+		f, err := unix.Openat(fd, "gcscan-fifo", syscall.O_RDONLY, 0)
+		if err == nil {
+			syscall.Close(f)
+		}
+		blocked <- err
+	}()
+
+	// Give the helper time to reach the blocked open, then force several
+	// collections while its frame is on the stack. A collection that faults is
+	// the failure this control exists for; one that does not must find the
+	// goroutine parked in the syscall rather than finished.
+	time.Sleep(100 * time.Millisecond)
+	for i := 0; i < 4; i++ {
+		runtime.GC()
+		runtime.Gosched()
+	}
+	select {
+	case err := <-blocked:
+		t.Fatalf("the anchored FIFO open returned %v before a writer appeared; it did not block, so this control measured nothing", err)
+	default:
+	}
+
+	// Release it and require the operation to complete correctly.
+	w, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("opening the FIFO for writing: %v", err)
+	}
+	w.Close()
+	select {
+	case err := <-blocked:
+		if err != nil {
+			t.Errorf("the blocked anchored open failed after the writer appeared: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Errorf("the blocked anchored open did not return within 30s of a writer appearing")
+	}
+}
+
 // TestAtDarwinPPCCompoundRefusalsDarwinPPC is the negative control for the two
 // thread-state operations used by the other controls in this file: if 349 could
 // not be installed or cleared by a test, those controls would be measuring
