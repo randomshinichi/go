@@ -49,8 +49,9 @@
 // PowerPC an addi whose RA field is 0 uses the literal zero as the addend, so
 // the instruction is `li r0,N` no matter what R0 contains (and the kernel
 // restores the user's R0 across `sc`, so relying on a cleared R0 would be
-// wrong anyway). Tests: TestAtCompoundRegisterAuditDarwinPPC pins the resulting
-// machine code, and the layout test pins the request offsets.
+// wrong anyway). TestAtCompoundLayoutDarwinPPC pins request offsets and
+// TestAtCompoundSameMClearDarwinPPC exercises cleanup. The linked register audit
+// is run evidence, not a maintained test; see goppc-jic6x.1's corrections receipt.
 
 // atCompoundReq field offsets. These must match the atReq* constants in
 // at_compound_darwin_ppc.go; TestAtCompoundLayoutDarwinPPC fails if they drift.
