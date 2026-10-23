@@ -8,12 +8,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 )
 
-// TestRemoveAllNonEmptyDarwinPPC checks the path-based Leopard implementation,
-// including directory symlinks whose targets must survive removal.
+// TestRemoveAllNonEmptyDarwinPPC checks RemoveAll on a non-empty tree, including
+// a directory symlink whose target must survive removal. On Leopard 10.5.8 the
+// descriptor-based walk serves this (removeall_at.go), so this is a positive
+// control for it; on a Darwin/ppc kernel without the anchored backend the
+// path-based fallback serves it and the assertions are the same.
 func TestRemoveAllNonEmptyDarwinPPC(t *testing.T) {
 	base := t.TempDir()
 	outside := filepath.Join(base, "outside")
@@ -70,10 +72,9 @@ func TestRemoveAllNonEmptyDarwinPPC(t *testing.T) {
 // to "f" == "cwd". Each step gets a fresh root tree: several of them mutate it,
 // and sharing one made the expectations depend on the order the steps ran in.
 //
-// RemoveAll stays refused on this platform until the confined directory walk is
-// retired (docs/leopard-at-compat-design.md): it is listed here with its refusal
-// so that turning it into a working call is a visible edit, and so that the
-// no-mutation half is asserted now.
+// RemoveAll is served by the confined directory walk (removeall_at.go, selected
+// for this platform now that the anchored *at operations exist), so the step
+// asserts both that it succeeded and that it removed the root's own entry.
 func TestRootOpsConfinedDarwinPPC(t *testing.T) {
 	cwd := t.TempDir()
 	confinedTree(t, cwd, "cwd")
@@ -147,10 +148,10 @@ func TestRootOpsConfinedDarwinPPC(t *testing.T) {
 					t.Errorf("%s/s: %v, %v; want the symlink created inside the root", rootDir, fi, err)
 				}
 			}},
-		{"RemoveAll", func(r *os.Root) error { return r.RemoveAll("sub") }, syscall.ENOTSUP,
+		{"RemoveAll", func(r *os.Root) error { return r.RemoveAll("sub") }, nil,
 			func(t *testing.T, rootDir string) {
-				if fi, err := os.Lstat(filepath.Join(rootDir, "sub")); err != nil || !fi.IsDir() {
-					t.Errorf("%s/sub: %v, %v; the refusal must not remove anything", rootDir, fi, err)
+				if _, err := os.Lstat(filepath.Join(rootDir, "sub")); !os.IsNotExist(err) {
+					t.Errorf("%s/sub: %v; want the confined walk to have removed it inside the root", rootDir, err)
 				}
 			}},
 	}

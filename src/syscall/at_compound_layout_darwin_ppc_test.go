@@ -83,3 +83,52 @@ func TestOpenFromLayoutDarwinPPC(t *testing.T) {
 		t.Errorf("fopenfrom.o_pathname is at %d; want 8", pathOff)
 	}
 }
+
+// TestAttrlistLayoutDarwinPPC pins the request struct the no-follow metadata
+// forms hand to setattrlist(2). The numbers were measured on the target
+// (runs/root-at-metadata-20261023: sizeof 24, fields at 0/2/4/8/12/16/20); they
+// are fixed-width, so a struct drift is a silent kernel-side misread rather than
+// a build failure.
+func TestAttrlistLayoutDarwinPPC(t *testing.T) {
+	size, bitmap, reserved, common, vol, dir, file, fork := syscall.AttrlistLayoutForTest()
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"sizeof(attrlist)", size, 24},
+		{"bitmapcount", bitmap, 0},
+		{"reserved", reserved, 2},
+		{"commonattr", common, 4},
+		{"volattr", vol, 8},
+		{"dirattr", dir, 12},
+		{"fileattr", file, 16},
+		{"forkattr", fork, 20},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("attrlist.%s is at/size %d; want the measured %d", tc.name, tc.got, tc.want)
+		}
+	}
+
+	bitmapCount, noFollow, accessMask, modTime, acctime := syscall.AttrlistConstForTest()
+	if bitmapCount != 5 {
+		t.Errorf("ATTR_BIT_MAP_COUNT = %d; want 5 (the only accepted bitmapcount)", bitmapCount)
+	}
+	if noFollow != 1 {
+		t.Errorf("FSOPT_NOFOLLOW = %d; want 1", noFollow)
+	}
+	if accessMask != 0x00020000 {
+		t.Errorf("ATTR_CMN_ACCESSMASK = %#x; want 0x20000", accessMask)
+	}
+	if modTime != 0x00000400 {
+		t.Errorf("ATTR_CMN_MODTIME = %#x; want 0x400", modTime)
+	}
+	if acctime != 0x00001000 {
+		t.Errorf("ATTR_CMN_ACCTIME = %#x; want 0x1000", acctime)
+	}
+	// 32-bit caller: the kernel unpacks an 8-byte timespec, not the 16-byte
+	// struct a 64-bit process would send.
+	if got := syscall.TimespecSizeForTest(); got != 8 {
+		t.Errorf("timespec in the attribute buffer is %d bytes; the kernel unpacks 8 for a 32-bit caller", got)
+	}
+}

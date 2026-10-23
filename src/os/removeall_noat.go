@@ -4,6 +4,13 @@
 
 //go:build (js && wasm) || plan9 || (darwin && (ppc || ppc64))
 
+// On darwin/ppc32 this file no longer supplies RemoveAll directly: the
+// descriptor-based algorithm (removeall_at.go) is selected there, and this
+// path-based one is only the fallback for a Darwin kernel where the anchored
+// *at backend is disabled. See removeall_darwin_ppc.go. On js/wasm, plan9 and
+// darwin/ppc64 it remains the only implementation, through the one-line
+// wrapper in removeall_bypath.go.
+
 package os
 
 import (
@@ -12,7 +19,7 @@ import (
 	"syscall"
 )
 
-func removeAll(path string) error {
+func removeAllByPath(path string) error {
 	if path == "" {
 		// fail silently to retain compatibility with previous behavior
 		// of RemoveAll. See issue 28830.

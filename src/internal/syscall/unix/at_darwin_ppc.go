@@ -37,13 +37,18 @@ import (
 //     There is no race-free two-anchor rename interface here: only one cwd
 //     applies to a pathname, and F_GETPATH/volfs rebuild a pathname and keep
 //     the replacement race they were meant to remove.
-//   - Fchmodat with AT_SYMLINK_NOFOLLOW. The equivalent is setattrlist with
-//     FSOPT_NOFOLLOW, whose libc/permission/errno parity has not been
-//     established on this kernel; a following chmod would change the wrong
+//   - Fchmodat with AT_SYMLINK_NOFOLLOW and Utimensat with AT_SYMLINK_NOFOLLOW.
+//     The equivalent is setattrlist with FSOPT_NOFOLLOW, selecting
+//     ATTR_CMN_ACCESSMASK or the MODTIME/ACCTIME timespecs. Leopard has no
+//     lchmod and no lutimes syscall; libSystem's lchmod/lutimes are built on
+//     this same request (disassembled and measured on the target in
+//     runs/root-at-metadata-20261023), which is what makes it the honest
+//     equivalent rather than a following chmod that would change the wrong
 //     object.
-//   - Utimensat with a real descriptor. Same setattrlist candidate, and the
-//     timestamp edge cases (both times omitted, UTIME_NOW, permission rules)
-//     have to match Darwin before it can replace the refusal.
+//   - Utimensat with a real descriptor and a nil times pointer (utimes(NULL) is
+//     "both times now"), any UTIME_NOW timestamp, and the general UTIME_* forms:
+//     refused, because their permission rules differ from the explicit-time form
+//     this backend implements. os.Root.Chtimes never sends them.
 //
 // The backend is enabled only for the kernel this was designed and measured
 // against: a parsed kern.osrelease of 9.8.x, the declared Leopard 10.5.8
@@ -85,6 +90,12 @@ func atChownatCompound(anchor int, path string, uid, gid int, follow bool) error
 
 //go:linkname atChmodatCompound syscall.atChmodatCompound
 func atChmodatCompound(anchor int, path string, mode uint32) error
+
+//go:linkname atChmodNofollowCompound syscall.atChmodNofollowCompound
+func atChmodNofollowCompound(anchor int, path string, mode uint32) error
+
+//go:linkname atUtimensatCompound syscall.atUtimensatCompound
+func atUtimensatCompound(anchor int, path string, mod, acc *syscall.Timespec) error
 
 //go:linkname atRenameatCompound syscall.atRenameatCompound
 func atRenameatCompound(anchor int, oldpath, newpath string) error
@@ -226,15 +237,124 @@ func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
 		}
 		return atChmodatCompound(dirfd, path, mode)
 	case AT_SYMLINK_NOFOLLOW:
-		// os.Root.Chmod's form. Refused on a real descriptor: see the file
-		// comment. With AT_FDCWD it keeps the libc lchmod path it has today.
-		if dirfd != AT_FDCWD {
+		// os.Root.Chmod's form. With AT_FDCWD it keeps the libc lchmod path it
+		// has today, which itself resolves the final component and uses
+		// setattrlist (with FSOPT_NOFOLLOW) only for a symlink.
+		if dirfd == AT_FDCWD {
+			return lchmod(path, mode)
+		}
+		if !atCompatEnabled() {
 			return atUnsupported()
 		}
-		return lchmod(path, mode)
+		return atChmodNofollow(dirfd, path, mode)
 	}
 	return syscall.EINVAL
 }
+
+// atChmodNofollow is Fchmodat(AT_SYMLINK_NOFOLLOW) for a real directory
+// descriptor.
+func atChmodNofollow(anchor int, path string, mode uint32) error {
+	// chmod(2) masks the mode with ALLPERMS before the kernel sees it
+	// (bsd/vfs/vfs_syscalls.c:4106-4117); setattrlist's ATTR_CMN_ACCESSMASK is
+	// unpacked as an unmasked 32-bit value, so the mask is applied here to keep
+	// the two forms agreeing on the file-mode semantics the kernel documents.
+	err := atChmodNofollowCompound(anchor, path, mode&0o7777)
+	return atAuthErrno(err, true)
+}
+
+// atUtimensatNofollow is Utimensat(AT_SYMLINK_NOFOLLOW) for a real directory
+// descriptor, for the explicit-time form os.Root.Chtimes uses.
+//
+// UTIME_OMIT omits its attribute rather than reading the old value and writing
+// it back, so there is no read-modify-write window and no chance of rewriting an
+// ambient change. Both times omitted is a legal request: it still resolves the
+// pathname (which is how a missing name is reported) and authorizes nothing.
+func atUtimensatNofollow(anchor int, path string, times *[2]syscall.Timespec) error {
+	if times == nil {
+		// utimensat(..., NULL) means both times set to the current time, which
+		// needs a clock read inside the native scope and follows utimes(NULL)'s
+		// different permission rule. Refused rather than approximated.
+		return atUnsupported()
+	}
+	const utimeNow = -1
+	// times[0] is the access time and times[1] the modification time.
+	var sel [2]*syscall.Timespec
+	for i, ts := range times {
+		switch ts.Nsec {
+		case UTIME_OMIT:
+			if ts.Sec != UTIME_OMIT {
+				// Only the both-fields-omitted spelling of UTIME_OMIT can be
+				// expressed without inventing a value for the other field.
+				return syscall.EINVAL
+			}
+			continue
+		case utimeNow:
+			// UTIME_NOW is not claimed for this form; see the file comment.
+			return atUnsupported()
+		}
+		if ts.Nsec < 0 || ts.Nsec >= 1e9 {
+			return syscall.EINVAL
+		}
+		ts := ts
+		sel[i] = &ts
+	}
+	err := atUtimensatCompound(anchor, path, sel[1], sel[0])
+	return atAuthErrno(err, sel[0] != nil || sel[1] != nil)
+}
+
+// atAuthErrno maps the authorization failure a metadata change reports to the
+// errno the equivalent second-order libc call reports.
+//
+// The kernel returns EACCES from vnode_authorize for a metadata change the
+// caller may not make (bsd/vfs/vfs_subr.c:5965-6115), while chmod(2) and the
+// explicit-time utimes(2) turn exactly that failure into EPERM
+// (vfs_syscalls.c:3998-4006,4386-4394). libc's lchmod/lutimes reach those forms
+// for everything that is not a symlink, which is the only object os.Root.Chmod
+// and os.Root.Chtimes reach: both resolve a symlink before the call, so the
+// no-follow form here sees a non-symlink except for the documented
+// replaced-after-the-check race. Measured on the target: lchmod/lutimes on a
+// file the caller does not own return EPERM, and the same setattrlist request
+// returns EACCES (runs/root-at-metadata-20261023).
+//
+// auth is false when the request changes nothing, so no authorization step can
+// run and an EACCES can only come from pathname resolution, where the path forms
+// also keep EACCES.
+//
+// Residual, recorded rather than hidden: the kernel does not tell us whether an
+// EACCES came from resolving the name or from authorizing the change, so a
+// search-permission failure on the final component is reported as EPERM here
+// where the path-based call keeps EACCES. Both satisfy errors.Is(err,
+// fs.ErrPermission).
+func atAuthErrno(err error, auth bool) error {
+	if auth && err == syscall.EACCES {
+		return syscall.EPERM
+	}
+	return err
+}
+
+// AnchoredAvailable reports whether the anchored backend is enabled on this
+// kernel. Package os uses it to choose the confined descriptor form over the
+// pathname substitute for an ordinary directory File's entries; on a kernel
+// where the backend is off the substitute is the only form that works.
+func AnchoredAvailable() bool { return atCompatEnabled() }
+
+// Utimensat is utimensat(2) for this platform. Leopard has no utimensat, so the
+// shared implementation is syscall.utimensat's path form; the one case it cannot
+// express is a real directory descriptor with AT_SYMLINK_NOFOLLOW, which runs in
+// the private-cwd compound instead.
+func Utimensat(dirfd int, path string, times *[2]syscall.Timespec, flag int) error {
+	if dirfd == AT_FDCWD || flag != AT_SYMLINK_NOFOLLOW || !atCompatEnabled() {
+		return utimensatPath(dirfd, path, times, flag)
+	}
+	return atUtimensatNofollow(dirfd, path, times)
+}
+
+// utimensatPath is the path-based implementation: syscall.utimensat handles
+// UTIME_OMIT by stat-then-substitute for AT_FDCWD, which stays correct on the
+// caller's own thread.
+//
+//go:linkname utimensatPath syscall.utimensat
+func utimensatPath(dirfd int, path string, times *[2]syscall.Timespec, flag int) error
 
 func Fchownat(dirfd int, path string, uid, gid int, flags int) error {
 	switch flags {

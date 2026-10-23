@@ -7,6 +7,7 @@
 package syscall_test
 
 import (
+	"errors"
 	"runtime"
 	"syscall"
 	"testing"
@@ -40,10 +41,12 @@ func sameMDarwinPPC(t *testing.T, f func()) {
 // would move the endpoint for everyone, so both alternatives are excluded by
 // construction.
 //
-// What this does not cover: the "deliberate skip-clear mutant returns 0 from
-// raw 349(-1)" half of the design's G2 control needs a build variant of the
-// native routine, which is not added here (recorded as an open G2 item, not
-// claimed as covered).
+// The second half of the design's G2 control -- raw 349(-1) must return EBADF
+// for the production routine and 0 for a deliberate skip-clear variant -- is
+// asserted here for production (below) and by
+// TestAtCompoundSkipClearMutantDarwinPPC for a mutant built with the
+// goppc_atcompound_mutant tag. The mutant is a separate assembly copy used only
+// by that test build; the production routine carries no switch for it.
 func TestAtCompoundSameMClearDarwinPPC(t *testing.T) {
 	anchorDir := t.TempDir()
 	decoyDir := t.TempDir()
@@ -95,6 +98,13 @@ func TestAtCompoundSameMClearDarwinPPC(t *testing.T) {
 		if got := cwd(t); got != decoy {
 			t.Fatalf("before any compound call this thread's cwd is %q; want the process directory %q", got, decoy)
 		}
+		// With no private cwd installed, 349(-1) reports EBADF. This is the
+		// second, independent observation of "there is nothing to clear on this
+		// thread": Getwd cannot distinguish a private cwd equal to the process
+		// directory, and raw 349(-1) can.
+		if err := syscall.AtPthreadFchdirForTest(-1); !errors.Is(err, syscall.EBADF) {
+			t.Fatalf("349(-1) before any compound call = %v; want EBADF (this thread must start with no private cwd)", err)
+		}
 
 		// A served operation: enter, identity, lstat64, clear.
 		enter, ident, op := syscall.AtCompoundDirectForTest(anchorFd, "file")
@@ -103,6 +113,9 @@ func TestAtCompoundSameMClearDarwinPPC(t *testing.T) {
 		}
 		if got := cwd(t); got != decoy {
 			t.Errorf("after a successful compound call the thread's cwd is %q; want %q (the private cwd was not cleared on this M)", got, decoy)
+		}
+		if err := syscall.AtPthreadFchdirForTest(-1); !errors.Is(err, syscall.EBADF) {
+			t.Errorf("349(-1) after a successful compound call = %v; want EBADF: the routine must have cleared the private cwd it installed", err)
 		}
 
 		// An operation failure must still clear.
@@ -115,6 +128,9 @@ func TestAtCompoundSameMClearDarwinPPC(t *testing.T) {
 		}
 		if got := cwd(t); got != decoy {
 			t.Errorf("after a failed operation the thread's cwd is %q; want %q", got, decoy)
+		}
+		if err := syscall.AtPthreadFchdirForTest(-1); !errors.Is(err, syscall.EBADF) {
+			t.Errorf("349(-1) after a failed operation = %v; want EBADF: an operation failure must still clear", err)
 		}
 
 		// An enter failure changes nothing and must not attempt a clear.

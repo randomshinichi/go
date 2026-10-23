@@ -89,3 +89,38 @@ func OpenFromLayoutForTest() (size, flagsOff, modeOff, pathOff int) {
 	return int(unsafe.Sizeof(arg)), int(unsafe.Offsetof(arg.flags)),
 		int(unsafe.Offsetof(arg.mode)), int(unsafe.Offsetof(arg.pathname))
 }
+
+// AttrlistLayoutForTest reports the ppc32 struct attrlist that setattrlist(2)
+// copies in: total size, the offset of each field, and the constants the
+// no-follow metadata requests use.
+func AttrlistLayoutForTest() (size, bitmapcountOff, reservedOff, commonattrOff, volattrOff, dirattrOff, fileattrOff, forkattrOff int) {
+	var al atAttrlist
+	return int(unsafe.Sizeof(al)),
+		int(unsafe.Offsetof(al.bitmapcount)), int(unsafe.Offsetof(al.reserved)),
+		int(unsafe.Offsetof(al.commonattr)), int(unsafe.Offsetof(al.volattr)),
+		int(unsafe.Offsetof(al.dirattr)), int(unsafe.Offsetof(al.fileattr)),
+		int(unsafe.Offsetof(al.forkattr))
+}
+
+// AttrlistConstForTest reports the attrlist values the metadata requests use.
+func AttrlistConstForTest() (bitmapCount, fsOptNoFollow int, accessMask, modTime, acctime uint32) {
+	return atAttrBitMapCount, atFsOptNoFollow, atAttrCmnAccessMask, atAttrCmnModTime, atAttrCmnAcctime
+}
+
+// TimespecSizeForTest reports the width of one timespec in the attribute
+// buffer, which the kernel unpacks as sizeof(struct timespec) for a 32-bit
+// caller.
+func TimespecSizeForTest() int { return int(unsafe.Sizeof(Timespec{})) }
+
+// AtPthreadFchdirForTest issues raw syscall 349 on the calling goroutine's own
+// thread: a descriptor installs a thread-private cwd, -1 clears it (EBADF when
+// there is none). It exists so a test can create and observe the private cwd
+// directly, which is the only way to ask whether the native compound left one
+// behind on the thread it ran on.
+func AtPthreadFchdirForTest(fd int) error {
+	_, _, errno := RawSyscall(SYS___PTHREAD_FCHDIR, uintptr(fd), 0, 0)
+	if errno != 0 {
+		return errnoErr(errno)
+	}
+	return nil
+}

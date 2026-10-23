@@ -11,17 +11,17 @@ package os_test
 // already pins the refusals themselves and the working directory's endpoints;
 // what it cannot see is the two things below.
 //
-//  1. The refusal in statat_darwin_ppc.go for a File opened in a Root. Every
-//     Root operation is ENOTSUP here, so an ordinary program cannot construct
-//     such a File, and no test reached that guard: deleting it would have left
-//     the suite green. MarkInRoot (export_darwin_ppc_test.go) fabricates the
-//     state so the guard can be exercised.
+//  1. The confined branch in statat_darwin_ppc.go for a File opened in a Root.
+//     Before the anchored backend existed every Root operation was ENOTSUP here,
+//     so an ordinary program could not construct such a File and no test reached
+//     that branch: deleting it would have left the suite green. MarkInRoot
+//     (export_darwin_ppc_test.go) still fabricates the state, because a File that
+//     is in a root but was opened elsewhere cannot be produced through os.Root.
 //
 //  2. That a confined operation does not change the process working directory
 //     even transiently. Comparing Getwd before and after an operation is blind
 //     to a swap that is restored before the operation returns -- which is the
-//     shape a cwd-based fallback would have, and the opposite of what the
-//     comment on TestRootNotSupportedDarwinPPC promises. TestRootConfinedOps-
+//     shape a cwd-based fallback would have. TestRootConfinedOps-
 //     NoChdirDarwinPPC records the chdir where package os performs it, and
 //     TestRootConfinedOpsNoChdirSyscallDarwinPPC records it one layer lower, at
 //     the libc functions syscall.Chdir/Fchdir are imported from, so neither the
@@ -117,10 +117,13 @@ func confinedTree(t *testing.T, dir, fileContent string) {
 // because nothing changed, a version that succeeds cannot.
 //
 // want is nil for an operation the anchored backend serves on Leopard 10.5.8,
-// and the refusal errno for one that stays refused by design: Link (link(2)
-// follows the source symlink), RemoveAll (the confined directory walk is a later
-// slice), Chmod and Chtimes (no-follow metadata needs the setattrlist parity
-// work). A refusal is listed explicitly so that changing it is a visible edit.
+// and the refusal errno for the one that stays refused by design: Link, because
+// link(2) follows the source symlink and this kernel has no two-anchor
+// alternative. A refusal is listed explicitly so that changing it is a visible
+// edit. RemoveAll, Chmod and Chtimes used to be listed here as refusals; they are
+// served now (the confined directory walk and the setattrlist(FSOPT_NOFOLLOW)
+// metadata forms) and are asserted as operations, with their own effect controls
+// in root_metadata_darwin_ppc_test.go and removeall_darwin_ppc_test.go.
 type rootOpDarwinPPC struct {
 	name string
 	run  func(r *os.Root) error
@@ -150,7 +153,7 @@ func rootOpsDarwinPPC() []rootOpDarwinPPC {
 		{"MkdirAll", func(r *os.Root) error { return r.MkdirAll("m/n", 0o755) }, nil},
 		{"Remove", func(r *os.Root) error { return r.Remove("f") }, nil},
 		{"RemoveEmptyDir", func(r *os.Root) error { return r.Remove("sub") }, nil},
-		{"RemoveAll", func(r *os.Root) error { return r.RemoveAll("sub") }, syscall.ENOTSUP},
+		{"RemoveAll", func(r *os.Root) error { return r.RemoveAll("sub") }, nil},
 		{"Stat", func(r *os.Root) error { _, err := r.Stat("f"); return err }, nil},
 		{"Lstat", func(r *os.Root) error { _, err := r.Lstat("f"); return err }, nil},
 		{"Readlink", func(r *os.Root) error { _, err := r.Readlink("link"); return err }, nil},
@@ -159,9 +162,9 @@ func rootOpsDarwinPPC() []rootOpDarwinPPC {
 		{"Rename", func(r *os.Root) error { return r.Rename("f", "g") }, nil},
 		{"Link", func(r *os.Root) error { return r.Link("f", "g") }, syscall.ENOTSUP},
 		{"Symlink", func(r *os.Root) error { return r.Symlink("f", "s") }, nil},
-		{"Chmod", func(r *os.Root) error { return r.Chmod("f", 0o600) }, syscall.ENOTSUP},
+		{"Chmod", func(r *os.Root) error { return r.Chmod("f", 0o600) }, nil},
 		{"Chown", func(r *os.Root) error { return r.Chown("f", os.Getuid(), os.Getgid()) }, nil},
-		{"Chtimes", func(r *os.Root) error { return r.Chtimes("f", now, now) }, syscall.ENOTSUP},
+		{"Chtimes", func(r *os.Root) error { return r.Chtimes("f", now, now) }, nil},
 	}
 }
 
