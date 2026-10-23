@@ -23,10 +23,10 @@ func removeAll(path string) error {
 	// which exists only on the kernel this port measured it on. Where it is
 	// absent the call keeps working through the path-based algorithm instead of
 	// failing, which is the behaviour every Darwin/ppc build had before the
-	// backend existed. On every other platform confinedRemoveAll is a constant
-	// true. See removeall_darwin_ppc.go.
-	if !confinedRemoveAll() {
-		return removeAllByPath(path)
+	// backend existed. On every other platform this hook reports "not handled"
+	// and the walk below runs. See removeall_darwin_ppc.go.
+	if handled, err := removeAllPathFallback(path); handled {
+		return err
 	}
 
 	// The rmdir system call does not permit removing ".",

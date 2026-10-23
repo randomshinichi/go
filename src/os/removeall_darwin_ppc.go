@@ -25,11 +25,16 @@ import "internal/syscall/unix"
 // t.TempDir teardown working there. Root.RemoveAll has no such fallback by
 // design: it must be confined or refused, so on those kernels it still returns
 // ENOTSUP (removeAllFrom is the descriptor walk; there is no path-based
-// substitute inside a Root).
+// substitute inside a Root, which exists to give that protection).
 //
 // SECURITY-RELEVANT DIVERGENCE, fallback only: on a kernel without the backend,
 // RemoveAll keeps the pre-Go-1.12 algorithm's exposure to a symlink race (another
 // process that can write to a directory being walked may swap an entry for a
 // symlink between the check and the removal). Do not run RemoveAll on a tree an
 // untrusted party can modify on such a kernel.
-func confinedRemoveAll() bool { return unix.AnchoredAvailable() }
+func removeAllPathFallback(path string) (handled bool, err error) {
+	if unix.AnchoredAvailable() {
+		return false, nil
+	}
+	return true, removeAllByPath(path)
+}
