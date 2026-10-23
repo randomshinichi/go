@@ -290,6 +290,34 @@ func TestIgnored(t *testing.T) {
 
 var checkSighupIgnored = flag.Bool("check_sighup_ignored", false, "if true, TestDetectNohup will fail if SIGHUP is not ignored.")
 
+func isNohupConsoleFailure(output string) bool {
+	return strings.Contains(output, "nohup: can't detach from console: Inappropriate ioctl for device") ||
+		strings.Contains(output, "nohup: can't migrate to background session")
+}
+
+func TestNohupConsoleFailure(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{
+			name:   "modern",
+			output: "nohup: can't detach from console: Inappropriate ioctl for device",
+		},
+		{
+			name:   "Leopard",
+			output: "nohup: can't migrate to background session: Inappropriate ioctl for device",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !isNohupConsoleFailure(tt.output) {
+				t.Errorf("isNohupConsoleFailure(%q) = false, want true", tt.output)
+			}
+		})
+	}
+}
+
 // Test that Ignored(SIGHUP) correctly detects whether it is being run under nohup.
 func TestDetectNohup(t *testing.T) {
 	if *checkSighupIgnored {
@@ -325,7 +353,7 @@ func TestDetectNohup(t *testing.T) {
 			// nohup doesn't work on new LUCI darwin builders due to the
 			// type of launchd service the test run under. See
 			// https://go.dev/issue/63875.
-			if runtime.GOOS == "darwin" && strings.Contains(string(out), "nohup: can't detach from console: Inappropriate ioctl for device") {
+			if runtime.GOOS == "darwin" && isNohupConsoleFailure(string(out)) {
 				t.Skip("Skipping nohup test due to darwin builder limitation. See https://go.dev/issue/63875.")
 			}
 
@@ -507,7 +535,7 @@ func TestNohup(t *testing.T) {
 					// nohup doesn't work on new LUCI darwin builders due to the
 					// type of launchd service the test run under. See
 					// https://go.dev/issue/63875.
-					if runtime.GOOS == "darwin" && strings.Contains(string(out), "nohup: can't detach from console: Inappropriate ioctl for device") {
+					if runtime.GOOS == "darwin" && isNohupConsoleFailure(string(out)) {
 						// TODO(go.dev/issue/63799): A false-positive in vet reports a
 						// t.Skip here as invalid. Switch back to t.Skip once fixed.
 						t.Logf("Skipping nohup test due to darwin builder limitation. See https://go.dev/issue/63875.")
