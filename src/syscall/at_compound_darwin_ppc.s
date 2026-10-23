@@ -5,6 +5,7 @@
 //go:build darwin && ppc
 
 #include "textflag.h"
+#include "funcdata.h"
 
 // The single native scope of one anchored operation. See
 // at_compound_darwin_ppc.go for the lifecycle and for why the pieces have to
@@ -84,6 +85,19 @@
 
 // func atCompound(req *atCompoundReq)
 TEXT ·atCompound(SB),NOSPLIT,$32-4
+	// The frame holds no pointers: the request pointer is an argument (covered
+	// by the generated argument map, which also keeps the request itself alive)
+	// and the routine only ever holds it in registers. Declaring that is
+	// load-bearing, not cosmetic. The frame is 32 bytes of locals plus the
+	// 24-byte Darwin linkage area, which is larger than the 32 bytes an assembly
+	// frame is allowed without a locals pointer map (runtime/stkframe.go
+	// getStackMap: for PPC assembly the minimum is
+	// alignUp(goarch.MinFrameSize, goarch.StackAlign) = 32). Without this line the
+	// garbage collector throws "missing stackmap" as soon as it scans this
+	// routine's frame, which it does while the goroutine is parked in
+	// entersyscall — measured, see the note in goppc-jic6x.1.
+	NO_LOCAL_POINTERS
+
 	BL	runtime·entersyscall<ABIInternal>(SB)
 
 	// Install the anchor as this thread's private cwd: __pthread_fchdir(anchor).
