@@ -129,7 +129,7 @@ func TestRootChmodDarwinPPC(t *testing.T) {
 	if err := os.WriteFile(alt, []byte("alt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := root.Chmod("alt", 0o6754&0o777); err != nil {
+	if err := root.Chmod("alt", 0o754); err != nil {
 		t.Fatalf("Root.Chmod(alt): %v", err)
 	}
 	if err := os.Chmod(alt, 0o754); err != nil {

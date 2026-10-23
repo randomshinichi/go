@@ -265,6 +265,20 @@ func atChmodNofollow(anchor int, path string, mode uint32) error {
 // atUtimensatNofollow is Utimensat(AT_SYMLINK_NOFOLLOW) for a real directory
 // descriptor, for the explicit-time form os.Root.Chtimes uses.
 //
+// Measured divergence, recorded rather than hidden: when the request selects
+// ONLY the access time, HFS+ does not store the supplied value. hfs_setattr
+// treats "va_active == va_access_time" as a kernel-level lazy access-time touch
+// (bsd/hfs/hfs_vnops.c:776-780: it sets c_touch_acctime and returns before the
+// timestamp block that assigns c_atime), so the value is discarded and the
+// flushed access time is the current time. The only way to force a chosen access
+// time on HFS+ is to send the modification time too, which for an omitted
+// modification time would mean reading it first and writing it back — the
+// read-modify-write this backend exists to avoid. libc's lutimes cannot express
+// an access-time-only request at all (its API always sets both), so there is no
+// libc baseline this diverges from; utimensat(UTIME_OMIT on the modification
+// time) is the new capability, and on HFS+ it is the access-time half that is
+// approximate. Selecting both times, or only the modification time, is exact.
+//
 // UTIME_OMIT omits its attribute rather than reading the old value and writing
 // it back, so there is no read-modify-write window and no chance of rewriting an
 // ambient change. Both times omitted is a legal request: it still resolves the
@@ -282,11 +296,9 @@ func atUtimensatNofollow(anchor int, path string, times *[2]syscall.Timespec) er
 	for i, ts := range times {
 		switch ts.Nsec {
 		case UTIME_OMIT:
-			if ts.Sec != UTIME_OMIT {
-				// Only the both-fields-omitted spelling of UTIME_OMIT can be
-				// expressed without inventing a value for the other field.
-				return syscall.EINVAL
-			}
+			// POSIX says tv_sec is ignored when tv_nsec is UTIME_OMIT, and
+			// package os spells an omitted time as both fields set to the
+			// sentinel. Either spelling means "do not send this attribute".
 			continue
 		case utimeNow:
 			// UTIME_NOW is not claimed for this form; see the file comment.
