@@ -7,8 +7,6 @@
 package unix
 
 import (
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	_ "unsafe" // for linkname
@@ -140,37 +138,60 @@ func atCompatEnabled() bool {
 // atCompatRelease reports whether a kern.osrelease value is a 9.8.x release,
 // the version this backend was designed and measured against (Darwin 9.8.0 /
 // Leopard 10.5.8). A version it cannot parse is not accepted.
+//
+// This is hand-rolled on bytes rather than using strings and strconv on
+// purpose: internal/syscall/unix belongs to the SYSCALL layer of the go/build
+// dependency lattice (src/go/build/deps_test.go), which forbids both packages
+// here, and TestDependencies enforces that lattice. Do not "tidy" this back
+// into strings.Cut/strconv.Atoi. The grammar is the one that matters for the
+// gate: three dot-separated decimal components, of which the first two decide
+// and the third only has to look numeric.
 func atCompatRelease(release string) (ok bool, parsed bool) {
-	major, rest, found := strings.Cut(release, ".")
-	if !found {
+	major, next, haveMajor := atReleaseComponent(release, 0)
+	if !haveMajor || next >= len(release) || release[next] != '.' {
 		return false, false
 	}
-	minor, rest, found := strings.Cut(rest, ".")
-	if !found {
+	minor, next, haveMinor := atReleaseComponent(release, next+1)
+	if !haveMinor || next >= len(release) || release[next] != '.' {
 		return false, false
-	}
-	maj, err := strconv.Atoi(major)
-	if err != nil {
-		return false, false
-	}
-	min, err := strconv.Atoi(minor)
-	if err != nil {
-		return false, false
-	}
-	if maj != 9 || min != 8 {
-		return false, true
 	}
 	// The patch level is not part of the decision, but it must look like one:
 	// an empty or non-numeric tail means this is not the shape of a Darwin
 	// release string and no version claim should rest on it.
-	patch := rest
-	if i := strings.IndexByte(patch, '.'); i >= 0 {
-		patch = patch[:i]
-	}
-	if _, err := strconv.Atoi(patch); err != nil {
+	_, next, havePatch := atReleaseComponent(release, next+1)
+	if !havePatch {
 		return false, false
 	}
+	if next < len(release) && release[next] != '.' {
+		return false, false
+	}
+	if major != 9 || minor != 8 {
+		return false, true
+	}
 	return true, true
+}
+
+// atReleaseComponent reads one decimal component of a release string starting
+// at offset i. It reports the component's value, the offset just past it and
+// whether any digit was seen at all.
+//
+// The value saturates well above any real release number instead of wrapping:
+// only equality with 9 and 8 is ever asked, and a wrapped value that happened
+// to land on one of them would enable the backend on a string nobody meant as
+// a version.
+func atReleaseComponent(s string, i int) (value int, next int, ok bool) {
+	start := i
+	v := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		if v < 1<<20 {
+			v = v*10 + int(s[i]-'0')
+		}
+		i++
+	}
+	if i == start {
+		return 0, i, false
+	}
+	return v, i, true
 }
 
 // atUnsupported is the refusal for a real descriptor: the platform cannot do
