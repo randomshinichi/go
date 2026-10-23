@@ -68,7 +68,7 @@ func metadataRoot(t *testing.T) (root *os.Root, dir, cwd string) {
 	return root, dir, cwd
 }
 
-// modeOf and timesOf read the entry without following a final symlink.
+// modeOf, timesOf and ctimeOf read the entry without following a final symlink.
 func modeOf(t *testing.T, path string) os.FileMode {
 	t.Helper()
 	fi, err := os.Lstat(path)
@@ -90,6 +90,19 @@ func timesOf(t *testing.T, path string) (atime, mtime time.Time) {
 	}
 	return time.Unix(int64(st.Atimespec.Sec), int64(st.Atimespec.Nsec)),
 		time.Unix(int64(st.Mtimespec.Sec), int64(st.Mtimespec.Nsec))
+}
+
+func ctimeOf(t *testing.T, path string) time.Time {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("Lstat %s: %v", path, err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("no syscall.Stat_t for %s", path)
+	}
+	return time.Unix(int64(st.Ctimespec.Sec), int64(st.Ctimespec.Nsec))
 }
 
 // TestRootChmodDarwinPPC requires Root.Chmod to change the root's entry (or the
@@ -183,7 +196,44 @@ func TestRootChtimesDarwinPPC(t *testing.T) {
 		t.Errorf("mtime = %d; want %d", mod.Unix(), onlyMod.Unix())
 	}
 
-	// Parity with os.Chtimes on the same object.
+	// An access-time-ONLY request is the form HFS would turn into a lazy
+	// access-time touch if the request selected nothing but the access time
+	// (bsd/hfs/hfs_vnops.c:776-780): the supplied value would be discarded and the
+	// stored access time would become "now". The confined call therefore also
+	// selects the change time on HFS, with a value the filesystem ignores, so that
+	// the ordinary timestamp block runs. All three parts of that claim are
+	// asserted here: the requested access time is stored, the omitted modification
+	// time is not touched, and the change time does not move, which is what shows
+	// the extra attribute was ignored rather than applied. The decoy in the
+	// working directory is checked again.
+	if err := os.Chtimes(rootFile, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	onlyAcc := time.Unix(1500000000, 0)
+	beforeAcc, beforeMod := timesOf(t, rootFile)
+	beforeCtime := ctimeOf(t, rootFile)
+	if err := root.Chtimes("f", onlyAcc, time.Time{}); err != nil {
+		t.Fatalf("Root.Chtimes(zero mtime): %v", err)
+	}
+	acc, mod = timesOf(t, rootFile)
+	if acc.Unix() != onlyAcc.Unix() {
+		t.Errorf("atime = %d; want the requested %d: an access-time-only request must store the value it was given", acc.Unix(), onlyAcc.Unix())
+	}
+	if mod.Unix() != beforeMod.Unix() {
+		t.Errorf("mtime = %d; want the untouched %d: an omitted time must not be sent", mod.Unix(), beforeMod.Unix())
+	}
+	if got := ctimeOf(t, rootFile); !got.Equal(beforeCtime) {
+		t.Errorf("ctime = %v; want the unchanged %v: the change time sent as part of the HFS workaround must be ignored by HFS", got, beforeCtime)
+	}
+	if onlyAcc.Unix() != beforeAcc.Unix() && acc.Unix() == beforeAcc.Unix() {
+		t.Errorf("atime is still %d; the request did nothing", acc.Unix())
+	}
+	if gotAcc, gotMod := timesOf(t, cwdFile); gotAcc.Unix() != stamp.Unix() || gotMod.Unix() != stamp.Unix() {
+		t.Errorf("decoy file times = %d/%d; want the untouched %d: the time change must not reach the working directory", gotAcc.Unix(), gotMod.Unix(), stamp.Unix())
+	}
+
+	// Parity with os.Chtimes on the same object: the both-times form is the one
+	// the path-based call can express exactly, so it is the one compared.
 	alt := filepath.Join(dir, "alt")
 	if err := os.WriteFile(alt, []byte("alt"), 0o644); err != nil {
 		t.Fatal(err)

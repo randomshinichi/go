@@ -29,6 +29,7 @@ import (
 //go:linkname atChmodNofollowCompound
 //go:linkname atUtimensatCompound
 //go:linkname atRenameatCompound
+//go:linkname atChgTimeForAccessTime
 
 // Leopard has no *at family, but xnu-1228 has two kernel interfaces that make
 // most of os.Root expressible without reconstructing a pathname:
@@ -182,9 +183,14 @@ const (
 	atAttrBitMapCount   = 5
 	atFsOptNoFollow     = 0x00000001
 	atAttrCmnModTime    = 0x00000400
+	atAttrCmnChgTime    = 0x00000800
 	atAttrCmnAcctime    = 0x00001000
 	atAttrCmnAccessMask = 0x00020000
 )
+
+// atHFSName is the f_fstypename of the HFS/HFS+ filesystem, the one whose
+// setattr behaviour atChgTimeForAccessTime works around (see that function).
+const atHFSName = "hfs"
 
 // atCompound is implemented in at_compound_darwin_ppc.s.
 func atCompound(req *atCompoundReq)
@@ -497,23 +503,26 @@ func atChmodNofollowCompound(anchor int, path string, mode uint32) error {
 	return atSetattrCompound(anchor, path, al, buf)
 }
 
-// atUtimensatCompound is Utimensat(AT_SYMLINK_NOFOLLOW) for a real directory
-// descriptor. A nil mod or acc omits that attribute entirely; the kernel unpacks
-// the selected timespec attributes in bitmap order, MODTIME before ACCTIME
-// (bsd/vfs/vfs_attrlist.c:1663-1674), and an omitted one is never read back from
-// the file and written out again.
+// atTimesPayload builds the attrlist and the attribute buffer for a
+// setattrlist(2) request that sets some of the three timestamps. A nil value
+// omits that attribute entirely: the kernel unpacks the selected timespec
+// attributes in bitmap order — MODTIME, then CHGTIME, then ACCTIME
+// (bsd/vfs/vfs_attrlist.c:1663-1674) — so the buffer must be filled in that same
+// order with no gaps. An omitted one is never read back from the file and
+// written out again.
 //
-// Each timespec is 8 bytes for a 32-bit caller: the kernel unpacks
-// sizeof(struct timespec) for a non-64-bit process (ATTR_UNPACK_TIME,
-// vfs_attrlist.c:1526-1536), and its timespec is int32 sec/nsec here.
-func atUtimensatCompound(anchor int, path string, mod, acc *Timespec) error {
-	var al atAttrlist
+// It is a separate function so TestAtTimesPayloadDarwinPPC can assert the order
+// and the bitmap bits directly; the value of each Timespec is pinned too.
+func atTimesPayload(mod, chg, acc *Timespec) (al atAttrlist, buf [3]Timespec, n int) {
 	al.bitmapcount = atAttrBitMapCount
-	var buf [2]Timespec
-	n := 0
 	if mod != nil {
 		al.commonattr |= atAttrCmnModTime
 		buf[n] = *mod
+		n++
+	}
+	if chg != nil {
+		al.commonattr |= atAttrCmnChgTime
+		buf[n] = *chg
 		n++
 	}
 	if acc != nil {
@@ -521,8 +530,108 @@ func atUtimensatCompound(anchor int, path string, mod, acc *Timespec) error {
 		buf[n] = *acc
 		n++
 	}
+	return al, buf, n
+}
+
+// atUtimensatCompound is Utimensat(AT_SYMLINK_NOFOLLOW) for a real directory
+// descriptor, for the explicit-time form. mod, chg and acc select the
+// modification, change and access time; chg exists only for the HFS workaround
+// below and is nil everywhere else.
+//
+// Each timespec is 8 bytes for a 32-bit caller: the kernel unpacks
+// sizeof(struct timespec) for a non-64-bit process (ATTR_UNPACK_TIME,
+// vfs_attrlist.c:1526-1536), and its timespec is int32 sec/nsec here.
+func atUtimensatCompound(anchor int, path string, mod, chg, acc *Timespec) error {
+	al, buf, n := atTimesPayload(mod, chg, acc)
 	attr := unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), n*int(unsafe.Sizeof(buf[0])))
 	return atSetattrCompound(anchor, path, &al, attr)
+}
+
+// atDummyChgTime is the change time sent with an access-time-only request on
+// HFS. It is a value no caller can have asked for (the epoch), it is never
+// honoured by the filesystem it is sent to (see atChgTimeForAccessTime), and it
+// is not read from the object, so no unselected attribute is read and written
+// back.
+var atDummyChgTime = Timespec{Sec: 0, Nsec: 0}
+
+// atChgTimeForAccessTime reports whether an access-time-only request against
+// anchor/path must also select ATTR_CMN_CHGTIME, and returns the value to send.
+//
+// The measured reason (runs/root-at-atime-exact-20261023): HFS treats a request
+// whose ONLY active attribute is the access time as a kernel-level lazy
+// access-time touch, so it discards the supplied value and flushes the access
+// time as "now" (bsd/hfs/hfs_vnops.c:776-780 returns before the block at
+// :834-852 that assigns c_atime). With any other attribute active the ordinary
+// block runs and the supplied access time is stored exactly. Adding the change
+// time is safe on this filesystem because hfs_setattr marks va_change_time
+// supported and never assigns c_ctime from it, so the value is ignored and the
+// object's change time is unchanged (measured: dummy 12345 left ctime
+// 1792721486). It is also free of extra authorization: vnode_authattr puts
+// va_change_time in the same timestamp group as va_access_time, requiring the
+// same owner-or-root plus WRITE_ATTRIBUTES (bsd/vfs/vfs_subr.c:6023-6100), and
+// ATTR_CMN_CHGTIME is inside ATTR_CMN_SETMASK (bsd/sys/attr.h:326).
+//
+// The guard is the point: a dummy change time must never reach a filesystem that
+// honours it. Two facts are required.
+//
+//   - The anchor's filesystem is HFS. This is read from the descriptor with
+//     Fstatfs (syscall.Fstatfs, SYS_FSTATFS64 through libc's fstatfs64), so it
+//     describes the anchor that was actually opened, not a pathname that may
+//     since have been replaced. A filesystem this code has not
+//     measured keeps the ordinary selective request instead; this is the
+//     behaviour it had before the workaround existed, and on a filesystem that
+//     honours an explicit access time it is the exact request.
+//   - The target entry is on that same filesystem. An entry can be a mount point
+//     inside the anchored directory (os.Root deliberately traverses mounts), and
+//     then the object the operation reaches belongs to a different filesystem
+//     whose change-time semantics are unknown. Comparing the target's st_dev
+//     with the anchor's excludes that case, and it uses the no-follow lstat the
+//     compound already implements. It is a read of st_dev only: no time is read
+//     from the object.
+//
+// A failure to read the filesystem is reported, not guessed around: the caller
+// then does not act at all, and the operation's own error is never replaced by a
+// silent success with the wrong value. A failure of either identity read means
+// "not proven HFS", so the ordinary request is used and the operation reports
+// its own result.
+func atChgTimeForAccessTime(anchor int, path string) (Timespec, bool, error) {
+	var fs Statfs_t
+	if err := Fstatfs(anchor, &fs); err != nil {
+		return Timespec{}, false, err
+	}
+	if !atFstypenameIs(fs.Fstypename[:], atHFSName) {
+		return Timespec{}, false, nil
+	}
+	var anchorStat Stat_t
+	if err := Fstat(anchor, &anchorStat); err != nil {
+		return Timespec{}, false, nil
+	}
+	var targetStat Stat_t
+	if err := atStatatCompound(anchor, path, &targetStat, false); err != nil {
+		return Timespec{}, false, nil
+	}
+	if targetStat.Dev != anchorStat.Dev {
+		return Timespec{}, false, nil
+	}
+	return atDummyChgTime, true, nil
+}
+
+// atFstypenameIs reports whether a NUL-padded f_fstypename equals name.
+func atFstypenameIs(field []int8, name string) bool {
+	if len(name) > len(field) {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if field[i] != int8(name[i]) {
+			return false
+		}
+	}
+	for _, c := range field[len(name):] {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // atRenameatCompound is Renameat when both operands share one anchor.

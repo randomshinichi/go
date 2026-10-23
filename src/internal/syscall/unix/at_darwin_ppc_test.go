@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 )
 
 // These tests are the Unix-layer controls for the anchored backend described in
@@ -376,10 +375,6 @@ func TestOpenatDarwinPPCAtFDCWDFallsBackToPath(t *testing.T) {
 // what makes "acted relative to the descriptor" distinguishable from "acted
 // relative to the process cwd". The times are chosen far from "now" so a
 // request that silently did nothing cannot look like success.
-// timeNowDarwinPPC is the current time in seconds, for the one assertion that
-// has to compare against a clock.
-func timeNowDarwinPPC() int32 { return int32(time.Now().Unix()) }
-
 func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
 	anchorDir, cwdDir, fd := atTree(t)
 	anchorPath := func(name string) string { return filepath.Join(anchorDir, name) }
@@ -500,29 +495,62 @@ func TestAtDarwinPPCMetadataDarwinPPC(t *testing.T) {
 		checkTimes(t, anchorPath("file"), 1200000000, mod.Sec)
 	})
 
-	// An access-time-only request is the one form HFS+ interprets differently: it
-	// is a lazy access-time touch, so the supplied value is discarded and the
-	// stored access time is the moment of the call (bsd/hfs/hfs_vnops.c:776-780,
-	// see the comment on atUtimensatNofollow). The control is the pair: with both
-	// times selected the value is honored exactly (UtimensatBoth), and with only
-	// the modification time selected the access time is untouched
-	// (UtimensatModTimeOnly), so this case pins the one divergence rather than
-	// excusing all three.
-	t.Run("UtimensatAcctimeOnlyIsAnHFSPlusTouch", func(t *testing.T) {
+	// An access-time-only request is the form HFS interprets differently when the
+	// access time is the request's ONLY active attribute: it would be a lazy
+	// access-time touch, so the supplied value would be discarded and the stored
+	// access time would become "now" (bsd/hfs/hfs_vnops.c:776-780). The backend
+	// therefore also selects the change time on HFS — a value the filesystem
+	// ignores — which makes the ordinary timestamp block run and store the
+	// requested access time exactly (runs/root-at-atime-exact-20261023). This case
+	// requires the exact value, and requires the change time to be untouched, which
+	// is what proves the extra attribute was ignored rather than applied.
+	//
+	// The pair around it keeps it discriminating: with both times selected the
+	// value is stored exactly (UtimensatBoth), and with only the modification time
+	// selected the access time is untouched (UtimensatModTimeOnly).
+	t.Run("UtimensatAcctimeOnlyIsExact", func(t *testing.T) {
 		setStamp(t, anchorPath("file"))
 		omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
-		before := timeNowDarwinPPC()
+		before := lstat(t, anchorPath("file"))
 		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{acc, omit}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			t.Fatalf("Utimensat(ACCTIME only): %v", err)
 		}
 		st := lstat(t, anchorPath("file"))
+		if got := st.Atimespec.Sec; got != acc.Sec {
+			t.Errorf("atime = %d; want the requested %d: an access-time-only request must store the value it was given", got, acc.Sec)
+		}
 		if got := st.Mtimespec.Sec; got != 1200000000 {
 			t.Errorf("mtime = %d; want the untouched 1200000000: the omitted time must not be sent", got)
 		}
-		if got := st.Atimespec.Sec; got == acc.Sec {
-			t.Errorf("atime = %d; this test pins the measured HFS+ behaviour (a lazy touch, so not the requested value); if the filesystem now honors the value, update the record", got)
-		} else if got < before-5 {
-			t.Errorf("atime = %d; want around the current time %d for HFS+'s lazy access-time touch", got, before)
+		// The workaround's dummy change time is the epoch. If the filesystem had
+		// honoured it, ctime would be the epoch; on HFS it is ignored, and the
+		// measured behaviour is that ctime does not move at all for this request.
+		if got := st.Ctimespec.Sec; got == 0 {
+			t.Errorf("ctime = 0; the dummy change time was applied instead of ignored")
+		}
+		if st.Ctimespec != before.Ctimespec {
+			t.Errorf("ctime = %+v; want the unchanged %+v: the dummy change time is ignored by HFS, not applied", st.Ctimespec, before.Ctimespec)
+		}
+		// The entry is still the anchor's, and the decoy is untouched.
+		checkTimes(t, filepath.Join(cwdDir, "file"), 1200000000, 1200000000)
+	})
+
+	// A modification-time-only request must not carry the workaround's extra
+	// attribute either: the access time stays as it was and the change time moves
+	// the way HFS moves it when the modification time is set.
+	t.Run("UtimensatModTimeOnlyChangeTimeMoves", func(t *testing.T) {
+		setStamp(t, anchorPath("file"))
+		omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+		before := lstat(t, anchorPath("file"))
+		if err := unix.Utimensat(fd, "file", &[2]syscall.Timespec{omit, mod}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			t.Fatalf("Utimensat(MODTIME only): %v", err)
+		}
+		st := lstat(t, anchorPath("file"))
+		if st.Atimespec != before.Atimespec {
+			t.Errorf("atime = %+v; want the unchanged %+v", st.Atimespec, before.Atimespec)
+		}
+		if st.Mtimespec.Sec != mod.Sec {
+			t.Errorf("mtime = %d; want %d", st.Mtimespec.Sec, mod.Sec)
 		}
 	})
 

@@ -221,11 +221,36 @@ func TestAtDarwinPPCBlockedOpDarwinPPC(t *testing.T) {
 // drives many short calls from goroutines with small stacks while forcing the
 // collector, and checks every result: a stale or relocated buffer would show up
 // as a wrong size or a spurious failure, not as a crash.
+//
+// It covers the metadata operations too, not only the read: Fchmodat's
+// ATTR_CMN_ACCESSMASK payload and Utimensat's timespec payload are built on the
+// caller side and read by the kernel after the goroutine has parked, which is the
+// case the ownership rule exists for. Each worker owns its own file and asserts
+// the effect it asked for, so a call that silently acted on another worker's
+// entry — the failure a shared fixture would hide — is reported. The
+// access-time-only case runs through the HFS workaround, which also reads the
+// filesystem and the entry's device before acting.
 func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 	anchorDir, _, fd := atTree(t)
-	want := int64(len("anchor"))
 
-	const workers, iters = 4, 60
+	const workers, iters = 4, 20
+	omit := syscall.Timespec{Sec: unix.UTIME_OMIT, Nsec: unix.UTIME_OMIT}
+
+	// One fixture per worker, distinguishable by size, mode and stamp, so "the
+	// operation changed the entry this worker named" is checkable.
+	names := make([]string, workers)
+	for w := 0; w < workers; w++ {
+		names[w] = fmt.Sprintf("stress-%d", w)
+		if err := os.WriteFile(filepath.Join(anchorDir, names[w]), make([]byte, w+1), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, name := range names {
+			os.Remove(filepath.Join(anchorDir, name))
+		}
+	})
+
 	errs := make(chan error, workers*iters)
 	done := make(chan struct{})
 	go func() {
@@ -237,20 +262,58 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 	}()
 	for w := 0; w < workers; w++ {
 		go func(w int) {
+			name := names[w]
+			wantSize := int64(w + 1)
+			mode := uint16(0o600 + w) // 0600, 0601, 0602, 0603
+			acc := syscall.Timespec{Sec: int32(1400000000 + 10*w)}
+			mod := syscall.Timespec{Sec: int32(1400000001 + 10*w)}
+			accOnly := syscall.Timespec{Sec: int32(1500000000 + 10*w)}
 			for i := 0; i < iters; i++ {
 				// A stack-hungry frame: the caller's stack may be copied while
 				// the compound is in flight, which is what makes laundering a
 				// caller-stack address into the request unsafe.
 				var pad [512]byte
 				pad[i%len(pad)] = byte(i)
-				name := "file"
 				var st syscall.Stat_t
 				if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-					errs <- fmt.Errorf("worker %d iter %d: %v", w, i, err)
+					errs <- fmt.Errorf("worker %d iter %d: Fstatat: %v", w, i, err)
 					return
 				}
-				if st.Size != want {
-					errs <- fmt.Errorf("worker %d iter %d: size = %d; want %d", w, i, st.Size, want)
+				if st.Size != wantSize {
+					errs <- fmt.Errorf("worker %d iter %d: size = %d; want %d", w, i, st.Size, wantSize)
+					return
+				}
+				if err := unix.Fchmodat(fd, name, uint32(mode), unix.AT_SYMLINK_NOFOLLOW); err != nil {
+					errs <- fmt.Errorf("worker %d iter %d: Fchmodat: %v", w, i, err)
+					return
+				}
+				if err := unix.Utimensat(fd, name, &[2]syscall.Timespec{acc, mod}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+					errs <- fmt.Errorf("worker %d iter %d: Utimensat: %v", w, i, err)
+					return
+				}
+				if err := unix.Utimensat(fd, name, &[2]syscall.Timespec{accOnly, omit}, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+					errs <- fmt.Errorf("worker %d iter %d: Utimensat(access time only): %v", w, i, err)
+					return
+				}
+				var after syscall.Stat_t
+				if err := unix.Fstatat(fd, name, &after, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+					errs <- fmt.Errorf("worker %d iter %d: Fstatat after the metadata calls: %v", w, i, err)
+					return
+				}
+				if got := after.Mode & 0o777; got != mode {
+					errs <- fmt.Errorf("worker %d iter %d: mode = %o; want %o", w, i, got, mode)
+					return
+				}
+				if after.Atimespec.Sec != accOnly.Sec {
+					errs <- fmt.Errorf("worker %d iter %d: atime = %d; want the requested %d", w, i, after.Atimespec.Sec, accOnly.Sec)
+					return
+				}
+				if after.Mtimespec.Sec != mod.Sec {
+					errs <- fmt.Errorf("worker %d iter %d: mtime = %d; want the untouched %d", w, i, after.Mtimespec.Sec, mod.Sec)
+					return
+				}
+				if after.Size != wantSize {
+					errs <- fmt.Errorf("worker %d iter %d: size changed to %d; want %d", w, i, after.Size, wantSize)
 					return
 				}
 				if pad[i%len(pad)] != byte(i) {
@@ -268,9 +331,19 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 	}
 	<-done
 
-	// The anchor is unchanged: every call read it, none of them wrote.
-	if fi, err := os.Lstat(filepath.Join(anchorDir, "file")); err != nil || fi.Size() != want {
-		t.Errorf("%s/file: %v, %v; want it unchanged", anchorDir, fi, err)
+	// Every worker's own entry ended with its own mode and times, and no worker
+	// wrote into another worker's file.
+	for w := 0; w < workers; w++ {
+		fi, err := os.Lstat(filepath.Join(anchorDir, names[w]))
+		if err != nil {
+			t.Fatalf("%s: %v", names[w], err)
+		}
+		if got, wantMode := uint32(fi.Mode().Perm()), uint32(0o600+w); got != wantMode {
+			t.Errorf("%s mode = %o; want %o", names[w], got, wantMode)
+		}
+		if got, wantSize := fi.Size(), int64(w+1); got != wantSize {
+			t.Errorf("%s size = %d; want %d: the metadata calls must not have written data", names[w], got, wantSize)
+		}
 	}
 }
 

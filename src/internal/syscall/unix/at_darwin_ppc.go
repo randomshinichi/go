@@ -37,10 +37,10 @@ import (
 //     There is no race-free two-anchor rename interface here: only one cwd
 //     applies to a pathname, and F_GETPATH/volfs rebuild a pathname and keep
 //     the replacement race they were meant to remove.
-//   - Fchmodat with AT_SYMLINK_NOFOLLOW and Utimensat with AT_SYMLINK_NOFOLLOW.
-//     The equivalent is setattrlist with FSOPT_NOFOLLOW, selecting
-//     ATTR_CMN_ACCESSMASK or the MODTIME/ACCTIME timespecs. Leopard has no
-//     lchmod and no lutimes syscall; libSystem's lchmod/lutimes are built on
+//   - Fchmodat with AT_SYMLINK_NOFOLLOW and Utimensat with a real descriptor are
+//     not refused: they run setattrlist with FSOPT_NOFOLLOW, selecting
+//     ATTR_CMN_ACCESSMASK or the MODTIME/CHGTIME/ACCTIME timespecs. Leopard has
+//     no lchmod and no lutimes syscall; libSystem's lchmod/lutimes are built on
 //     this same request (disassembled and measured on the target in
 //     runs/root-at-metadata-20261023), which is what makes it the honest
 //     equivalent rather than a following chmod that would change the wrong
@@ -49,6 +49,11 @@ import (
 //     "both times now"), any UTIME_NOW timestamp, and the general UTIME_* forms:
 //     refused, because their permission rules differ from the explicit-time form
 //     this backend implements. os.Root.Chtimes never sends them.
+//
+// One timestamp case needs help rather than refusal. An access-time-ONLY request
+// is a lazy access-time touch on HFS, which stores "now" instead of the supplied
+// value; the workaround and the guard that keeps its dummy change time off other
+// filesystems are in atUtimensatNofollow and syscall.atChgTimeForAccessTime.
 //
 // The backend is enabled only for the kernel this was designed and measured
 // against: a parsed kern.osrelease of 9.8.x, the declared Leopard 10.5.8
@@ -95,7 +100,10 @@ func atChmodatCompound(anchor int, path string, mode uint32) error
 func atChmodNofollowCompound(anchor int, path string, mode uint32) error
 
 //go:linkname atUtimensatCompound syscall.atUtimensatCompound
-func atUtimensatCompound(anchor int, path string, mod, acc *syscall.Timespec) error
+func atUtimensatCompound(anchor int, path string, mod, chg, acc *syscall.Timespec) error
+
+//go:linkname atChgTimeForAccessTime syscall.atChgTimeForAccessTime
+func atChgTimeForAccessTime(anchor int, path string) (syscall.Timespec, bool, error)
 
 //go:linkname atRenameatCompound syscall.atRenameatCompound
 func atRenameatCompound(anchor int, oldpath, newpath string) error
@@ -108,7 +116,17 @@ var (
 )
 
 // atCompatEnabled reports whether the anchored backend may be used.
+//
+// atCompatForceDisabled is a compile-time constant, true only in a build made
+// with the goppc_atcompat_disabled tag (two files, one per tag value). It exists
+// so the disabled-backend dispatch can be executed and asserted on a kernel where
+// the backend would otherwise be on — the refusal path is otherwise reachable
+// only on a machine nobody has. It is not a runtime switch and no production
+// build contains the true value.
 func atCompatEnabled() bool {
+	if atCompatForceDisabled {
+		return false
+	}
 	atCompatOnce.Do(func() {
 		release, err := syscall.Sysctl("kern.osrelease")
 		if err != nil {
@@ -265,19 +283,17 @@ func atChmodNofollow(anchor int, path string, mode uint32) error {
 // atUtimensatNofollow is Utimensat(AT_SYMLINK_NOFOLLOW) for a real directory
 // descriptor, for the explicit-time form os.Root.Chtimes uses.
 //
-// Measured divergence, recorded rather than hidden: when the request selects
-// ONLY the access time, HFS+ does not store the supplied value. hfs_setattr
-// treats "va_active == va_access_time" as a kernel-level lazy access-time touch
-// (bsd/hfs/hfs_vnops.c:776-780: it sets c_touch_acctime and returns before the
-// timestamp block that assigns c_atime), so the value is discarded and the
-// flushed access time is the current time. The only way to force a chosen access
-// time on HFS+ is to send the modification time too, which for an omitted
-// modification time would mean reading it first and writing it back — the
-// read-modify-write this backend exists to avoid. libc's lutimes cannot express
-// an access-time-only request at all (its API always sets both), so there is no
-// libc baseline this diverges from; utimensat(UTIME_OMIT on the modification
-// time) is the new capability, and on HFS+ it is the access-time half that is
-// approximate. Selecting both times, or only the modification time, is exact.
+// An access-time-only request needs one extra step, and it is the HFS workaround
+// the measured behaviour forced (syscall.atChgTimeForAccessTime documents the
+// kernel source and the measurements): HFS discards the supplied access time
+// when the access time is the only active attribute, and stores it exactly as
+// soon as any other attribute is active. So on HFS — and only there, checked
+// through the descriptor for the anchor and through st_dev for the entry, so a
+// mount point inside the root cannot smuggle the dummy change time onto a
+// filesystem that honours it — the request also selects ATTR_CMN_CHGTIME with a
+// value the filesystem ignores. On every other filesystem the ordinary selective
+// request is sent, unchanged, and on a filesystem query error nothing is sent:
+// the error is returned rather than guessing which form is right.
 //
 // UTIME_OMIT omits its attribute rather than reading the old value and writing
 // it back, so there is no read-modify-write window and no chance of rewriting an
@@ -310,7 +326,24 @@ func atUtimensatNofollow(anchor int, path string, times *[2]syscall.Timespec) er
 		ts := ts
 		sel[i] = &ts
 	}
-	err := atUtimensatCompound(anchor, path, sel[1], sel[0])
+
+	// sel[0] is the access time, sel[1] the modification time. Only the
+	// access-time-alone form needs the HFS workaround; with the modification
+	// time selected the ordinary timestamp block already stores the access time.
+	var chg *syscall.Timespec
+	if sel[0] != nil && sel[1] == nil {
+		dummy, needed, err := atChgTimeForAccessTime(anchor, path)
+		if err != nil {
+			// The filesystem could not be identified, so which form is exact is
+			// unknown. Report that instead of changing an attribute with an
+			// unverified request.
+			return err
+		}
+		if needed {
+			chg = &dummy
+		}
+	}
+	err := atUtimensatCompound(anchor, path, sel[1], chg, sel[0])
 	return atAuthErrno(err, sel[0] != nil || sel[1] != nil)
 }
 
