@@ -28,6 +28,20 @@ import (
 	"time"
 )
 
+// sameDirDarwinPPC reports whether two paths name the same existing directory.
+func sameDirDarwinPPC(t *testing.T, a, b string) bool {
+	t.Helper()
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
+}
+
 func writeFixtureDarwinPPC(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
@@ -90,7 +104,11 @@ func TestAtCompoundSkipClearMutantDarwinPPC(t *testing.T) {
 			t.Errorf("Getwd after the mutant call: %v", err)
 			return
 		}
-		if got != anchorDir {
+		// Compare directories, not spellings: /tmp is a symlink to /private/tmp
+		// on Darwin, so the same directory has two names.
+		if sameDirDarwinPPC(t, got, anchorDir) {
+			// Expected: the anchor is the thread's cwd.
+		} else {
 			t.Errorf("after the skip-clear mutant this thread's cwd is %q; want the anchor %q — the oracle cannot see a missing clear", got, anchorDir)
 		}
 		// And as a private cwd that 349(-1) can still clear.
