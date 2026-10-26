@@ -432,3 +432,111 @@ func TestAtDarwinPPCCompoundRefusalsDarwinPPC(t *testing.T) {
 		t.Errorf("349(-1) after a failed install = %v; want EBADF (a failed install must change nothing)", err)
 	}
 }
+
+// atOpenFDCount reports how many descriptors this process has open, as seen
+// through /dev/fd. It is how the mixed-operand tests check that the dispatcher
+// closes the descriptor it captured for a relative AT_FDCWD operand.
+func atOpenFDCount(t *testing.T) int {
+	t.Helper()
+	ents, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		t.Fatalf("reading /dev/fd: %v", err)
+	}
+	return len(ents)
+}
+
+// TestAtMixedFDCWDCaptureDarwinPPC sets up the three trees a mixed two-name
+// operation has to keep apart: the process working directory (a decoy), the
+// locked caller's own private working directory (what AT_FDCWD means for that
+// caller), and a held anchor descriptor on a third directory.
+//
+// The final expectation is success with no mutation of the wrong tree; in this
+// phase the mixed forms are still refused, and what is pinned is that the refusal
+// changes nothing anywhere, keeps the caller's private cwd, and leaks no
+// descriptor.
+func TestAtMixedFDCWDCaptureDarwinPPC(t *testing.T) {
+	procDir, callerDir, anchorDir := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{procDir, callerDir, anchorDir} {
+		atWrite(t, filepath.Join(dir, "src"), filepath.Base(dir))
+	}
+	t.Chdir(procDir)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		callerFd, err := syscall.Open(callerDir, syscall.O_RDONLY, 0)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer syscall.Close(callerFd)
+		if err := rawPthreadFchdir(callerFd); err != nil {
+			t.Errorf("installing the caller's private cwd: %v", err)
+			return
+		}
+		installed := true
+		defer func() {
+			if installed {
+				if err := rawPthreadFchdir(-1); err != nil {
+					t.Errorf("clearing the caller's private cwd: %v", err)
+				}
+			}
+		}()
+
+		anchorFd, err := syscall.Open(anchorDir, syscall.O_RDONLY, 0)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer syscall.Close(anchorFd)
+
+		fdsBefore := atOpenFDCount(t)
+
+		// Direction one: the source resolves from the caller's cwd, the
+		// destination from the held anchor.
+		err = unix.Renameat(unix.AT_FDCWD, "src", anchorFd, "dst")
+		if !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Renameat(caller cwd, anchor) = %v; want ENOTSUP while capture is not implemented", err)
+		}
+		// Direction two: the source resolves from the held anchor, the
+		// destination from the caller's cwd.
+		err = unix.Renameat(anchorFd, "src", unix.AT_FDCWD, "dst")
+		if !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Renameat(anchor, caller cwd) = %v; want ENOTSUP while capture is not implemented", err)
+		}
+		// The same two shapes for link, which refuses every anchored form in this
+		// phase; both must stay refused without touching any tree.
+		if err := unix.Linkat(unix.AT_FDCWD, "src", anchorFd, "dst", 0); !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Linkat(caller cwd, anchor) = %v; want ENOTSUP", err)
+		}
+		if err := unix.Linkat(anchorFd, "src", unix.AT_FDCWD, "dst", 0); !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Linkat(anchor, caller cwd) = %v; want ENOTSUP", err)
+		}
+		if got := atOpenFDCount(t); got != fdsBefore {
+			t.Errorf("open descriptors %d -> %d: the refused forms leaked a descriptor", fdsBefore, got)
+		}
+
+		for _, dir := range []string{procDir, callerDir, anchorDir} {
+			wantContent(t, filepath.Join(dir, "src"), filepath.Base(dir))
+			wantAbsent(t, filepath.Join(dir, "dst"))
+		}
+
+		// The caller's own private cwd is still installed and still resolves to its
+		// own directory: a capture must not be paid for with the caller's thread
+		// state.
+		if got, err := syscall.Getwd(); err != nil || !sameFile(t, got, callerDir) {
+			t.Errorf("caller cwd after the mixed forms = %q, %v; want %q", got, err, callerDir)
+		}
+		if err := rawPthreadFchdir(-1); err != nil {
+			t.Errorf("clearing the caller's private cwd: %v; want nil (it must still be installed)", err)
+		}
+		installed = false
+		if got, err := syscall.Getwd(); err != nil || !sameFile(t, got, procDir) {
+			t.Errorf("process cwd after clearing = %q, %v; want %q", got, err, procDir)
+		}
+	}()
+	<-done
+}

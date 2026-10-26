@@ -30,6 +30,9 @@ import (
 //go:linkname atUtimensatCompound
 //go:linkname atRenameatCompound
 //go:linkname atChgTimeForAccessTime
+//go:linkname atSetattrNoAnchor
+//go:linkname atChmodNofollowNoAnchor
+//go:linkname atUtimensatNoAnchor
 
 // Leopard has no *at family, but xnu-1228 has two kernel interfaces that make
 // most of os.Root expressible without reconstructing a pathname:
@@ -647,4 +650,68 @@ func atRenameatCompound(anchor int, oldpath, newpath string) error {
 	}
 	_, err = atCompoundDispatch(req)
 	return err
+}
+
+// atSetattrNoAnchor is one setattrlist(2) request on a pathname that needs no
+// directory anchor at all: an absolute name resolves from the root, so there is
+// nothing to install and nothing to identify.
+//
+// This is the plain raw-syscall envelope, and it is deliberately not the
+// private-cwd compound: no syscall 349 is issued, so no thread state is touched
+// and no install/identity/clear sequence can fail. The request is the same
+// setattrlist the anchored form sends — attrlist bitmap, payload bytes and
+// FSOPT_NOFOLLOW — built by the same typed helpers, so the two forms cannot
+// disagree about the attribute encoding. The kernel's five arguments occupy
+// R3..R7, which is why this is a Syscall6 and not a Syscall.
+//
+// The pathname, the attrlist and the attribute buffer stay reachable through
+// typed pointers until the call returns, and nothing between the entry into the
+// kernel and its return allocates or can be preempted on another thread.
+func atSetattrNoAnchor(path string, alist *atAttrlist, attr []byte) error {
+	p, err := ByteSliceFromString(path)
+	if err != nil {
+		return err
+	}
+	var buf *byte
+	if len(attr) > 0 {
+		buf = &attr[0]
+	} else {
+		// Same reason as the anchored form: a zero bufferSize is ENOMEM even
+		// when no attribute is selected.
+		buf = &atDot[0]
+		attr = atDot[:1]
+	}
+	_, _, e1 := Syscall6(SYS_SETATTRLIST,
+		uintptr(unsafe.Pointer(&p[0])),
+		uintptr(unsafe.Pointer(alist)),
+		uintptr(unsafe.Pointer(buf)),
+		uintptr(len(attr)),
+		uintptr(atFsOptNoFollow),
+		0)
+	runtime.KeepAlive(p)
+	runtime.KeepAlive(alist)
+	runtime.KeepAlive(attr)
+	if e1 != 0 {
+		return errnoErr(e1)
+	}
+	return nil
+}
+
+// atChmodNofollowNoAnchor is the Fchmodat(AT_SYMLINK_NOFOLLOW) form of an
+// absolute name: the same setattrlist request as atChmodNofollowCompound, sent
+// without a private cwd.
+func atChmodNofollowNoAnchor(path string, mode uint32) error {
+	al := &atAttrlist{bitmapcount: atAttrBitMapCount, commonattr: atAttrCmnAccessMask}
+	attr := &struct{ mode uint32 }{mode: mode}
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(attr)), unsafe.Sizeof(*attr))
+	return atSetattrNoAnchor(path, al, buf)
+}
+
+// atUtimensatNoAnchor is the Utimensat(AT_SYMLINK_NOFOLLOW) explicit-time form
+// of an absolute name, with the same omission bitmap as the anchored form and
+// no private cwd.
+func atUtimensatNoAnchor(path string, mod, chg, acc *Timespec) error {
+	al, buf, n := atTimesPayload(mod, chg, acc)
+	attr := unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), n*int(unsafe.Sizeof(buf[0])))
+	return atSetattrNoAnchor(path, &al, attr)
 }
