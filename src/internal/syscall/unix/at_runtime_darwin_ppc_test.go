@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -251,6 +252,7 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 		}
 	})
 
+	var twoPathIterations atomic.Int32
 	errs := make(chan error, workers*iters)
 	done := make(chan struct{})
 	go func() {
@@ -316,6 +318,12 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 					errs <- fmt.Errorf("worker %d iter %d: size changed to %d; want %d", w, i, after.Size, wantSize)
 					return
 				}
+				if err := atStressTwoPaths(fd, name, w, i, false); err != nil {
+					errs <- fmt.Errorf("worker %d iter %d two-path payload: %v", w, i, err)
+					return
+				}
+				twoPathIterations.Add(1)
+
 				if pad[i%len(pad)] != byte(i) {
 					errs <- fmt.Errorf("worker %d iter %d: local buffer was corrupted", w, i)
 					return
@@ -330,6 +338,11 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 		}
 	}
 	<-done
+
+	t.Logf("two-path stress: Linkat iterations=%d Renameat iterations=%d concurrent GC cycles=6", twoPathIterations.Load(), twoPathIterations.Load())
+	if got := twoPathIterations.Load(); got != workers*iters {
+		t.Errorf("two-path iterations=%d want=%d", got, workers*iters)
+	}
 
 	// Every worker's own entry ended with its own mode and times, and no worker
 	// wrote into another worker's file.
@@ -556,4 +569,88 @@ func TestAtMixedFDCWDCaptureDarwinPPC(t *testing.T) {
 		}
 	}()
 	<-done
+}
+
+// atStressTwoPaths allocates independent second pathnames for each operation and
+// worker/iteration. The same identity oracle rejects the wrong-second-path
+// control; no payload is borrowed from another worker's backing storage.
+func atStressTwoPaths(fd int, source string, worker, iteration int, wrongSecond bool) error {
+	link := fmt.Sprintf("link-worker-%d-iteration-%d-%064d", worker, iteration, worker+1)
+	moved := fmt.Sprintf("move-worker-%d-iteration-%d-%064d", worker, iteration, iteration+1)
+	actualLink := link
+	if wrongSecond {
+		actualLink = link + "-WRONG"
+	}
+	defer unix.Unlinkat(fd, actualLink, 0)
+	defer unix.Unlinkat(fd, moved, 0)
+	before, err := atReadFileState(fd, source)
+	if err != nil || !before.Exists {
+		return fmt.Errorf("source state=%+v error=%v", before, err)
+	}
+	if err := atGrowTwoPathStack(20, func() error { return unix.Linkat(fd, source, fd, actualLink, 0) }); err != nil {
+		return err
+	}
+	src, err := atReadFileState(fd, source)
+	if err != nil {
+		return err
+	}
+	dst, err := atReadFileState(fd, link)
+	if err != nil {
+		return err
+	}
+	if !dst.Exists || src.Dev != before.Dev || src.Ino != before.Ino || dst.Dev != before.Dev || dst.Ino != before.Ino ||
+		src.Nlink != before.Nlink+1 || dst.Nlink != src.Nlink || src.Content != before.Content || dst.Content != before.Content {
+		return fmt.Errorf("wrong second Linkat path/identity: before=%+v source=%+v requested=%+v", before, src, dst)
+	}
+	if err := atGrowTwoPathStack(24, func() error { return unix.Renameat(fd, link, fd, moved) }); err != nil {
+		return err
+	}
+	old, err := atReadFileState(fd, link)
+	if err != nil {
+		return err
+	}
+	dst, err = atReadFileState(fd, moved)
+	if err != nil {
+		return err
+	}
+	if old.Exists || !dst.Exists || dst.Dev != before.Dev || dst.Ino != before.Ino || dst.Nlink != before.Nlink+1 || dst.Content != before.Content {
+		return fmt.Errorf("wrong second Renameat path/identity: old=%+v moved=%+v", old, dst)
+	}
+	if err := unix.Unlinkat(fd, moved, 0); err != nil {
+		return err
+	}
+	final, err := atReadFileState(fd, source)
+	if err != nil {
+		return err
+	}
+	if final != before {
+		return fmt.Errorf("source not restored after two-path stress: before=%+v after=%+v", before, final)
+	}
+	return nil
+}
+
+//go:noinline
+func atGrowTwoPathStack(depth int, call func() error) error {
+	var pad [1024]byte
+	pad[depth%len(pad)] = byte(depth)
+	var err error
+	if depth == 0 {
+		err = call()
+	} else {
+		err = atGrowTwoPathStack(depth-1, call)
+	}
+	if pad[depth%len(pad)] != byte(depth) {
+		return fmt.Errorf("two-path stack padding corrupted")
+	}
+	runtime.KeepAlive(&pad)
+	return err
+}
+
+func TestAtTwoPathWrongSecondControlDarwinPPC(t *testing.T) {
+	_, _, fd := atTree(t)
+	err := atStressTwoPaths(fd, "file", 0, 0, true)
+	t.Logf("wrong-second-path control oracle=%v", err)
+	if err == nil {
+		t.Fatal("wrong second pathname was not detected")
+	}
 }
