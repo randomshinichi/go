@@ -309,10 +309,13 @@ func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 	// refused before the descriptor is examined at all.
 	gateOn := unix.AtCompatEnabledForTest()
 	if _, err := unix.Openat(otherFd, "file", syscall.O_RDONLY, 0); err != nil {
-		// otherFd is a directory, so this must succeed with the gate on; the
-		// control is that a non-directory descriptor does not.
-		if !gateOn || !errors.Is(err, syscall.ENOTSUP) {
+		// otherFd is a directory, so this must succeed with the gate on; with the
+		// backend off every real-descriptor form is refused before the descriptor
+		// is examined. The control is that a non-directory descriptor never acts.
+		if gateOn {
 			t.Errorf("Openat(directory descriptor) = %v; want success", err)
+		} else if !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Openat(directory descriptor) with the anchored backend off = %v; want ENOTSUP", err)
 		}
 	}
 	fileFd, err := syscall.Open(filepath.Join(anchorDir, "file"), syscall.O_RDONLY, 0)
