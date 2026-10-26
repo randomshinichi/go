@@ -40,3 +40,10 @@ func AtConcatPathForTest(base, suffix string) (string, error) { return atConcatP
 func AtPathFromFDForTest(dirfd int, suffix string) (string, error) {
 	return atPathFromFD(dirfd, suffix)
 }
+
+// AtFaccessatForTest is the unix-layer faccessat dispatch: no caller in the
+// standard library passes a real descriptor or flags other than AT_EACCESS, so
+// the refusal paths can only be asserted from outside the package.
+func AtFaccessatForTest(dirfd int, path string, mode uint32, flags int) error {
+	return faccessat(dirfd, path, mode, flags)
+}
