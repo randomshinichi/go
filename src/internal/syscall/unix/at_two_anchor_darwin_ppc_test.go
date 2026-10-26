@@ -37,6 +37,7 @@ package unix_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -379,6 +380,100 @@ func TestAtReconstructedPathLengthDarwinPPC(t *testing.T) {
 		}
 	})
 
+	for _, op := range []string{"Linkat", "Renameat"} {
+		for _, mutant := range []bool{false, true} {
+			name := op
+			if mutant {
+				name += "TruncateAndMutateControl"
+			}
+			t.Run(name, func(t *testing.T) {
+				aDir, bDir, a, _ := atTwoDirs(t)
+				// Every individual component is legal. Only the reconstructed
+				// absolute destination exceeds MAXPATHLEN, not the relative name.
+				for len(bDir) < 740 {
+					bDir = filepath.Join(bDir, repeatByte('b', 100))
+					if err := os.Mkdir(bDir, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				b, err := syscall.Open(bDir, syscall.O_RDONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer syscall.Close(b)
+				base, err := unix.AtPathFromFDForTest(b, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The empty suffix adds a slash. Get the actual base spelling.
+				base = base[:len(base)-1]
+				sub := repeatByte('s', 100)
+				suffix := sub + "/" + repeatByte('d', 240)
+				if len(base)+1+len(suffix)+1 <= 1024 {
+					t.Fatal("fixture does not overflow")
+				}
+				truncated := suffix[:1023-len(base)-1]
+				if len(truncated) <= len(sub)+1 {
+					t.Fatal("truncation must end in the leaf component")
+				}
+				if err := unix.Mkdirat(b, sub, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				atWriteFD(t, b, suffix, "existing-destination")
+				atWrite(t, filepath.Join(aDir, "src"), "source")
+				atWriteFD(t, b, "src", "destination-source-decoy")
+				if err := unix.Mkdirat(a, sub, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				atWriteFD(t, a, suffix, "source-destination-decoy")
+				entries := []struct {
+					fd   int
+					name string
+				}{{a, "src"}, {b, suffix}, {b, truncated}, {b, "src"}, {a, suffix}}
+				before := make([]atFileState, len(entries))
+				for i, e := range entries {
+					before[i], err = atReadFileState(e.fd, e.name)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				destination := suffix
+				if mutant {
+					destination = truncated
+				}
+				if op == "Linkat" {
+					err = unix.Linkat(a, "src", b, destination, 0)
+				} else {
+					err = unix.Renameat(a, "src", b, destination)
+				}
+				if mutant {
+					if err != nil {
+						t.Fatalf("truncate-and-mutate setup: %v", err)
+					}
+					err = syscall.ERANGE // a late error must not disguise the mutation
+				}
+				var verdict error
+				if !errors.Is(err, syscall.ERANGE) {
+					verdict = fmt.Errorf("%s overflow = %v; want ERANGE", op, err)
+				}
+				for i, e := range entries {
+					after, stateErr := atReadFileState(e.fd, e.name)
+					if stateErr != nil || after != before[i] {
+						verdict = fmt.Errorf("%s changed entry %d: before=%+v after=%+v error=%v", op, i, before[i], after, stateErr)
+					}
+				}
+				t.Logf("combined length including NUL=%d mutant=%v oracle=%v", len(base)+1+len(suffix)+1, mutant, verdict)
+				if mutant {
+					if verdict == nil {
+						t.Fatal("truncate-and-mutate counterfeit not detected")
+					}
+				} else if verdict != nil {
+					t.Fatal(verdict)
+				}
+			})
+		}
+	}
+
 	t.Run("EmbeddedNUL", func(t *testing.T) {
 		// The concatenation itself does not scan for NUL; the name conversion for
 		// the kernel does, and that must happen before any mutation.
@@ -486,4 +581,49 @@ func TestRenameatCrossDirectoryDarwinPPC(t *testing.T) {
 		}
 		wantContent(t, filepath.Join(bDir, "referent"), "referent")
 	})
+}
+
+// atFileState is the effect oracle shared by overflow and hardlink controls.
+// Timestamp reads can themselves update atime, so only identity, nlink and
+// contents are compared here. Missing names are explicit states, not errors.
+type atFileState struct {
+	Exists  bool
+	Dev     int32
+	Ino     uint64
+	Nlink   uint16
+	Mode    uint16
+	Content string
+}
+
+func atReadFileState(fd int, name string) (atFileState, error) {
+	f, err := unix.Openat(fd, name, syscall.O_RDONLY, 0)
+	if errors.Is(err, syscall.ENOENT) {
+		return atFileState{}, nil
+	}
+	if err != nil {
+		return atFileState{}, err
+	}
+	defer syscall.Close(f)
+	var st syscall.Stat_t
+	if err := syscall.Fstat(f, &st); err != nil {
+		return atFileState{}, err
+	}
+	var buf [512]byte
+	n, err := syscall.Read(f, buf[:])
+	if err != nil {
+		return atFileState{}, err
+	}
+	return atFileState{true, st.Dev, st.Ino, st.Nlink, st.Mode, string(buf[:n])}, nil
+}
+
+func atWriteFD(t *testing.T, dirfd int, name, contents string) {
+	t.Helper()
+	fd, err := unix.Openat(dirfd, name, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	if n, err := syscall.Write(fd, []byte(contents)); err != nil || n != len(contents) {
+		t.Fatalf("write %q: %d, %v", name, n, err)
+	}
 }
