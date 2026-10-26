@@ -263,13 +263,6 @@ pipeok:
 TEXT runtime·close_trampoline(SB), NOSPLIT, $32-0
 	LWZ	R3, 0(R3)
 	BL	libc_close(SB)
-	CMPWI	R3, $-1
-	BC	12, 2, closeerr
-	RET
-closeerr:
-	BL	libc_error(SB)
-	LWZ	R3, 0(R3)
-	NEG	R3, R3
 	RET
 
 TEXT runtime·exit_trampoline(SB), NOSPLIT, $32-0
