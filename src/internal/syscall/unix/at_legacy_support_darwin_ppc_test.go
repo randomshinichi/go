@@ -40,9 +40,11 @@ package unix_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -1340,8 +1342,8 @@ func TestLegacySupportRenameatSmokeDarwinPPC(t *testing.T) {
 // T03: two concurrent workers, each with its own anchored directory, 200 calls
 // each; every observation must describe the worker's own anchor (stat(".") dev/ino
 // equal to fstat(anchor)) and no call may fail. T04: the same work with a locked
-// observer taking a baseline and a final identity, and an observation count that
-// must be non-zero, so an observer that never ran cannot pass.
+// observer checking cwd and identity during the workload and at its endpoints;
+// measured overlap must be nonzero. Both observer counterfeits must be rejected.
 //
 // Bounded by construction: fixed 200 iterations, no retry, no probabilistic
 // safety claim.
@@ -1421,65 +1423,106 @@ func TestLegacySupportTortureDarwinPPC(t *testing.T) {
 		}
 	})
 
-	// T04: bounded concurrent work with a locked observer that samples the caller's
-	// own cwd and Stat(".") identity before and after the work.
+	// T04: sample during the work interval, not just at its endpoints. The
+	// worker pauses after its first operation until the observer has sampled;
+	// subsequent calls and samples run concurrently, with fixed bounds.
 	t.Run("Getcwd", func(t *testing.T) {
 		_, fd := mk(t, "observed")
 		defer syscall.Close(fd)
-		ready := make(chan struct{})
-		start := make(chan struct{})
-		observed := make(chan int, 1)
-		go func() {
-			runtime.LockOSThread()
-			defer runtime.UnlockOSThread()
-			cwdBefore, err := syscall.Getwd()
-			if err != nil {
-				close(ready)
-				<-start
-				observed <- 0
-				return
-			}
-			var before syscall.Stat_t
-			if err := syscall.Stat(".", &before); err != nil {
-				close(ready)
-				<-start
-				observed <- 0
-				return
-			}
-			close(ready)
-			<-start
-			cwdAfter, err := syscall.Getwd()
-			var after syscall.Stat_t
-			statErr := syscall.Stat(".", &after)
-			if err != nil || statErr != nil || cwdAfter != cwdBefore ||
-				before.Dev != after.Dev || before.Ino != after.Ino {
-				observed <- 0
-				return
-			}
-			var anchorStat syscall.Stat_t
-			if err := syscall.Fstat(fd, &anchorStat); err != nil {
-				observed <- 0
-				return
-			}
-			if anchorStat.Dev == after.Dev && anchorStat.Ino == after.Ino {
-				// The observer was looking at the anchor: that is the failure this
-				// control exists to catch, so it must not count as an observation.
-				observed <- 0
-				return
-			}
-			observed <- 2
-		}()
-		<-ready
+		for _, mode := range []string{"Concurrent", "EndpointOnlyControl", "WrongIdentityControl"} {
+			t.Run(mode, func(t *testing.T) {
+				count, err := atGetcwdDuringWork(fd, iterations, mode)
+				t.Logf("mode=%s overlap=%d result=%v", mode, count, err)
+				if mode == "Concurrent" {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if err == nil {
+					t.Fatal("observer counterfeit was not rejected")
+				}
+			})
+		}
+	})
+}
+
+// atGetcwdDuringWork returns an error for a bad observation or no measured
+// overlap. EndpointOnlyControl reproduces the old baseline/final-only observer;
+// WrongIdentityControl supplies the anchor's identity instead of the caller's.
+func atGetcwdDuringWork(fd, iterations int, mode string) (int, error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	baseline, err := syscall.Getwd()
+	if err != nil {
+		return 0, err
+	}
+	var before, anchor syscall.Stat_t
+	if err := syscall.Stat(".", &before); err != nil {
+		return 0, err
+	}
+	if err := syscall.Fstat(fd, &anchor); err != nil {
+		return 0, err
+	}
+	if before.Dev == anchor.Dev && before.Ino == anchor.Ino {
+		return 0, fmt.Errorf("observer fixture is the anchor")
+	}
+	started := make(chan struct{})
+	sampled := make(chan struct{})
+	done := make(chan error, 1)
+	var progress atomic.Int32
+	go func() {
+		var workErr error
 		for i := 0; i < iterations; i++ {
 			var st syscall.Stat_t
 			if err := unix.Fstatat(fd, "file", &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-				t.Errorf("Fstatat during observation: %v", err)
-				break
+				workErr = err
 			}
+			progress.Store(int32(i + 1))
+			if i == 0 {
+				close(started)
+				<-sampled
+			}
+			runtime.Gosched()
 		}
-		close(start)
-		if got := <-observed; got != 2 {
-			t.Errorf("observer observations = %d; want 2 (baseline and final identity agreeing, and distinct from the anchor)", got)
+		done <- workErr
+	}()
+	<-started
+	overlap := 0
+	var observationErr error
+	sample := func() {
+		p := progress.Load()
+		cwd, cwdErr := syscall.Getwd()
+		var st syscall.Stat_t
+		statErr := syscall.Stat(".", &st)
+		if mode == "WrongIdentityControl" {
+			st = anchor
 		}
-	})
+		if cwdErr != nil || statErr != nil || cwd != baseline || st.Dev != before.Dev || st.Ino != before.Ino {
+			observationErr = fmt.Errorf("wrong cwd observation: cwd=%q errors=%v/%v dev/ino=%d/%d want=%d/%d", cwd, cwdErr, statErr, st.Dev, st.Ino, before.Dev, before.Ino)
+		}
+		if p > 0 && p < int32(iterations) && progress.Load() < int32(iterations) {
+			overlap++
+		}
+	}
+	if mode != "EndpointOnlyControl" {
+		sample()
+	}
+	close(sampled)
+	if mode != "EndpointOnlyControl" {
+		for i := 1; i < iterations; i++ {
+			sample()
+			runtime.Gosched()
+		}
+	}
+	workErr := <-done
+	sample() // retain the final cwd/identity check, but do not count it as overlap
+	if workErr != nil {
+		return overlap, fmt.Errorf("anchored work: %v", workErr)
+	}
+	if observationErr != nil {
+		return overlap, observationErr
+	}
+	if overlap == 0 {
+		return overlap, fmt.Errorf("no overlapping Getcwd observations")
+	}
+	return overlap, nil
 }
