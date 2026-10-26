@@ -450,10 +450,10 @@ func atOpenFDCount(t *testing.T) int {
 // locked caller's own private working directory (what AT_FDCWD means for that
 // caller), and a held anchor descriptor on a third directory.
 //
-// The final expectation is success with no mutation of the wrong tree; in this
-// phase the mixed forms are still refused, and what is pinned is that the refusal
-// changes nothing anywhere, keeps the caller's private cwd, and leaks no
-// descriptor.
+// Both directions are exercised for rename and for link. The AT_FDCWD operand
+// must be answered by the CALLER's working directory, not by the process
+// directory and not by the helper's, and the dispatcher's capture must leave no
+// descriptor behind and must not disturb the caller's private cwd.
 func TestAtMixedFDCWDCaptureDarwinPPC(t *testing.T) {
 	procDir, callerDir, anchorDir := t.TempDir(), t.TempDir(), t.TempDir()
 	for _, dir := range []string{procDir, callerDir, anchorDir} {
@@ -495,33 +495,43 @@ func TestAtMixedFDCWDCaptureDarwinPPC(t *testing.T) {
 
 		fdsBefore := atOpenFDCount(t)
 
-		// Direction one: the source resolves from the caller's cwd, the
-		// destination from the held anchor.
-		err = unix.Renameat(unix.AT_FDCWD, "src", anchorFd, "dst")
-		if !errors.Is(err, syscall.ENOTSUP) {
-			t.Errorf("Renameat(caller cwd, anchor) = %v; want ENOTSUP while capture is not implemented", err)
+		// Direction one: the source resolves from the caller's cwd, the destination
+		// from the held anchor.
+		if err := unix.Renameat(unix.AT_FDCWD, "src", anchorFd, "dst"); err != nil {
+			t.Errorf("Renameat(caller cwd, anchor): %v", err)
 		}
-		// Direction two: the source resolves from the held anchor, the
-		// destination from the caller's cwd.
-		err = unix.Renameat(anchorFd, "src", unix.AT_FDCWD, "dst")
-		if !errors.Is(err, syscall.ENOTSUP) {
-			t.Errorf("Renameat(anchor, caller cwd) = %v; want ENOTSUP while capture is not implemented", err)
+		wantAbsent(t, filepath.Join(callerDir, "src"))
+		wantContent(t, filepath.Join(anchorDir, "dst"), filepath.Base(callerDir))
+
+		// Direction two: the source resolves from the held anchor, the destination
+		// from the caller's cwd.
+		if err := unix.Renameat(anchorFd, "src", unix.AT_FDCWD, "dst"); err != nil {
+			t.Errorf("Renameat(anchor, caller cwd): %v", err)
 		}
-		// The same two shapes for link, which refuses every anchored form in this
-		// phase; both must stay refused without touching any tree.
-		if err := unix.Linkat(unix.AT_FDCWD, "src", anchorFd, "dst", 0); !errors.Is(err, syscall.ENOTSUP) {
-			t.Errorf("Linkat(caller cwd, anchor) = %v; want ENOTSUP", err)
+		wantAbsent(t, filepath.Join(anchorDir, "src"))
+		wantContent(t, filepath.Join(callerDir, "dst"), filepath.Base(anchorDir))
+
+		// The same two shapes for link, with fresh fixtures.
+		atWrite(t, filepath.Join(callerDir, "lsrc"), "lsrc")
+		atWrite(t, filepath.Join(anchorDir, "asrc"), "asrc")
+		if err := unix.Linkat(unix.AT_FDCWD, "lsrc", anchorFd, "ldst", 0); err != nil {
+			t.Errorf("Linkat(caller cwd, anchor): %v", err)
 		}
-		if err := unix.Linkat(anchorFd, "src", unix.AT_FDCWD, "dst", 0); !errors.Is(err, syscall.ENOTSUP) {
-			t.Errorf("Linkat(anchor, caller cwd) = %v; want ENOTSUP", err)
+		wantContent(t, filepath.Join(anchorDir, "ldst"), "lsrc")
+		if err := unix.Linkat(anchorFd, "asrc", unix.AT_FDCWD, "adst", 0); err != nil {
+			t.Errorf("Linkat(anchor, caller cwd): %v", err)
 		}
+		wantContent(t, filepath.Join(callerDir, "adst"), "asrc")
+
 		if got := atOpenFDCount(t); got != fdsBefore {
-			t.Errorf("open descriptors %d -> %d: the refused forms leaked a descriptor", fdsBefore, got)
+			t.Errorf("open descriptors %d -> %d: a capture leaked a descriptor", fdsBefore, got)
 		}
 
-		for _, dir := range []string{procDir, callerDir, anchorDir} {
-			wantContent(t, filepath.Join(dir, "src"), filepath.Base(dir))
-			wantAbsent(t, filepath.Join(dir, "dst"))
+		// The process working directory is a decoy throughout: nothing may have
+		// landed there, and the caller must not have moved either.
+		wantContent(t, filepath.Join(procDir, "src"), filepath.Base(procDir))
+		for _, name := range []string{"dst", "ldst", "adst"} {
+			wantAbsent(t, filepath.Join(procDir, name))
 		}
 
 		// The caller's own private cwd is still installed and still resolves to its

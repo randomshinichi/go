@@ -273,6 +273,15 @@ func renameat(oldfd int, oldname string, newfd int, newname string) error {
 	return unix.Renameat(oldfd, oldname, newfd, newname)
 }
 
+// PORT NOTE (darwin/ppc, goppc-wjfe6): a zero flag is passed here because that is
+// the only value os.Root.Link can send, and on this port it is NOT POSIX
+// linkat(2)'s "link the symlink inode" form. The compatibility mechanism links
+// by referent, so a symlink inside the root can link a file outside it, and a
+// dangling source symlink fails with ENOENT. AT_SYMLINK_NOFOLLOW is refused with
+// ENOTSUP. See src/internal/syscall/unix/at_darwin_ppc.go (Linkat and the file
+// header's documented differences) and docs/leopard-at-compat-design.md,
+// "Approved two-anchor compatibility". Renameat has its own divergence there: a
+// cross-directory destination is reconstructed by name.
 func linkat(oldfd int, oldname string, newfd int, newname string) error {
 	return unix.Linkat(oldfd, oldname, newfd, newname, 0)
 }
