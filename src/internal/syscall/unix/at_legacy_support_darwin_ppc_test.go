@@ -827,6 +827,23 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		wantContent(t, filepath.Join(anchor, "created"), "one")
 	})
 
+	t.Run("OpenatExclusiveNew", func(t *testing.T) {
+		// P02: successful new exclusive creation is independent of the
+		// existing-name EEXIST control in TestAtDarwinPPCAnchoredOps.
+		if err := atExclusiveNewError(fd, "exclusive", filepath.Join(anchor, "exclusive"), unix.Openat); err != nil {
+			t.Fatal(err)
+		}
+		wantAbsent(t, filepath.Join(cwd, "exclusive"))
+		counterfeit := func(int, string, int, uint32) (int, error) { return -1, syscall.EEXIST }
+		err := atExclusiveNewError(fd, "exclusive-mutant", filepath.Join(anchor, "exclusive-mutant"), counterfeit)
+		t.Logf("P02 always-EEXIST mutant oracle=%v", err)
+		if err == nil {
+			t.Fatal("always-EEXIST mutant accepted")
+		}
+		wantAbsent(t, filepath.Join(anchor, "exclusive-mutant"))
+		wantAbsent(t, filepath.Join(cwd, "exclusive-mutant"))
+	})
+
 	t.Run("FstatatNonDirectory", func(t *testing.T) {
 		// M/test/test_atfuncs.c:234-248 (A02): a regular file's descriptor is not a
 		// directory anchor, for either follow choice, and nothing is created.
@@ -837,12 +854,18 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		}
 		defer syscall.Close(fileFd)
 		var st syscall.Stat_t
-		if err := unix.Fstatat(fileFd, "x", &st, 0); !errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, syscall.ENOTSUP) {
+		if err := unix.Fstatat(fileFd, "x", &st, 0); atNonDirectoryError(err) != nil {
 			t.Errorf("Fstatat(follow) on a file descriptor = %v; want ENOTDIR", err)
 		}
-		if err := unix.Fstatat(fileFd, "x", &st, unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTDIR) && !errors.Is(err, syscall.ENOTSUP) {
+		if err := unix.Fstatat(fileFd, "x", &st, unix.AT_SYMLINK_NOFOLLOW); atNonDirectoryError(err) != nil {
 			t.Errorf("Fstatat(nofollow) on a file descriptor = %v; want ENOTDIR", err)
 		}
+		if err := atNonDirectoryError(syscall.ENOTSUP); err == nil {
+			t.Error("ENOTSUP mutant passed A02 oracle")
+		} else {
+			t.Logf("A02 ENOTSUP mutant rejected: %v", err)
+		}
+
 		if got, err := syscall.Getwd(); err != nil || !sameFile(t, got, cwd) {
 			t.Errorf("cwd = %q, %v; want %q", got, err, cwd)
 		}
@@ -1074,6 +1097,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		defer syscall.Close(otherFd)
 		atWrite(t, filepath.Join(anchor, "lsrc"), "link")
 		srcIno := atIno(t, filepath.Join(anchor, "lsrc"))
+		defer atHardlinkOracle(t, filepath.Join(anchor, "lsrc"), filepath.Join(other, "ldst"))()
 		if err := unix.Linkat(fd, "lsrc", otherFd, "ldst", 0); err != nil {
 			t.Fatalf("Linkat(rel, rel, two directories): %v", err)
 		}
@@ -1118,6 +1142,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		// hard link) adopted as what it is: a successful NO-OP that leaves both
 		// names in place.
 		atWrite(t, filepath.Join(anchor, "h1"), "same")
+		defer atHardlinkOracle(t, filepath.Join(anchor, "h1"), filepath.Join(anchor, "h2"))()
 		if err := unix.Linkat(fd, "h1", fd, "h2", 0); err != nil {
 			t.Fatalf("Linkat: %v", err)
 		}
@@ -1144,6 +1169,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 
 	t.Run("RenameatSameInodeNoOpAbsRel", func(t *testing.T) {
 		atWrite(t, filepath.Join(anchor, "ha"), "same")
+		defer atHardlinkOracle(t, filepath.Join(anchor, "ha"), filepath.Join(anchor, "hb"))()
 		if err := unix.Linkat(fd, "ha", fd, "hb", 0); err != nil {
 			t.Fatalf("Linkat: %v", err)
 		}
@@ -1167,6 +1193,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 
 	t.Run("RenameatSameInodeNoOpAbsAbs", func(t *testing.T) {
 		atWrite(t, filepath.Join(anchor, "za"), "same")
+		defer atHardlinkOracle(t, filepath.Join(anchor, "za"), filepath.Join(anchor, "zb"))()
 		if err := unix.Linkat(fd, "za", fd, "zb", 0); err != nil {
 			t.Fatalf("Linkat: %v", err)
 		}
@@ -1514,4 +1541,37 @@ func atGetcwdDuringWork(fd, iterations int, mode string) (int, error) {
 		return overlap, fmt.Errorf("no overlapping Getcwd observations")
 	}
 	return overlap, nil
+}
+
+func atNonDirectoryError(err error) error {
+	if !errors.Is(err, syscall.ENOTDIR) {
+		return fmt.Errorf("A02 errno=%v; want exactly ENOTDIR", err)
+	}
+	return nil
+}
+
+func atExclusiveNewError(dirfd int, name, path string, open func(int, string, int, uint32) (int, error)) error {
+	fd, err := open(dirfd, name, syscall.O_RDWR|syscall.O_CREAT|syscall.O_EXCL, 0o640)
+	if err != nil {
+		return fmt.Errorf("P02 successful exclusive creation: %v", err)
+	}
+	defer syscall.Close(fd)
+	var held, located syscall.Stat_t
+	if err := syscall.Fstat(fd, &held); err != nil {
+		return err
+	}
+	if err := syscall.Stat(path, &located); err != nil {
+		return err
+	}
+	if held.Dev != located.Dev || held.Ino != located.Ino || held.Mode&syscall.S_IFMT != syscall.S_IFREG || held.Mode&0o777 != 0o640 || held.Nlink != 1 {
+		return fmt.Errorf("P02 wrong identity/type/mode/location: held=%+v located=%+v", held, located)
+	}
+	if n, err := syscall.Write(fd, []byte("exclusive")); err != nil || n != 9 {
+		return fmt.Errorf("P02 write=%d,%v", n, err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != "exclusive" {
+		return fmt.Errorf("P02 content=%q,%v", content, err)
+	}
+	return nil
 }

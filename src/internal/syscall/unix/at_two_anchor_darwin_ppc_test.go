@@ -100,6 +100,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		dead := atDeadFD(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
 		srcIno := atIno(t, filepath.Join(aDir, "src"))
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(aDir, "dst"))()
 		if err := unix.Linkat(dead, filepath.Join(aDir, "src"), dead, filepath.Join(aDir, "dst"), 0); err != nil {
 			t.Fatalf("Linkat(abs, abs): %v", err)
 		}
@@ -116,6 +117,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		aDir, bDir, _, _ := atTwoDirs(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
 		t.Chdir(bDir)
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(unix.AT_FDCWD, filepath.Join(aDir, "src"), unix.AT_FDCWD, "dst", 0); err != nil {
 			t.Fatalf("Linkat(abs, rel AT_FDCWD): %v", err)
 		}
@@ -127,6 +129,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		aDir, bDir, _, _ := atTwoDirs(t)
 		atWrite(t, filepath.Join(bDir, "src"), "cwd")
 		t.Chdir(bDir)
+		defer atHardlinkOracle(t, filepath.Join(bDir, "src"), filepath.Join(aDir, "dst"))()
 		if err := unix.Linkat(unix.AT_FDCWD, "src", unix.AT_FDCWD, filepath.Join(aDir, "dst"), 0); err != nil {
 			t.Fatalf("Linkat(rel AT_FDCWD, abs): %v", err)
 		}
@@ -137,6 +140,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		aDir, bDir, _, b := atTwoDirs(t)
 		dead := atDeadFD(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(dead, filepath.Join(aDir, "src"), b, "dst", 0); err != nil {
 			t.Fatalf("Linkat(abs, rel real fd): %v", err)
 		}
@@ -147,6 +151,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		aDir, bDir, a, _ := atTwoDirs(t)
 		dead := atDeadFD(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(a, "src", dead, filepath.Join(bDir, "dst"), 0); err != nil {
 			t.Fatalf("Linkat(rel real fd, abs): %v", err)
 		}
@@ -157,6 +162,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		_, bDir, _, _ := atTwoDirs(t)
 		atWrite(t, filepath.Join(bDir, "src"), "cwd")
 		t.Chdir(bDir)
+		defer atHardlinkOracle(t, filepath.Join(bDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(unix.AT_FDCWD, "src", unix.AT_FDCWD, "dst", 0); err != nil {
 			t.Fatalf("Linkat(rel AT_FDCWD, rel AT_FDCWD): %v", err)
 		}
@@ -166,6 +172,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 	t.Run("RelRelSameFD", func(t *testing.T) {
 		aDir, _, a, _ := atTwoDirs(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(aDir, "dst"))()
 		if err := unix.Linkat(a, "src", a, "dst", 0); err != nil {
 			t.Fatalf("Linkat(one fd): %v", err)
 		}
@@ -185,6 +192,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		}
 		defer syscall.Close(second)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(aDir, "dst"))()
 		if err := unix.Linkat(first, "src", second, "dst", 0); err != nil {
 			t.Fatalf("Linkat(two fds on one directory): %v", err)
 		}
@@ -198,6 +206,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		aDir, bDir, a, b := atTwoDirs(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
 		srcIno := atIno(t, filepath.Join(aDir, "src"))
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(a, "src", b, "dst", 0); err != nil {
 			t.Fatalf("Linkat(two directories): %v", err)
 		}
@@ -217,6 +226,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		_, bDir, _, b := atTwoDirs(t)
 		atWrite(t, filepath.Join(bDir, "src"), "cwd")
 		t.Chdir(bDir)
+		defer atHardlinkOracle(t, filepath.Join(bDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(unix.AT_FDCWD, "src", b, "dst", 0); err != nil {
 			t.Fatalf("Linkat(AT_FDCWD, real fd): %v", err)
 		}
@@ -227,6 +237,7 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 		aDir, bDir, a, _ := atTwoDirs(t)
 		atWrite(t, filepath.Join(aDir, "src"), "abs")
 		t.Chdir(bDir)
+		defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(bDir, "dst"))()
 		if err := unix.Linkat(a, "src", unix.AT_FDCWD, "dst", 0); err != nil {
 			t.Fatalf("Linkat(real fd, AT_FDCWD): %v", err)
 		}
@@ -261,6 +272,7 @@ func TestLinkatFlagsDarwinPPC(t *testing.T) {
 	if err := unix.Linkat(atDeadFD(t), filepath.Join(aDir, "src"), atDeadFD(t), filepath.Join(bDir, "dst"), unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
 		t.Errorf("Linkat(abs, abs) with AT_SYMLINK_NOFOLLOW = %v; want ENOTSUP", err)
 	}
+	defer atHardlinkOracle(t, filepath.Join(aDir, "src"), filepath.Join(bDir, "dst"))()
 	if err := unix.Linkat(a, "src", b, "dst", 0); err != nil {
 		t.Errorf("Linkat with flag 0 = %v; want success", err)
 	}
@@ -284,6 +296,7 @@ func TestLinkatFinalSourceSymlinkDarwinPPC(t *testing.T) {
 		}
 		linkIno := atIno(t, filepath.Join(aDir, "link"))
 		refIno := atIno(t, filepath.Join(aDir, "referent"))
+		defer atHardlinkOracle(t, filepath.Join(aDir, "referent"), filepath.Join(bDir, "made"))()
 		if err := unix.Linkat(a, "link", b, "made", 0); err != nil {
 			t.Fatalf("Linkat through a source symlink: %v", err)
 		}
@@ -300,6 +313,7 @@ func TestLinkatFinalSourceSymlinkDarwinPPC(t *testing.T) {
 		if err := os.Symlink(filepath.Join(aDir, "absreferent"), filepath.Join(aDir, "abslink")); err != nil {
 			t.Fatal(err)
 		}
+		defer atHardlinkOracle(t, filepath.Join(aDir, "absreferent"), filepath.Join(bDir, "absmade"))()
 		if err := unix.Linkat(a, "abslink", b, "absmade", 0); err != nil {
 			t.Fatalf("Linkat through an absolute source symlink: %v", err)
 		}
@@ -626,4 +640,45 @@ func atWriteFD(t *testing.T, dirfd int, name, contents string) {
 	if n, err := syscall.Write(fd, []byte(contents)); err != nil || n != len(contents) {
 		t.Fatalf("write %q: %d, %v", name, n, err)
 	}
+}
+
+// atHardlinkOracle captures the source before the call. Each adopted success
+// row invokes this same dev/inode/nlink/content oracle. An identical-content
+// copy must fail it, independently of that row's other assertions.
+func atHardlinkOracle(t *testing.T, source, destination string) func() {
+	t.Helper()
+	before, err := atReadFileState(unix.AT_FDCWD, source)
+	if err != nil || !before.Exists {
+		t.Fatalf("hardlink source: %+v, %v", before, err)
+	}
+	return func() {
+		t.Helper()
+		if err := atHardlinkError(before, source, destination); err != nil {
+			t.Error(err)
+		}
+		copyName := filepath.Join(t.TempDir(), "copy-counterfeit")
+		atWrite(t, copyName, before.Content)
+		err := atHardlinkError(before, source, copyName)
+		t.Logf("copy-counterfeit oracle=%v", err)
+		if err == nil {
+			t.Error("identical-content copy passed hardlink oracle")
+		}
+	}
+}
+
+func atHardlinkError(before atFileState, source, destination string) error {
+	src, err := atReadFileState(unix.AT_FDCWD, source)
+	if err != nil {
+		return err
+	}
+	dst, err := atReadFileState(unix.AT_FDCWD, destination)
+	if err != nil {
+		return err
+	}
+	if !src.Exists || !dst.Exists || src.Dev != before.Dev || src.Ino != before.Ino ||
+		dst.Dev != before.Dev || dst.Ino != before.Ino || src.Nlink != before.Nlink+1 || dst.Nlink != src.Nlink ||
+		src.Content != before.Content || dst.Content != before.Content {
+		return fmt.Errorf("not a hardlink: before=%+v source=%+v destination=%+v", before, src, dst)
+	}
+	return nil
 }
