@@ -28,3 +28,15 @@ func AtPthreadFchdirClearForTest() error {
 	}
 	return nil
 }
+
+// AtConcatPathForTest is the length-checked concatenation the cross-directory
+// dispatch uses to build a destination name from a descriptor's path and a
+// relative name. It is exported so the length rule can be pinned without needing
+// a directory whose path is 1023 bytes long.
+func AtConcatPathForTest(base, suffix string) (string, error) { return atConcatPath(base, suffix) }
+
+// AtPathFromFDForTest resolves a descriptor's directory path with fcntl
+// F_GETPATH and appends a relative name, with the same length rule.
+func AtPathFromFDForTest(dirfd int, suffix string) (string, error) {
+	return atPathFromFD(dirfd, suffix)
+}

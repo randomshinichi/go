@@ -33,18 +33,49 @@ import (
 // the new name; its first argument is literal link contents. One absolute form is
 // deliberately not converted: see the access-time-only note below.
 //
-// The exceptions below are refused, not approximated:
+// The two-anchor operations, Linkat and Renameat, follow the anchor table in
+// atTwoNameDispatch. Their compatibility divergences are stated here because no
+// caller can see them from the outside, and none of them is an exemption from a
+// test:
 //
-//   - Linkat with any real directory descriptor, even two names under the same
-//     parent. Leopard's link(2) follows a final source symlink
-//     (bsd/vfs/vfs_syscalls.c:2605-2607) while os.Root.Link must link the link
-//     itself, and journaled HFS+ can hard-link directories
-//     (vfs_syscalls.c:2619-2636). A pre-lstat cannot close the window between
-//     the check and the link.
-//   - Renameat whose two operands need two *different* anchored directories.
-//     There is no race-free two-anchor rename interface here: only one cwd
-//     applies to a pathname, and F_GETPATH/volfs rebuild a pathname and keep
-//     the replacement race they were meant to remove.
+//   - Zero-flag Linkat FOLLOWS a final source symlink. Leopard's link(2) resolves
+//     the first name with LOOKUP|FOLLOW (bsd/vfs/vfs_syscalls.c:2605-2608) and
+//     there is no llink(2), so a source symlink is linked by referent rather than
+//     by inode. POSIX linkat(2) with no flags links the symlink itself, and
+//     os.Root.Link promises exactly that, so through os.Root a zero-flag link can
+//     link a file outside the root through a symlink inside it, and a dangling
+//     source symlink is ENOENT instead of a new hard link. AT_SYMLINK_NOFOLLOW is
+//     therefore refused with ENOTSUP (the C mechanism's dummy llink), and any
+//     other flag value, AT_SYMLINK_FOLLOW included, is EINVAL before a name is
+//     looked at.
+//   - A zero-flag Linkat can create a directory hard link. The kernel permits it
+//     on journaled HFS+ with ownership checks; nothing here pre-checks the object
+//     type, because a check would not close the window before the link. Creating
+//     directory hard links is not exercised by any test and is barred on the
+//     shared target machines: their teardown in a shared tree is unreliable
+//     (removing one of them can leave the object reachable only through the other,
+//     with the directory's own entries still referring to it).
+//   - A Rename or Link between two different relative directories reconstructs the
+//     DESTINATION name from its descriptor with fcntl F_GETPATH and then uses it.
+//     That is a name snapshot, not a held anchor: if the destination directory's
+//     own path is renamed or a component of it is replaced between the F_GETPATH
+//     and the syscall, the operation acts wherever the reconstructed name points.
+//     A rename can therefore overwrite a file outside the directory the caller
+//     anchored, and dev/ino comparisons before the lookup do not close it. The
+//     source keeps the real private-cwd anchor. The C mechanism this follows makes
+//     the same trade (M/src/atfuncs.c:470-475) but checks the combined length with
+//     strlcat's return value, which reports a truncated result as success; here the
+//     total pathname length is checked before anything is looked up and the
+//     operation fails with ERANGE instead.
+//   - A relative AT_FDCWD operand in one of those mixed forms is captured by
+//     opening "." on the caller's own thread. That is real I/O: a directory the
+//     caller may search but not read-open, or a descriptor shortage, fails the
+//     operation where the pure path form would not have opened anything. There is
+//     no fallback to a pathname.
+//   - Rename moves whatever names it resolves. One rename is one atomic namespace
+//     operation; it is not an atomic selection of the two directories the caller
+//     named.
+//
 // Fchmodat with AT_SYMLINK_NOFOLLOW and Utimensat with a real descriptor are
 //     not refused: they run setattrlist with FSOPT_NOFOLLOW, selecting
 //     ATTR_CMN_ACCESSMASK or the MODTIME/CHGTIME/ACCTIME timespecs. Leopard has
@@ -125,6 +156,9 @@ func atChgTimeForAccessTime(anchor int, path string) (syscall.Timespec, bool, er
 
 //go:linkname atRenameatCompound syscall.atRenameatCompound
 func atRenameatCompound(anchor int, oldpath, newpath string) error
+
+//go:linkname atLinkatCompound syscall.atLinkatCompound
+func atLinkatCompound(anchor int, oldpath, newpath string) error
 
 // The no-anchor forms, for a name that resolves from the root and therefore
 // needs no private working directory: the same request the anchored form sends,
@@ -541,7 +575,10 @@ type atTwoNameOp struct {
 	anchored func(anchor int, oldpath, newpath string) error
 }
 
-var atRenameOp = atTwoNameOp{legacy: syscall.Rename, anchored: atRenameatCompound}
+var (
+	atRenameOp = atTwoNameOp{legacy: syscall.Rename, anchored: atRenameatCompound}
+	atLinkOp   = atTwoNameOp{legacy: syscall.Link, anchored: atLinkatCompound}
+)
 
 // atTwoNameDispatch selects how a two-name operation runs.
 //
@@ -590,21 +627,56 @@ func atTwoNameDispatch(op *atTwoNameOp, olddirfd int, oldpath string, newdirfd i
 	if !atCompatEnabled() {
 		return atUnsupported()
 	}
-	if olddirfd == AT_FDCWD || newdirfd == AT_FDCWD {
-		// One operand needs the caller's working directory while the other needs
-		// a held directory. Capture is not wired up in this phase, so the form is
-		// still refused: the caller's cwd must never be replaced by the helper's.
-		return atUnsupported()
+	oldAnchor, closeOld, err := atRelativeAnchor(olddirfd)
+	if err != nil {
+		return err
 	}
-	same, err := sameDirectory(olddirfd, newdirfd)
+	defer closeOld()
+	newAnchor, closeNew, err := atRelativeAnchor(newdirfd)
+	if err != nil {
+		return err
+	}
+	defer closeNew()
+
+	same, err := sameDirectory(oldAnchor, newAnchor)
 	if err != nil {
 		return err
 	}
 	if same {
-		return op.anchored(olddirfd, oldpath, newpath)
+		return op.anchored(oldAnchor, oldpath, newpath)
 	}
-	// Two different held directories: one private cwd cannot serve both.
-	return atUnsupported()
+	// Two different directories, one private cwd. The destination's directory
+	// name is reconstructed from its descriptor and the destination name is made
+	// absolute against it, so the source keeps the real anchor and the second name
+	// needs none. This is a name snapshot, not a held anchor: see
+	// atPathFromFD and the file header for what that costs.
+	dst, err := atPathFromFD(newAnchor, newpath)
+	if err != nil {
+		return err
+	}
+	return op.anchored(oldAnchor, oldpath, dst)
+}
+
+// atRelativeAnchor turns one operand's descriptor into a usable anchor. A
+// relative AT_FDCWD operand means the CALLING thread's working directory, and the
+// helper that runs an anchored operation runs on another thread, so it is
+// captured here, on the caller's own thread, by opening ".". The captured
+// descriptor is then just another held directory.
+//
+// The capture is real I/O with real failure modes: a directory the caller may
+// search but not read open, or an exhausted descriptor table, fails the operation
+// with that error rather than falling back to a pathname. The returned close
+// function only closes a descriptor this function opened, and the caller defers it
+// so no path out of the dispatch leaks one.
+func atRelativeAnchor(dirfd int) (int, func(), error) {
+	if dirfd != AT_FDCWD {
+		return dirfd, func() {}, nil
+	}
+	fd, err := syscall.Open(".", syscall.O_RDONLY, 0)
+	if err != nil {
+		return -1, func() {}, err
+	}
+	return fd, func() { syscall.Close(fd) }, nil
 }
 
 // Renameat is renameat(2) for this platform.
@@ -634,13 +706,36 @@ func sameDirectory(a, b int) (bool, error) {
 	return sa.Dev == sb.Dev && sa.Ino == sb.Ino, nil
 }
 
+// Linkat is linkat(2) for this platform, with the flag policy of the approved
+// compatibility mechanism and not the POSIX one.
+//
+// The flags are decided before any anchor is selected, any name is captured or
+// anything is mutated:
+//
+//	flag 0                     legacy kernel link; it FOLLOWS a final source
+//	                           symlink (bsd/vfs/vfs_syscalls.c:2605-2608)
+//	exactly AT_SYMLINK_NOFOLLOW  ENOTSUP: this kernel has no llink(2) and no
+//	                           anchored link that would not follow
+//	anything else              EINVAL, including AT_SYMLINK_FOLLOW, unknown bits,
+//	                           a negative value and NOFOLLOW combined with another
+//	                           bit
+//
+// The zero-flag rule is the documented divergence: POSIX linkat(2) with no flags
+// links the source INODE, so a source symlink produces a hard link to the symlink
+// itself, and os.Root.Link relies on that (os/root.go's Link promise). Here the
+// kernel links the referent, so a zero-flag Linkat through os.Root can hard-link
+// a file that is outside the root through a symlink inside it, and a dangling
+// source symlink reports ENOENT instead. Nothing in this backend pretends
+// otherwise; the adopted tests assert both consequences explicitly.
 func Linkat(olddirfd int, oldpath string, newdirfd int, newpath string, flag int) error {
-	if olddirfd != AT_FDCWD || newdirfd != AT_FDCWD || flag != 0 {
-		// Every real-descriptor form is refused, including two names under one
-		// parent: see the file comment.
+	switch flag {
+	case 0:
+	case AT_SYMLINK_NOFOLLOW:
 		return atUnsupported()
+	default:
+		return syscall.EINVAL
 	}
-	return syscall.Link(oldpath, newpath)
+	return atTwoNameDispatch(&atLinkOp, olddirfd, oldpath, newdirfd, newpath)
 }
 
 func Symlinkat(oldpath string, newdirfd int, newpath string) error {

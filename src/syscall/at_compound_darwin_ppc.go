@@ -29,10 +29,13 @@ import (
 //go:linkname atChmodNofollowCompound
 //go:linkname atUtimensatCompound
 //go:linkname atRenameatCompound
+//go:linkname atLinkatCompound
 //go:linkname atChgTimeForAccessTime
 //go:linkname atSetattrNoAnchor
 //go:linkname atChmodNofollowNoAnchor
 //go:linkname atUtimensatNoAnchor
+//go:linkname atPathFromFD
+//go:linkname atConcatPath
 
 // Leopard has no *at family, but xnu-1228 has two kernel interfaces that make
 // most of os.Root expressible without reconstructing a pathname:
@@ -42,9 +45,14 @@ import (
 //   - fcntl F_UNLINKFROM(57): the same directory anchor for unlink(2), and
 //     only unlink: it is not a remove-directory primitive (kern_descrip.c:1305).
 //
-// Neither covers a second anchored operand, so Linkat and a Rename between two
-// different anchors stay refused; see internal/syscall/unix/at_darwin_ppc.go
-// for the complete dispatch table and the reasons.
+// Neither covers a second anchored operand, so Linkat and a Rename (or link)
+// whose two names resolve through two different directories run the first name
+// under the private cwd and reconstruct the second from its descriptor with fcntl
+// F_GETPATH (atPathFromFD). The reconstruction is a name snapshot and inherits a
+// replacement race; internal/syscall/unix/at_darwin_ppc.go has the complete
+// dispatch table and the documented differences, including the two that this
+// layer cannot fix: a zero-flag link follows a final source symlink, and the
+// kernel can hard-link directories on journaled HFS+.
 //
 // Every other representable operation needs the *thread-private* working
 // directory that syscall 349 (__pthread_fchdir) installs for one thread
@@ -652,6 +660,62 @@ func atRenameatCompound(anchor int, oldpath, newpath string) error {
 	return err
 }
 
+// atMaxPathLen is MAXPATHLEN, the buffer size F_GETPATH requires and the total
+// length bound a reconstructed pathname has to fit in (bsd/sys/syslimits.h).
+const atMaxPathLen = 1024
+
+// atConcatPath joins a directory pathname with a name relative to it, refusing
+// a combination that does not fit in MAXPATHLEN.
+//
+// The C original this dispatch is modelled on has the length check after the
+// fact and in the wrong units: get_abspath uses strlcat(buf, "/") and then
+// strlcat(buf+len, relative, PATH_MAX-len), where the second call returns the
+// length it would have produced *added to* the offset it started at, so a
+// truncated result can be reported as success (M/src/atfuncs.c:45-64). This is
+// a plain byte count instead: base + '/' + suffix + NUL must fit in the buffer
+// F_GETPATH filled, which is the same MAXPATHLEN the later syscall enforces.
+//
+// A NUL inside suffix is not checked here: the caller converts the name for the
+// kernel with ByteSliceFromString, which already refuses it with EINVAL before
+// anything is looked up.
+func atConcatPath(base, suffix string) (string, error) {
+	if len(base) == 0 || base[0] != '/' {
+		return "", EINVAL
+	}
+	if len(base)+1+len(suffix)+1 > atMaxPathLen {
+		return "", ERANGE
+	}
+	return base + "/" + suffix, nil
+}
+
+// atPathFromFD reconstructs the absolute pathname of suffix relative to the
+// directory open as dirfd, through fcntl F_GETPATH(50).
+//
+// This is a name snapshot, not an anchor: it exists only where one operation
+// needs a second directory that the private-cwd compound cannot hold at the
+// same time as the first. The plan and the file header of
+// internal/syscall/unix/at_darwin_ppc.go state what that costs.
+//
+// A result without a terminator, an empty result, or one that does not start at
+// the root is refused rather than used in truncated form: fcntl's F_GETPATH
+// failure for an over-long path is only guaranteed to be reported through the
+// buffer contents, and silently shortening a name would act on a different
+// object.
+func atPathFromFD(dirfd int, suffix string) (string, error) {
+	var buf [atMaxPathLen]byte
+	if _, err := fcntlPtr(dirfd, F_GETPATH, unsafe.Pointer(&buf[0])); err != nil {
+		return "", err
+	}
+	n := clen(buf[:])
+	if n == 0 {
+		return "", ENOENT
+	}
+	if n >= atMaxPathLen {
+		return "", ERANGE
+	}
+	return atConcatPath(string(buf[:n]), suffix)
+}
+
 // atSetattrNoAnchor is one setattrlist(2) request on a pathname that needs no
 // directory anchor at all: an absolute name resolves from the root, so there is
 // nothing to install and nothing to identify.
@@ -714,4 +778,28 @@ func atUtimensatNoAnchor(path string, mod, chg, acc *Timespec) error {
 	al, buf, n := atTimesPayload(mod, chg, acc)
 	attr := unsafe.Slice((*byte)(unsafe.Pointer(&buf[0])), n*int(unsafe.Sizeof(buf[0])))
 	return atSetattrNoAnchor(path, &al, attr)
+}
+
+// atLinkatCompound is Linkat when both names resolve inside one anchored
+// directory, the same request shape as atRenameatCompound with the link syscall
+// selected: link(oldpath, newpath) with "." resolving through the private cwd.
+//
+// The kernel resolves the FIRST name with LOOKUP|FOLLOW on its final component
+// (bsd/vfs/vfs_syscalls.c:2605-2608), so a zero-flag Linkat links the referent of
+// a source symlink and not the symlink itself. That is the approved
+// compatibility divergence from POSIX linkat(2) and from os.Root.Link, and this
+// builder does not change it: there is no llink on this kernel, and a
+// check-then-link cannot close the window between the two.
+//
+// The second name is replaced, not followed, which is the same rule as rename.
+func atLinkatCompound(anchor int, oldpath, newpath string) error {
+	req, err := atNewRequest(SYS_LINK, anchor, oldpath)
+	if err != nil {
+		return err
+	}
+	if err := atAddPath(req, newpath, 1); err != nil {
+		return err
+	}
+	_, err = atCompoundDispatch(req)
+	return err
 }
