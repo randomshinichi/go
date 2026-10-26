@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build darwin && ppc && !goppc_atcount_test
+
 #include "textflag.h"
 
 // Darwin/ppc32 syscall entry points. On G5 hardware, `sc` returns errno in R3
