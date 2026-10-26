@@ -519,10 +519,12 @@ func TestAtMixedFDCWDCaptureDarwinPPC(t *testing.T) {
 		// The same two shapes for link, with fresh fixtures.
 		atWrite(t, filepath.Join(callerDir, "lsrc"), "lsrc")
 		atWrite(t, filepath.Join(anchorDir, "asrc"), "asrc")
+		defer atHardlinkOracle(t, filepath.Join(callerDir, "lsrc"), filepath.Join(anchorDir, "ldst"))()
 		if err := unix.Linkat(unix.AT_FDCWD, "lsrc", anchorFd, "ldst", 0); err != nil {
 			t.Errorf("Linkat(caller cwd, anchor): %v", err)
 		}
 		wantContent(t, filepath.Join(anchorDir, "ldst"), "lsrc")
+		defer atHardlinkOracle(t, filepath.Join(anchorDir, "asrc"), filepath.Join(callerDir, "adst"))()
 		if err := unix.Linkat(anchorFd, "asrc", unix.AT_FDCWD, "adst", 0); err != nil {
 			t.Errorf("Linkat(anchor, caller cwd): %v", err)
 		}
