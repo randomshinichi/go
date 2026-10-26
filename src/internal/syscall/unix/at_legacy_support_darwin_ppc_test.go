@@ -933,7 +933,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		// named inconclusive fixture, not a passing case.
 		gid, ok := atAlternateGroup(t)
 		if !ok {
-			t.Skip("fixture unavailable: no alternate supplementary group on this machine (recorded as a bounded gap, not a pass)")
+			t.Fatal("unmet prerequisite: no alternate supplementary group on this machine; group provisioning is not authorized")
 		}
 		atWrite(t, filepath.Join(anchor, "own"), "own")
 		ino := atIno(t, filepath.Join(anchor, "own"))
@@ -958,7 +958,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		// comparison corrected: the link's own gid must change.
 		gid, ok := atAlternateGroup(t)
 		if !ok {
-			t.Skip("fixture unavailable: no alternate supplementary group on this machine (recorded as a bounded gap, not a pass)")
+			t.Fatal("unmet prerequisite: no alternate supplementary group on this machine; group provisioning is not authorized")
 		}
 		atWrite(t, filepath.Join(anchor, "owntarget"), "t")
 		if err := os.Symlink("owntarget", filepath.Join(anchor, "ownlink")); err != nil {
@@ -1250,7 +1250,7 @@ func TestLegacySupportAtfuncsDarwinPPC(t *testing.T) {
 		// distinct real/effective IDs; changing credentials on the shared machine is
 		// not authorized, so this is a named unexecuted gap.
 		if os.Getuid() == os.Geteuid() && os.Getgid() == os.Getegid() {
-			t.Skip("fixture unavailable: no distinct real/effective ID to observe (credential change not authorized); recorded as a bounded gap, not a pass)")
+			t.Fatal("unmet prerequisite: no distinct real/effective ID fixture; credential changes are not authorized")
 		}
 		if err := unix.AtFaccessatForTest(unix.AT_FDCWD, filepath.Join(anchor, "perm"), 0, unix.AT_EACCESS); !errors.Is(err, syscall.ENOSYS) {
 			t.Errorf("faccessat with unequal IDs = %v; want ENOSYS", err)
