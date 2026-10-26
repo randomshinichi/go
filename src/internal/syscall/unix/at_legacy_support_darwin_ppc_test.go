@@ -13,6 +13,9 @@ package unix_test
 // the MacPorts legacy-support test suite (reference/macports-legacy-support), and
 // those parts of this file carry its notice:
 //
+// MacPorts test/test_renameat.c (R01):
+// Copyright (c) 2025 Frederick H. G. Wright II <fw@fwright.net>
+// MacPorts test/test_atfuncs.c and manual_tests/libtest_atfunc_torture.c:
 // Copyright (c) 2026 Frederick H. G. Wright II <fw@fwright.net>
 //
 // Permission to use, copy, modify, and distribute this software for any
