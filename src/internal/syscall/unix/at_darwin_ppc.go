@@ -540,7 +540,13 @@ func Utimensat(dirfd int, path string, times *[2]syscall.Timespec, flag int) err
 		// apply to it. The one exception is the access-time-only form, whose HFS
 		// guard is a named deferral for that envelope: it keeps the anchored
 		// dispatch, and so keeps the gate.
-		if sel, err := atTimesSelect(times); err == nil && !(sel[0] != nil && sel[1] == nil) {
+		sel, selErr := atTimesSelect(times)
+		if selErr != nil && selErr != syscall.ENOTSUP {
+			// A malformed timestamp is EINVAL on every kernel, gate or no gate;
+			// only the two refusals above are the backend's semantics.
+			return selErr
+		}
+		if selErr == nil && !(sel[0] != nil && sel[1] == nil) {
 			return atUtimensatNoAnchorPath(path, sel)
 		}
 		if !atCompatEnabled() {
