@@ -531,17 +531,25 @@ func AnchoredAvailable() bool { return atCompatEnabled() }
 // express is a real directory descriptor with AT_SYMLINK_NOFOLLOW, which runs in
 // the private-cwd compound instead.
 func Utimensat(dirfd int, path string, times *[2]syscall.Timespec, flag int) error {
-	if dirfd == AT_FDCWD || flag != AT_SYMLINK_NOFOLLOW || !atCompatEnabled() {
+	if dirfd == AT_FDCWD || flag != AT_SYMLINK_NOFOLLOW {
 		return utimensatPath(dirfd, path, times, flag)
 	}
 	if isAbsPath(path) {
-		// An absolute name needs no working directory, so the same
-		// setattrlist request can go out over a plain raw syscall. The one
-		// exception is the access-time-only form below, whose HFS guard is a
-		// named deferral for the no-anchor envelope.
+		// An absolute name needs no working directory, so the same setattrlist
+		// request goes out over a plain raw syscall and the kernel gate does not
+		// apply to it. The one exception is the access-time-only form, whose HFS
+		// guard is a named deferral for that envelope: it keeps the anchored
+		// dispatch, and so keeps the gate.
 		if sel, err := atTimesSelect(times); err == nil && !(sel[0] != nil && sel[1] == nil) {
 			return atUtimensatNoAnchorPath(path, sel)
 		}
+		if !atCompatEnabled() {
+			return atUnsupported()
+		}
+		return atUtimensatNofollow(dirfd, path, times)
+	}
+	if !atCompatEnabled() {
+		return atUnsupported()
 	}
 	return atUtimensatNofollow(dirfd, path, times)
 }

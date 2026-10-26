@@ -304,19 +304,28 @@ func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 
 	// The anchored open of a real descriptor is not "supported" for a file
 	// descriptor that is not a directory: the kernel interface requires a
-	// readable directory and says so, rather than acting on the process cwd.
-	if _, err := unix.Openat(int(otherFd), "file", syscall.O_RDONLY, 0); err != nil {
-		// otherFd is a directory, so this must succeed; the control is that a
-		// non-directory descriptor does not.
-		t.Errorf("Openat(directory descriptor) = %v; want success", err)
+	// readable directory and says so, rather than acting on the process cwd. On a
+	// kernel where the anchored backend is off, every real-descriptor form is
+	// refused before the descriptor is examined at all.
+	gateOn := unix.AtCompatEnabledForTest()
+	if _, err := unix.Openat(otherFd, "file", syscall.O_RDONLY, 0); err != nil {
+		// otherFd is a directory, so this must succeed with the gate on; the
+		// control is that a non-directory descriptor does not.
+		if !gateOn || !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Openat(directory descriptor) = %v; want success", err)
+		}
 	}
 	fileFd, err := syscall.Open(filepath.Join(anchorDir, "file"), syscall.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer syscall.Close(fileFd)
-	if _, err := unix.Openat(fileFd, "file", syscall.O_RDONLY, 0); !errors.Is(err, syscall.ENOTDIR) {
-		t.Errorf("Openat(non-directory descriptor) = %v; want ENOTDIR", err)
+	want := error(syscall.ENOTDIR)
+	if !gateOn {
+		want = syscall.ENOTSUP
+	}
+	if _, err := unix.Openat(fileFd, "file", syscall.O_RDONLY, 0); !errors.Is(err, want) {
+		t.Errorf("Openat(non-directory descriptor) = %v; want %v", err, want)
 	}
 }
 
