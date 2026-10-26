@@ -156,6 +156,20 @@ func libc_sendfile_trampoline()
 
 //go:cgo_import_dynamic libc_sendfile sendfile "/usr/lib/libSystem.B.dylib"
 
+// Exec cannot work on darwin/ppc Leopard, and this is a platform limit, not a
+// port defect. Leopard's kernel (xnu-1228) refuses execve (and posix_spawn with
+// POSIX_SPAWN_SETEXEC) from any process that has more than one thread, with
+// errno 45 (ENOTSUP), before it looks at the path: execve of a path that does
+// not exist also returns 45. A Go process always has several threads, so
+// syscall.Exec always returns ENOTSUP here, from libc execve and from the raw
+// SYS_EXECVE alike. Measured on the G4 (runs/diag-dsvm-pbg4-20261026T204019Z:
+// a plain Go process shows 3 threads in ps -M; Exec of self, /bin/sh, /bin/echo
+// and a nonexistent path return 45; a C execve from one thread succeeds, with a
+// second thread returns 45, and posix_spawn with POSIX_SPAWN_SETEXEC from two
+// threads returns 45). fork followed by execve in the child works, which is
+// what ForkExec, StartProcess and os/exec use. TestExec fails here for this
+// reason and is not weakened.
+
 // Plain readdir_r fills the legacy 32-bit-inode dirent. Use the 64-bit-inode
 // libSystem entry to match the measured 1048-byte Dirent layout.
 func readdir_r(dir uintptr, entry *Dirent, result **Dirent) (res Errno) {
