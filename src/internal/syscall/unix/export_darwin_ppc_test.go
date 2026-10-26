@@ -16,11 +16,8 @@ func AtCompatRelease(release string) (ok, parsed bool) { return atCompatRelease(
 
 func AtCompatEnabledForTest() bool { return atCompatEnabled() }
 
-// AtPthreadFchdirClearForTest issues raw syscall 349(-1) on the calling
-// goroutine's own thread: it clears a thread-private working directory if one is
-// installed there and reports EBADF when there is none. It is how a test asks
-// whether the private-cwd machinery was involved at all: a request that never
-// installs one leaves this thread with nothing to clear.
+// AtPthreadFchdirClearForTest reports residual state on this thread only. It
+// cannot detect a transient install/clear pair or calls on another thread.
 func AtPthreadFchdirClearForTest() error {
 	_, _, errno := syscall.RawSyscall(syscall.SYS___PTHREAD_FCHDIR, ^uintptr(0), 0, 0)
 	if errno != 0 {

@@ -297,16 +297,13 @@ func TestAtAbsoluteOperandsDarwinPPC(t *testing.T) {
 // for an absolute name to run the same setattrlist request without the private
 // working directory.
 //
-// This is also the zero-syscall-349 control for that envelope, in the form this
-// tree can measure it: the operations below run against a descriptor that is not
-// open (so any anchored dispatch fails with EBADF) and, in the
-// goppc_atcompat_disabled build, against a gate that refuses every anchored form
-// before it can issue syscall 349. Success in both builds, plus the raw
-// 349(-1)=EBADF check on the calling thread at the end, is what rules the
-// private-cwd machinery out; the instrumentation-mutant variant of the same
-// claim would need a counting mutant of the production routine, which this tree
-// does not have and which no phase authorizes adding.
+// In goppc_atcount_test the entire operation sequence is bracketed by a native
+// trap counter, including calls on helper Ms. Ordinary builds make no zero-call
+// measurement claim. Invalid descriptors and the disabled gate separately pin
+// absolute-first dispatch; they cannot prove absence of transient 349 calls.
 func TestAtAbsoluteNofollowMetadataDarwinPPC(t *testing.T) {
+	finishObservation := atBegin349Observation(t)
+	defer finishObservation()
 	abs, cwd := atAbsTree(t)
 	dead := atDeadFD(t)
 	timeAt := func(sec int32) syscall.Timespec { return syscall.Timespec{Sec: sec, Nsec: 0} }
@@ -453,14 +450,6 @@ func TestAtAbsoluteNofollowMetadataDarwinPPC(t *testing.T) {
 		}
 	})
 
-	// The calling thread must not be holding a private working directory after
-	// any of the requests above: raw 349(-1) reports EBADF when there is none to
-	// clear, and success when the thread does hold one.
-	t.Run("CallerThreadClean", func(t *testing.T) {
-		if err := unix.AtPthreadFchdirClearForTest(); !errors.Is(err, syscall.EBADF) {
-			t.Errorf("raw 349(-1) on the calling thread = %v; want EBADF (no private cwd was installed)", err)
-		}
-	})
 }
 
 // TestAtAbsoluteAtimeOnlyDeferredDarwinPPC pins the one absolute metadata form
