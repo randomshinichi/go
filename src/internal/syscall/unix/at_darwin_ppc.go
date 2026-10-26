@@ -49,12 +49,25 @@ import (
 //     other flag value, AT_SYMLINK_FOLLOW included, is EINVAL before a name is
 //     looked at.
 //   - A zero-flag Linkat can create a directory hard link. The kernel permits it
-//     on journaled HFS+ with ownership checks; nothing here pre-checks the object
-//     type, because a check would not close the window before the link. Creating
-//     directory hard links is not exercised by any test and is barred on the
-//     shared target machines: their teardown in a shared tree is unreliable
-//     (removing one of them can leave the object reachable only through the other,
-//     with the directory's own entries still referring to it).
+//     on journaled HFS+ with ownership checks, and the measured target does create
+//     them: linking a directory by its full path from outside a Root succeeded on
+//     powerbook-g4 (Leopard 10.5.8, HFS+), which is why the upstream consistency
+//     case that links "target/." into a different directory has a success on one
+//     side and EPERM on the other. EPERM is the kernel refusing to link a
+//     directory into its own parent (hfs_vnop_link). Nothing here pre-checks the
+//     object type, because a check would not close the window before the link.
+//     Creating directory hard links is not exercised by any test of this backend
+//     and is barred on the shared target machines: their teardown in a shared tree
+//     is unreliable (removing one of them can leave the object reachable only
+//     through the other, with the directory's own entries still referring to it).
+//   - Two upstream os tests therefore fail on target for these reasons and are
+//     reported as EXPECTED-FAIL under the approved divergence, not skipped and not
+//     edited: os.TestRootLinkFrom (its symlink cases read back the created name
+//     and require the symlink inode, root_test.go's Readlink assertion) and
+//     os.TestRootConsistencyLink (the directory-link cases above). The divergences
+//     themselves are asserted positively by TestLinkatFinalSourceSymlinkDarwinPPC
+//     and TestLinkatOperandsDarwinPPC, so those two failures are pinned to the
+//     approved semantics rather than left unexplained.
 //   - A Rename or Link between two different relative directories reconstructs the
 //     DESTINATION name from its descriptor with fcntl F_GETPATH and then uses it.
 //     That is a name snapshot, not a held anchor: if the destination directory's

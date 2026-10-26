@@ -433,16 +433,21 @@ func TestAtDarwinPPCCompoundRefusalsDarwinPPC(t *testing.T) {
 	}
 }
 
-// atOpenFDCount reports how many descriptors this process has open, as seen
-// through /dev/fd. It is how the mixed-operand tests check that the dispatcher
-// closes the descriptor it captured for a relative AT_FDCWD operand.
+// atOpenFDCount reports how many descriptors this process has open, by asking the
+// kernel about each slot with fcntl(F_GETFD). It is how the mixed-operand test
+// checks that the dispatcher closes the descriptor it captured for a relative
+// AT_FDCWD operand; /dev/fd is not usable for this on the target (opening it fails
+// with EBADF under the same conditions being measured).
 func atOpenFDCount(t *testing.T) int {
 	t.Helper()
-	ents, err := os.ReadDir("/dev/fd")
-	if err != nil {
-		t.Fatalf("reading /dev/fd: %v", err)
+	const fGetFD = 1
+	n := 0
+	for fd := 0; fd < syscall.Getdtablesize(); fd++ {
+		if _, _, errno := syscall.RawSyscall(syscall.SYS_FCNTL, uintptr(fd), fGetFD, 0); errno == 0 {
+			n++
+		}
 	}
-	return len(ents)
+	return n
 }
 
 // TestAtMixedFDCWDCaptureDarwinPPC sets up the three trees a mixed two-name

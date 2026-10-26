@@ -266,10 +266,18 @@ func TestAtDarwinPPCCwdUnchanged(t *testing.T) {
 	}
 }
 
-// TestAtDarwinPPCRetainedRefusals is the no-mutation control for the operations
-// this backend does not serve. Each must refuse, and must leave both trees
-// exactly as they were: an ENOTSUP that still acted would be worse than a wrong
-// answer.
+// TestAtDarwinPPCRetainedRefusals is the no-mutation control for the forms that
+// are still refused. Each must refuse, and must leave both trees exactly as they
+// were: a refusal that still acted would be worse than a wrong answer.
+//
+// Two refusals this test used to pin are gone, and their removal is a policy
+// change rather than a weakening to obtain green: the operator decision recorded
+// in goppc-wjfe6 replaced "Linkat with any real descriptor" and "Renameat between
+// two different anchors" with real implementations whose weaker semantics are
+// documented in this file's header. What those two forms now do is asserted, row
+// by row, in at_two_anchor_darwin_ppc_test.go (including the consequences of
+// zero-flag link following a final source symlink); nothing was dropped without a
+// replacement control.
 func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 	anchorDir, cwdDir, fd := atTree(t)
 	otherFd, err := syscall.Open(cwdDir, syscall.O_RDONLY, 0)
@@ -278,23 +286,16 @@ func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 	}
 	defer syscall.Close(otherFd)
 
-	// A same-parent Link is refused even for a regular file: link(2) follows a
-	// final source symlink and HFS+ can hard-link directories, so this is not
-	// a same-parent exception.
-	if err := unix.Linkat(fd, "file", fd, "linked", 0); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Linkat(same parent) = %v; want ENOTSUP", err)
+	// Link flags other than zero are refused before any name is looked at. (The
+	// zero-flag rows live in at_two_anchor_darwin_ppc_test.go.)
+	if err := unix.Linkat(fd, "file", fd, "linked", unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
+		t.Errorf("Linkat(AT_SYMLINK_NOFOLLOW) = %v; want ENOTSUP", err)
+	}
+	if err := unix.Linkat(fd, "file", fd, "linked", 0x40); !errors.Is(err, syscall.EINVAL) {
+		t.Errorf("Linkat(AT_SYMLINK_FOLLOW) = %v; want EINVAL", err)
 	}
 	wantAbsent(t, filepath.Join(anchorDir, "linked"))
 	wantAbsent(t, filepath.Join(cwdDir, "linked"))
-
-	// A rename whose two operands need two different anchored directories is
-	// not representable here.
-	if err := unix.Renameat(fd, "file", otherFd, "moved"); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Renameat(two anchors) = %v; want ENOTSUP", err)
-	}
-	wantContent(t, filepath.Join(anchorDir, "file"), "anchor")
-	wantContent(t, filepath.Join(cwdDir, "file"), "cwd")
-	wantAbsent(t, filepath.Join(cwdDir, "moved"))
 
 	// The no-follow metadata forms are no longer refused here: they are served
 	// by setattrlist(FSOPT_NOFOLLOW) and have their own controls in

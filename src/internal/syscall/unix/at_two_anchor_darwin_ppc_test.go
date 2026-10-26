@@ -143,9 +143,9 @@ func TestLinkatOperandsDarwinPPC(t *testing.T) {
 	})
 
 	t.Run("RelRealFDAbs", func(t *testing.T) {
-		_, bDir, a, _ := atTwoDirs(t)
+		aDir, bDir, a, _ := atTwoDirs(t)
 		dead := atDeadFD(t)
-		atWrite(t, filepath.Join(bDir, "src"), "abs")
+		atWrite(t, filepath.Join(aDir, "src"), "abs")
 		if err := unix.Linkat(a, "src", dead, filepath.Join(bDir, "dst"), 0); err != nil {
 			t.Fatalf("Linkat(rel real fd, abs): %v", err)
 		}
@@ -363,7 +363,13 @@ func TestAtReconstructedPathLengthDarwinPPC(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AtPathFromFD: %v", err)
 		}
-		if want := aDir + "/name"; got != want {
+		// F_GETPATH reports the directory's real path, so a symlinked temporary
+		// directory (/tmp -> /private/tmp) comes back resolved.
+		resolved, err := filepath.EvalSymlinks(aDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := resolved + "/name"; got != want {
 			t.Errorf("reconstructed path = %q; want %q", got, want)
 		}
 		// A suffix that makes the real directory's own path overflow is refused
