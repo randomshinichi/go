@@ -266,10 +266,18 @@ func TestAtDarwinPPCCwdUnchanged(t *testing.T) {
 	}
 }
 
-// TestAtDarwinPPCRetainedRefusals is the no-mutation control for the operations
-// this backend does not serve. Each must refuse, and must leave both trees
-// exactly as they were: an ENOTSUP that still acted would be worse than a wrong
-// answer.
+// TestAtDarwinPPCRetainedRefusals is the no-mutation control for the forms that
+// are still refused. Each must refuse, and must leave both trees exactly as they
+// were: a refusal that still acted would be worse than a wrong answer.
+//
+// Two refusals this test used to pin are gone, and their removal is a policy
+// change rather than a weakening to obtain green: the operator decision recorded
+// in goppc-wjfe6 replaced "Linkat with any real descriptor" and "Renameat between
+// two different anchors" with real implementations whose weaker semantics are
+// documented in this file's header. What those two forms now do is asserted, row
+// by row, in at_two_anchor_darwin_ppc_test.go (including the consequences of
+// zero-flag link following a final source symlink); nothing was dropped without a
+// replacement control.
 func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 	anchorDir, cwdDir, fd := atTree(t)
 	otherFd, err := syscall.Open(cwdDir, syscall.O_RDONLY, 0)
@@ -278,23 +286,16 @@ func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 	}
 	defer syscall.Close(otherFd)
 
-	// A same-parent Link is refused even for a regular file: link(2) follows a
-	// final source symlink and HFS+ can hard-link directories, so this is not
-	// a same-parent exception.
-	if err := unix.Linkat(fd, "file", fd, "linked", 0); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Linkat(same parent) = %v; want ENOTSUP", err)
+	// Link flags other than zero are refused before any name is looked at. (The
+	// zero-flag rows live in at_two_anchor_darwin_ppc_test.go.)
+	if err := unix.Linkat(fd, "file", fd, "linked", unix.AT_SYMLINK_NOFOLLOW); !errors.Is(err, syscall.ENOTSUP) {
+		t.Errorf("Linkat(AT_SYMLINK_NOFOLLOW) = %v; want ENOTSUP", err)
+	}
+	if err := unix.Linkat(fd, "file", fd, "linked", 0x40); !errors.Is(err, syscall.EINVAL) {
+		t.Errorf("Linkat(AT_SYMLINK_FOLLOW) = %v; want EINVAL", err)
 	}
 	wantAbsent(t, filepath.Join(anchorDir, "linked"))
 	wantAbsent(t, filepath.Join(cwdDir, "linked"))
-
-	// A rename whose two operands need two different anchored directories is
-	// not representable here.
-	if err := unix.Renameat(fd, "file", otherFd, "moved"); !errors.Is(err, syscall.ENOTSUP) {
-		t.Errorf("Renameat(two anchors) = %v; want ENOTSUP", err)
-	}
-	wantContent(t, filepath.Join(anchorDir, "file"), "anchor")
-	wantContent(t, filepath.Join(cwdDir, "file"), "cwd")
-	wantAbsent(t, filepath.Join(cwdDir, "moved"))
 
 	// The no-follow metadata forms are no longer refused here: they are served
 	// by setattrlist(FSOPT_NOFOLLOW) and have their own controls in
@@ -303,19 +304,31 @@ func TestAtDarwinPPCRetainedRefusals(t *testing.T) {
 
 	// The anchored open of a real descriptor is not "supported" for a file
 	// descriptor that is not a directory: the kernel interface requires a
-	// readable directory and says so, rather than acting on the process cwd.
-	if _, err := unix.Openat(int(otherFd), "file", syscall.O_RDONLY, 0); err != nil {
-		// otherFd is a directory, so this must succeed; the control is that a
-		// non-directory descriptor does not.
-		t.Errorf("Openat(directory descriptor) = %v; want success", err)
+	// readable directory and says so, rather than acting on the process cwd. On a
+	// kernel where the anchored backend is off, every real-descriptor form is
+	// refused before the descriptor is examined at all.
+	gateOn := unix.AtCompatEnabledForTest()
+	if _, err := unix.Openat(otherFd, "file", syscall.O_RDONLY, 0); err != nil {
+		// otherFd is a directory, so this must succeed with the gate on; with the
+		// backend off every real-descriptor form is refused before the descriptor
+		// is examined. The control is that a non-directory descriptor never acts.
+		if gateOn {
+			t.Errorf("Openat(directory descriptor) = %v; want success", err)
+		} else if !errors.Is(err, syscall.ENOTSUP) {
+			t.Errorf("Openat(directory descriptor) with the anchored backend off = %v; want ENOTSUP", err)
+		}
 	}
 	fileFd, err := syscall.Open(filepath.Join(anchorDir, "file"), syscall.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer syscall.Close(fileFd)
-	if _, err := unix.Openat(fileFd, "file", syscall.O_RDONLY, 0); !errors.Is(err, syscall.ENOTDIR) {
-		t.Errorf("Openat(non-directory descriptor) = %v; want ENOTDIR", err)
+	want := error(syscall.ENOTDIR)
+	if !gateOn {
+		want = syscall.ENOTSUP
+	}
+	if _, err := unix.Openat(fileFd, "file", syscall.O_RDONLY, 0); !errors.Is(err, want) {
+		t.Errorf("Openat(non-directory descriptor) = %v; want %v", err, want)
 	}
 }
 

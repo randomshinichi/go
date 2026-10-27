@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -251,6 +252,7 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 		}
 	})
 
+	var twoPathIterations atomic.Int32
 	errs := make(chan error, workers*iters)
 	done := make(chan struct{})
 	go func() {
@@ -316,6 +318,12 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 					errs <- fmt.Errorf("worker %d iter %d: size changed to %d; want %d", w, i, after.Size, wantSize)
 					return
 				}
+				if err := atStressTwoPaths(fd, name, w, i, false); err != nil {
+					errs <- fmt.Errorf("worker %d iter %d two-path payload: %v", w, i, err)
+					return
+				}
+				twoPathIterations.Add(1)
+
 				if pad[i%len(pad)] != byte(i) {
 					errs <- fmt.Errorf("worker %d iter %d: local buffer was corrupted", w, i)
 					return
@@ -330,6 +338,11 @@ func TestAtDarwinPPCCompoundStressDarwinPPC(t *testing.T) {
 		}
 	}
 	<-done
+
+	t.Logf("two-path stress: Linkat iterations=%d Renameat iterations=%d concurrent GC cycles=6", twoPathIterations.Load(), twoPathIterations.Load())
+	if got := twoPathIterations.Load(); got != workers*iters {
+		t.Errorf("two-path iterations=%d want=%d", got, workers*iters)
+	}
 
 	// Every worker's own entry ended with its own mode and times, and no worker
 	// wrote into another worker's file.
@@ -430,5 +443,214 @@ func TestAtDarwinPPCCompoundRefusalsDarwinPPC(t *testing.T) {
 	}
 	if err := rawPthreadFchdir(-1); !errors.Is(err, syscall.EBADF) {
 		t.Errorf("349(-1) after a failed install = %v; want EBADF (a failed install must change nothing)", err)
+	}
+}
+
+// atOpenFDCount reports how many descriptors this process has open, by asking the
+// kernel about each slot with fcntl(F_GETFD). It is how the mixed-operand test
+// checks that the dispatcher closes the descriptor it captured for a relative
+// AT_FDCWD operand; /dev/fd is not usable for this on the target (opening it fails
+// with EBADF under the same conditions being measured).
+func atOpenFDCount(t *testing.T) int {
+	t.Helper()
+	const fGetFD = 1
+	n := 0
+	for fd := 0; fd < syscall.Getdtablesize(); fd++ {
+		if _, _, errno := syscall.RawSyscall(syscall.SYS_FCNTL, uintptr(fd), fGetFD, 0); errno == 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// TestAtMixedFDCWDCaptureDarwinPPC sets up the three trees a mixed two-name
+// operation has to keep apart: the process working directory (a decoy), the
+// locked caller's own private working directory (what AT_FDCWD means for that
+// caller), and a held anchor descriptor on a third directory.
+//
+// Both directions are exercised for rename and for link. The AT_FDCWD operand
+// must be answered by the CALLER's working directory, not by the process
+// directory and not by the helper's, and the dispatcher's capture must leave no
+// descriptor behind and must not disturb the caller's private cwd.
+func TestAtMixedFDCWDCaptureDarwinPPC(t *testing.T) {
+	procDir, callerDir, anchorDir := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{procDir, callerDir, anchorDir} {
+		atWrite(t, filepath.Join(dir, "src"), filepath.Base(dir))
+	}
+	t.Chdir(procDir)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		callerFd, err := syscall.Open(callerDir, syscall.O_RDONLY, 0)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer syscall.Close(callerFd)
+		if err := rawPthreadFchdir(callerFd); err != nil {
+			t.Errorf("installing the caller's private cwd: %v", err)
+			return
+		}
+		installed := true
+		defer func() {
+			if installed {
+				if err := rawPthreadFchdir(-1); err != nil {
+					t.Errorf("clearing the caller's private cwd: %v", err)
+				}
+			}
+		}()
+
+		anchorFd, err := syscall.Open(anchorDir, syscall.O_RDONLY, 0)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer syscall.Close(anchorFd)
+
+		fdsBefore := atOpenFDCount(t)
+
+		// Direction one: the source resolves from the caller's cwd, the destination
+		// from the held anchor.
+		if err := unix.Renameat(unix.AT_FDCWD, "src", anchorFd, "dst"); err != nil {
+			t.Errorf("Renameat(caller cwd, anchor): %v", err)
+		}
+		wantAbsent(t, filepath.Join(callerDir, "src"))
+		wantContent(t, filepath.Join(anchorDir, "dst"), filepath.Base(callerDir))
+
+		// Direction two: the source resolves from the held anchor, the destination
+		// from the caller's cwd.
+		if err := unix.Renameat(anchorFd, "src", unix.AT_FDCWD, "dst"); err != nil {
+			t.Errorf("Renameat(anchor, caller cwd): %v", err)
+		}
+		wantAbsent(t, filepath.Join(anchorDir, "src"))
+		wantContent(t, filepath.Join(callerDir, "dst"), filepath.Base(anchorDir))
+
+		// The same two shapes for link, with fresh fixtures.
+		atWrite(t, filepath.Join(callerDir, "lsrc"), "lsrc")
+		atWrite(t, filepath.Join(anchorDir, "asrc"), "asrc")
+		defer atHardlinkOracle(t, filepath.Join(callerDir, "lsrc"), filepath.Join(anchorDir, "ldst"))()
+		if err := unix.Linkat(unix.AT_FDCWD, "lsrc", anchorFd, "ldst", 0); err != nil {
+			t.Errorf("Linkat(caller cwd, anchor): %v", err)
+		}
+		wantContent(t, filepath.Join(anchorDir, "ldst"), "lsrc")
+		defer atHardlinkOracle(t, filepath.Join(anchorDir, "asrc"), filepath.Join(callerDir, "adst"))()
+		if err := unix.Linkat(anchorFd, "asrc", unix.AT_FDCWD, "adst", 0); err != nil {
+			t.Errorf("Linkat(anchor, caller cwd): %v", err)
+		}
+		wantContent(t, filepath.Join(callerDir, "adst"), "asrc")
+
+		if got := atOpenFDCount(t); got != fdsBefore {
+			t.Errorf("open descriptors %d -> %d: a capture leaked a descriptor", fdsBefore, got)
+		}
+
+		// The process working directory is a decoy throughout: nothing may have
+		// landed there, and the caller must not have moved either.
+		wantContent(t, filepath.Join(procDir, "src"), filepath.Base(procDir))
+		for _, name := range []string{"dst", "ldst", "adst"} {
+			wantAbsent(t, filepath.Join(procDir, name))
+		}
+
+		// The caller's own private cwd is still installed and still resolves to its
+		// own directory: a capture must not be paid for with the caller's thread
+		// state.
+		if got, err := syscall.Getwd(); err != nil || !sameFile(t, got, callerDir) {
+			t.Errorf("caller cwd after the mixed forms = %q, %v; want %q", got, err, callerDir)
+		}
+		if err := rawPthreadFchdir(-1); err != nil {
+			t.Errorf("clearing the caller's private cwd: %v; want nil (it must still be installed)", err)
+		}
+		installed = false
+		if got, err := syscall.Getwd(); err != nil || !sameFile(t, got, procDir) {
+			t.Errorf("process cwd after clearing = %q, %v; want %q", got, err, procDir)
+		}
+	}()
+	<-done
+}
+
+// atStressTwoPaths allocates independent second pathnames for each operation and
+// worker/iteration. The same identity oracle rejects the wrong-second-path
+// control; no payload is borrowed from another worker's backing storage.
+func atStressTwoPaths(fd int, source string, worker, iteration int, wrongSecond bool) error {
+	link := fmt.Sprintf("link-worker-%d-iteration-%d-%064d", worker, iteration, worker+1)
+	moved := fmt.Sprintf("move-worker-%d-iteration-%d-%064d", worker, iteration, iteration+1)
+	actualLink := link
+	if wrongSecond {
+		actualLink = link + "-WRONG"
+	}
+	defer unix.Unlinkat(fd, actualLink, 0)
+	defer unix.Unlinkat(fd, moved, 0)
+	before, err := atReadFileState(fd, source)
+	if err != nil || !before.Exists {
+		return fmt.Errorf("source state=%+v error=%v", before, err)
+	}
+	if err := atGrowTwoPathStack(20, func() error { return unix.Linkat(fd, source, fd, actualLink, 0) }); err != nil {
+		return err
+	}
+	src, err := atReadFileState(fd, source)
+	if err != nil {
+		return err
+	}
+	dst, err := atReadFileState(fd, link)
+	if err != nil {
+		return err
+	}
+	if !dst.Exists || src.Dev != before.Dev || src.Ino != before.Ino || dst.Dev != before.Dev || dst.Ino != before.Ino ||
+		src.Nlink != before.Nlink+1 || dst.Nlink != src.Nlink || src.Content != before.Content || dst.Content != before.Content {
+		return fmt.Errorf("wrong second Linkat path/identity: before=%+v source=%+v requested=%+v", before, src, dst)
+	}
+	if err := atGrowTwoPathStack(24, func() error { return unix.Renameat(fd, link, fd, moved) }); err != nil {
+		return err
+	}
+	old, err := atReadFileState(fd, link)
+	if err != nil {
+		return err
+	}
+	dst, err = atReadFileState(fd, moved)
+	if err != nil {
+		return err
+	}
+	if old.Exists || !dst.Exists || dst.Dev != before.Dev || dst.Ino != before.Ino || dst.Nlink != before.Nlink+1 || dst.Content != before.Content {
+		return fmt.Errorf("wrong second Renameat path/identity: old=%+v moved=%+v", old, dst)
+	}
+	if err := unix.Unlinkat(fd, moved, 0); err != nil {
+		return err
+	}
+	final, err := atReadFileState(fd, source)
+	if err != nil {
+		return err
+	}
+	if final != before {
+		return fmt.Errorf("source not restored after two-path stress: before=%+v after=%+v", before, final)
+	}
+	return nil
+}
+
+//go:noinline
+func atGrowTwoPathStack(depth int, call func() error) error {
+	var pad [1024]byte
+	pad[depth%len(pad)] = byte(depth)
+	var err error
+	if depth == 0 {
+		err = call()
+	} else {
+		err = atGrowTwoPathStack(depth-1, call)
+	}
+	if pad[depth%len(pad)] != byte(depth) {
+		return fmt.Errorf("two-path stack padding corrupted")
+	}
+	runtime.KeepAlive(&pad)
+	return err
+}
+
+func TestAtTwoPathWrongSecondControlDarwinPPC(t *testing.T) {
+	_, _, fd := atTree(t)
+	err := atStressTwoPaths(fd, "file", 0, 0, true)
+	t.Logf("wrong-second-path control oracle=%v", err)
+	if err == nil {
+		t.Fatal("wrong second pathname was not detected")
 	}
 }

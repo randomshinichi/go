@@ -160,7 +160,7 @@ func rootOpsDarwinPPC() []rootOpDarwinPPC {
 		{"ReadFile", func(r *os.Root) error { _, err := r.ReadFile("f"); return err }, nil},
 		{"WriteFile", func(r *os.Root) error { return r.WriteFile("w", []byte("x"), 0o644) }, nil},
 		{"Rename", func(r *os.Root) error { return r.Rename("f", "g") }, nil},
-		{"Link", func(r *os.Root) error { return r.Link("f", "g") }, syscall.ENOTSUP},
+		{"Link", func(r *os.Root) error { return r.Link("f", "g") }, nil},
 		{"Symlink", func(r *os.Root) error { return r.Symlink("f", "s") }, nil},
 		{"Chmod", func(r *os.Root) error { return r.Chmod("f", 0o600) }, nil},
 		{"Chown", func(r *os.Root) error { return r.Chown("f", os.Getuid(), os.Getgid()) }, nil},
@@ -205,11 +205,18 @@ func freshConfinedRoot(t *testing.T) (*os.Root, string) {
 	return r, rootDir
 }
 
-// TestRootConfinedOpsNoChdirDarwinPPC requires the confined operations to be
-// refused on their own terms. A refusal that is reached by changing the process
-// working directory and changing it back satisfies the endpoints the other test
-// compares, and would operate on the wrong directory for the length of the
-// operation, so it is a defect the endpoint comparison cannot express.
+// TestRootConfinedOpsNoChdirDarwinPPC requires every confined operation to reach
+// its own outcome -- served, or refused on its own terms -- with the process
+// working directory untouched. A result reached by changing the working directory
+// and changing it back satisfies the endpoints the other test compares, and would
+// operate on the wrong directory for the length of the operation, so it is a
+// defect the endpoint comparison cannot express.
+//
+// Link's expected outcome changed with the operator decision recorded in
+// goppc-wjfe6: it is served on this kernel now instead of refused. Its weaker
+// semantics (a zero flag follows a final source symlink) are documented in
+// internal/syscall/unix/at_darwin_ppc.go and asserted by the TestLinkat controls;
+// this test only pins that the operation does not move the process cwd.
 func TestRootConfinedOpsNoChdirDarwinPPC(t *testing.T) {
 	installChdirRecorder()
 
