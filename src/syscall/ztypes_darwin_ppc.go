@@ -129,9 +129,13 @@ type Radvisory_t struct {
 	Pad_cgo_0 [4]byte
 }
 
+// Length is uint32 (size_t is 4 bytes at ppc32), so sizeof is 16 as measured in
+// testdata/darwin_ppc32/xsys/xsys_sizes.txt (Fbootstraptransfer_t=16). This is a
+// hand-applied stand-in for regenerating this table from types_darwin_leopard.go
+// on a target (goppc-p9apt.15); the regeneration replaces it.
 type Fbootstraptransfer_t struct {
 	Offset int64
-	Length uint64
+	Length uint32
 	Buffer *byte
 }
 
