@@ -6,10 +6,14 @@
 
 package big
 
+import _ "unsafe" // for linkname compatibility; see arith_decl.go and go.dev/issue/67401
+
+//go:linkname addVV
 func addVV(z, x, y []Word) (c Word) {
 	return addVV_g(z, x, y)
 }
 
+//go:linkname subVV
 func subVV(z, x, y []Word) (c Word) {
 	return subVV_g(z, x, y)
 }
@@ -22,6 +26,7 @@ func rshVU(z, x []Word, s uint) (c Word) {
 	return rshVU_g(z, x, s)
 }
 
+//go:linkname mulAddVWW
 func mulAddVWW(z, x []Word, y, r Word) (c Word) {
 	return mulAddVWW_g(z, x, y, r)
 }
