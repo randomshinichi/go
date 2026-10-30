@@ -5,9 +5,9 @@ PowerMac G5 Quad and iBook/PowerBook G4s running 10.5.8 Leopard; `linux/ppc` is 
 
 - bootstraps itself!
 - up to date SSL/TLS support!
-- 234/247 stdlib test legs pass on the G5 - the rest are platform limits and test-fixture gaps, not defects in the port
+- 240/248 stdlib test legs pass on ppc32 (PowerBook G4) - the rest are kernel limits, venue gaps and provisioning, not defects in the port
 - profile guided optimization works!??
-- G4, G3 support planned
+- G3 support planned (the suite numbers below are measured on a G4)
 - no optimized intrinsics for AES, GCM, rounding, sha...
 - no CGO, no external linking
 - `go tool pprof` has no interactive editing
@@ -62,7 +62,7 @@ a **byte-identical** `bin/go`.
 ## What works
 
 - The full self-hosting chain: `cmd/dist` → `toolchain1` → `go_bootstrap` → `toolchain2` → `toolchain3` (PGO'd) → packages and commands.
-- `runtime`, `sync`, `os`, `net`, `encoding/json`, `os/exec`, `crypto/sha256`, `crypto/tls`, and the rest of the 230 passing legs.
+- `runtime`, `sync`, `os`, `net`, `encoding/json`, `os/exec`, `crypto/sha256`, `crypto/tls`, and the rest of the 240 passing legs.
 - Profile-guided optimisation, using the target's own `preprofile`.
 - The `runtime/pprof` **CPU sampler** (verified sampling on hardware), `net` (sockets, DNS via file-based resolvers), `/proc`-free Leopard syscalls (`getfsstat64`, `readdir_r$INODE64`, `lutimes`, `F_GETPATH`).
 
@@ -129,14 +129,24 @@ system defaults stand: the connection is made and works, on Leopard's schedule r
 other errno still propagates, so a real failure is not swallowed. The other Darwin ports, where the options exist,
 keep the strict behaviour.
 
-# `stdlib` testsuite failures - not a problem
+# `stdlib` testsuite: 240 of 248 legs pass on ppc32
+
+Measured on hardware — run `runs/augzc3-std-pbg4-20261025T032406Z`, tree tip `98614a202d`, executed 2026-10-25 on a
+PowerBook5,6 (10.5.8). 248 legs: 239 clean passes, `net` graded ANOMALY and verified by hand as a pass (its own passing
+test prints `panic:` from a subprocess), 8 not passing. **This table is ppc32 on a G4; it does not describe the G5.**
+
 | leg | cause (measured) |
 |---|---|
-| `go/types`, `go/internal/gcimporter`, `internal/platform` | Needs `$GOROOT/test/**`, which the test fixture didn't ship. `go/types` type-checked **675 packages in 23 s** before failing on the corpus. |
-| `crypto` (`TestPureGoTag`) | a modern `git` wasn't on the G5 Quad's `PATH`. |
-| `crypto/ed25519`, `crypto/tls` (`TestBogoSuite`) | Need network/vendored testdata. |
-| `math/big`, `crypto/ecdh`, `net/http`, `internal/coverage/cfile` | `TestLinker*`-family tests that build a program and inspect the binary's symbols. `crypto/ecdh` hard-codes a P256 symbol assumption that is false on big-endian ppc64. |
-| `runtime` | Newly reachable in the provisioned configuration; **not yet fully triaged** — the one item here that is genuinely open. |
+| `os` | 55 × `linkat`/`renameat`/`openat`: `operation not supported`, every one in the `Root` link/rename families — the two-name anchored operations did not exist at this tip. **Fixed since** by `9ea25b67a8`: that leg is now 268 PASS / 2 FAIL / 17 SKIP, and the two remaining failures are the documented `linkat` divergence ([LIMITATIONS](LIMITATIONS.md) §5). |
+| `runtime` | `TestBadOpen`: `runtime.Close(-1)` returned the raw kernel `-9` where upstream Darwin routes through libc and returns `-1`. **Fixed since** by `da5970e7c8`; the whole leg passes in `runs/b0i4-bnd-20261026T221636Z`. |
+| `time` | `panic: cannot load America/Los_Angeles for testing: unknown time zone` — no zoneinfo the test's own loader accepts; it asks for `-tags=timetzdata`. Provisioning: the leg verified nothing. |
+| `syscall` | `TestExec` — Leopard refuses `execve` from a multithreaded process, `ENOTSUP`. Kernel-impossible rather than unfixed ([LIMITATIONS](LIMITATIONS.md) §7). |
+| `encoding/gob` | `TestCountDecodeMallocs`: 5 allocations per decode, want 3. Upstream's own latent failure on single-CPU venues, not ppc32 — the test skips at `GOMAXPROCS>1` and fails identically on unmodified upstream. |
+| `crypto/x509` | `TestHybridPool`: google.com's chain against this machine's 2008 root pool, `certificate signed by unknown authority`. The trust source is the machine's, not the port's. |
+| `crypto/internal/fips140test` | `TestIntegrityCheckFailure`: the CAST/self-test injection harness, same signature as the iBook's provisioning classification (`goppc-ljq9l`). |
+| `go/types` | `ExampleScope`: `could not import fmt … fork/exec …/bin/go: no such file or directory` — the examples shell out to a native `go`, and this venue has no ppc32 `go` binary. Venue, not port; a native dist flips it. |
+
+Built `CGO_ENABLED=0` and cross-built, on a 1 GiB G4: cgo, the cgo resolver, `os/user` and PAM are unexercised here.
 
 
 # Credits
