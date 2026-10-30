@@ -1,5 +1,7 @@
 # The Go Programming Language ported to PowerPC Mac
-A fork of Go 1.26.8 `c293dd49` that adds a big endian `darwin/ppc64` port, tested on a PowerMac G5 Quad running 10.5.8 Leopard.
+A fork of Go 1.26.8 `c293dd49` that ports Go to big-endian PowerPC: `darwin/ppc` and `darwin/ppc64`, tested on a
+PowerMac G5 Quad and iBook/PowerBook G4s running 10.5.8 Leopard; `linux/ppc` is the emulated porting venue, and
+`linux/ppc64` builds but has no validated venue.
 
 - bootstraps itself!
 - up to date SSL/TLS support!
@@ -88,10 +90,10 @@ A profiler that trusts the kernel therefore samples whichever thread sits first 
 "0 samples" or a stack full of `pthread_cond_wait`. `TestCPUProfile` passing alone and failing in the suite was
 purely a matter of which goroutine earlier tests had left on that thread.
 
-So on darwin/ppc64 the runtime does not ask the kernel. A sampler thread wakes twice per period, asks Mach how much
+So on darwin/ppc and darwin/ppc64 the runtime does not ask the kernel. A sampler thread wakes twice per period, asks Mach how much
 CPU each Go thread has used (`thread_info(THREAD_BASIC_INFO)`), and sends `SIGPROF` with `pthread_kill` — which *is*
 thread-directed, and which Leopard does honour. It is a user-space version of Linux's per-thread CPU timers, and it
-is confined to darwin/ppc64: darwin/amd64 and darwin/arm64 keep the original two-line path, where the kernel behaves.
+is confined to the two PowerPC ports: darwin/amd64 and darwin/arm64 keep the original two-line path, where the kernel behaves.
 
 **2. Leopard's `nanosleep` takes a lock it may already hold — so our `osyield` is not `usleep`.**
 
@@ -99,8 +101,9 @@ Go's Darwin `osyield` is `usleep(1)`. That is fine except from inside a signal h
 `_pthread_testcancel`, which takes the *calling thread's own* libc spinlock. If `SIGPROF` interrupts a thread inside
 that region, and the handler then spins waiting for a profile lock, its `usleep` waits forever on a lock that the
 interrupted code on the same thread still holds — and if a GC was stopping the world, the program is gone. A C probe
-with no Go in it hangs 3/3 that way, and never with `sched_yield`. On darwin/ppc64 `osyield` now calls `sched_yield`
-(as Linux does); the other Darwin ports keep `usleep(1)`.
+with no Go in it hangs 3/3 that way, and never with `sched_yield`. On darwin/ppc64 `osyield` now calls libc's `sched_yield`
+(as Linux does), and darwin/ppc issues the `swtch_pri` Mach trap directly; darwin/amd64 and darwin/arm64 keep
+`usleep(1)`.
 
 **3. Leopard has no per-socket TCP keepalive tuning — so we set what we can and connect anyway.**
 
@@ -121,7 +124,7 @@ single interaction cost the three `TestTCPConnKeepAliveConfig*` tests out of 283
 
 The feature is not missing, only the per-connection control. Leopard keeps connections alive on a system-wide
 schedule — `net.inet.tcp.keepidle` (2 h), `net.inet.tcp.keepintvl` (75 s), and no `keepcnt` sysctl at all. So on
-darwin/ppc64 we set the options the kernel does have, **ignore `ENOPROTOOPT` for the two it does not**, and let the
+darwin/ppc and darwin/ppc64 we set the options the kernel does have, **ignore `ENOPROTOOPT` for the two it does not**, and let the
 system defaults stand: the connection is made and works, on Leopard's schedule rather than the requested one. Any
 other errno still propagates, so a real failure is not swallowed. The other Darwin ports, where the options exist,
 keep the strict behaviour.
