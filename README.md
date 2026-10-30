@@ -59,77 +59,22 @@ ppc970
 zero host tools** and prints the right digest; `go test crypto/sha256` passes. Two independent native builds produced
 a **byte-identical** `bin/go`.
 
-## What works
+## What works, what doesn't
 
 - The full self-hosting chain: `cmd/dist` → `toolchain1` → `go_bootstrap` → `toolchain2` → `toolchain3` (PGO'd) → packages and commands.
 - `runtime`, `sync`, `os`, `net`, `encoding/json`, `os/exec`, `crypto/sha256`, `crypto/tls`, and the rest of the 240 passing legs.
 - Profile-guided optimisation, using the target's own `preprofile`.
 - The `runtime/pprof` **CPU sampler** (verified sampling on hardware), `net` (sockets, DNS via file-based resolvers), `/proc`-free Leopard syscalls (`getfsstat64`, `readdir_r$INODE64`, `lutimes`, `F_GETPATH`).
 
-## Where we work around Mac OS X bugs
+### Where we work around Mac OS X bugs
 
 This port runs on a kernel old enough to have bugs the rest of the Go world never had to care about. When one of
 them changes observable behaviour, we work around it in the runtime so that a Go program behaves as documented,
 and we write down what and why.
 
-**1. Leopard delivers profiling signals to the wrong thread — so we sample in user space.**
+The gory details of what doesn't work, and to what extent, are in [LIMITATIONS](LIMITATIONS.md).
 
-`ITIMER_PROF` raises `SIGPROF` on the *process*, and the kernel chooses which thread receives it. On Linux, and on
-macOS from about 2012 onward, that is the thread that used the CPU — exactly what a CPU profiler needs. On Mac OS X
-10.5 the kernel (xnu-1228) instead wakes the first thread that is not blocking the signal. This is upstream Go issue
-6047, and the reason upstream *skipped* the Darwin CPU-profile tests from 2013 until 2021. Measured on the G5 with a
-C probe — four threads, two of them spinning:
-
-| | main (idle) | A (idle) | B (spin) | C (spin) |
-|---|---|---|---|---|
-| Leopard ppc64 | **493** | 0 | 0 | 0 |
-| Leopard ppc64, main+A block SIGPROF | 0 | 0 | **419** | 0 |
-| Linux x86_64, same probe | 0 | 0 | 306 | 184 |
-
-A profiler that trusts the kernel therefore samples whichever thread sits first — usually an idle one, giving either
-"0 samples" or a stack full of `pthread_cond_wait`. `TestCPUProfile` passing alone and failing in the suite was
-purely a matter of which goroutine earlier tests had left on that thread.
-
-So on darwin/ppc and darwin/ppc64 the runtime does not ask the kernel. A sampler thread wakes twice per period, asks Mach how much
-CPU each Go thread has used (`thread_info(THREAD_BASIC_INFO)`), and sends `SIGPROF` with `pthread_kill` — which *is*
-thread-directed, and which Leopard does honour. It is a user-space version of Linux's per-thread CPU timers, and it
-is confined to the two PowerPC ports: darwin/amd64 and darwin/arm64 keep the original two-line path, where the kernel behaves.
-
-**2. Leopard's `nanosleep` takes a lock it may already hold — so our `osyield` is not `usleep`.**
-
-Go's Darwin `osyield` is `usleep(1)`. That is fine except from inside a signal handler: Leopard's `nanosleep` calls
-`_pthread_testcancel`, which takes the *calling thread's own* libc spinlock. If `SIGPROF` interrupts a thread inside
-that region, and the handler then spins waiting for a profile lock, its `usleep` waits forever on a lock that the
-interrupted code on the same thread still holds — and if a GC was stopping the world, the program is gone. A C probe
-with no Go in it hangs 3/3 that way, and never with `sched_yield`. On darwin/ppc64 `osyield` now calls libc's `sched_yield`
-(as Linux does), and darwin/ppc issues the `swtch_pri` Mach trap directly; darwin/amd64 and darwin/arm64 keep
-`usleep(1)`.
-
-**3. Leopard has no per-socket TCP keepalive tuning — so we set what we can and connect anyway.**
-
-TCP keepalive probes an idle connection to find out whether the far end is still there. It has three knobs: how long
-the connection must be quiet before probing starts (the idle time), how long between probes (`TCP_KEEPINTVL`), and
-how many missed probes before declaring it dead (`TCP_KEEPCNT`). Go's `net.Dialer.KeepAliveConfig` exposes all three
-per connection, and on Darwin Go reaches for the socket options `0x101` and `0x102`.
-
-Leopard's kernel has only the first. From the machine's own header:
-
-```
-/usr/include/netinet/tcp.h:203:  #define TCP_KEEPALIVE  0x10
-```
-
-`0x101` and `0x102` appear nowhere — they arrived in Snow Leopard. So `setsockopt` returns `ENOPROTOOPT`, which
-means "no such option here", and Go's dial path treated that as fatal: **the connection was never made at all.** That
-single interaction cost the three `TestTCPConnKeepAliveConfig*` tests out of 283 passing in `net`.
-
-The feature is not missing, only the per-connection control. Leopard keeps connections alive on a system-wide
-schedule — `net.inet.tcp.keepidle` (2 h), `net.inet.tcp.keepintvl` (75 s), and no `keepcnt` sysctl at all. So on
-darwin/ppc and darwin/ppc64 we set the options the kernel does have, **ignore `ENOPROTOOPT` for the two it does not**, and let the
-system defaults stand: the connection is made and works, on Leopard's schedule rather than the requested one. Any
-other errno still propagates, so a real failure is not swallowed. The other Darwin ports, where the options exist,
-keep the strict behaviour.
-
-# `stdlib` testsuite: 240 of 248 legs pass on ppc32
+### `stdlib` testsuite: 240 of 248 legs pass on ppc32
 
 Measured on hardware — run `runs/augzc3-std-pbg4-20261025T032406Z`, tree tip `98614a202d`, executed 2026-10-25 on a
 PowerBook5,6 (10.5.8). 248 legs: 239 clean passes, `net` graded ANOMALY and verified by hand as a pass (its own passing
